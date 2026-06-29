@@ -40,7 +40,7 @@ import { LOG_SNAPSHOT_THRESHOLD } from '../core/log'
 import { validateAddChar } from '../utils/chars'
 import { useAuth } from './AuthContext'
 
-interface AppContextState {
+export interface AppContextState {
   state: AppState
   loading: boolean
   // Child operations
@@ -62,7 +62,7 @@ interface AppContextState {
   getLogEntries: () => Promise<AnyLogEntry[]>
 }
 
-const AppContext = createContext<AppContextState | null>(null)
+export const AppContext = createContext<AppContextState | null>(null)
 
 const EMPTY_STATE: AppState = {
   children: [],

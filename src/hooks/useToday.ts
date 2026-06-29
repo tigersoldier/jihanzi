@@ -43,6 +43,10 @@ export function useToday(): UseTodayReturn {
   const [sessionReviews, setSessionReviews] = useState<ReviewEntry[]>([])
   const [sessionStats, setSessionStats] = useState({ a: 0, b: 0, c: 0, d: 0 })
   const [ratingAnimation, setRatingAnimation] = useState<string | null>(null)
+  // Snapshot of tasks captured at session start. Prevents task list
+  // from shifting when state changes mid-session (e.g. submitReview
+  // advances nextCharIndex, which would otherwise regenerate the list).
+  const [sessionTasks, setSessionTasks] = useState<TaskItem[] | null>(null)
 
   // Get available children
   const children = useMemo(() => {
@@ -53,23 +57,28 @@ export function useToday(): UseTodayReturn {
     }))
   }, [state.children])
 
-  // Generate tasks for the selected child
+  // Generate tasks for the selected child (idle screen + session init)
   const tasks = useMemo(() => {
     if (!selectedChildId) return []
     return generateTodayTasks(state, selectedChildId, todayKey)
   }, [state, selectedChildId, todayKey])
 
-  const currentTask = tasks[taskIndex] || null
-  const totalTasks = tasks.length
+  // Use session-locked tasks when a session is active; otherwise use
+  // live tasks (for the idle-screen count).
+  const effectiveTasks = sessionTasks ?? tasks
+
+  const currentTask = effectiveTasks[taskIndex] || null
+  const totalTasks = effectiveTasks.length
 
   const startSession = useCallback(() => {
     if (tasks.length === 0) return
+    setSessionTasks([...tasks])  // snapshot the task list so it won't shift mid-session
     setPhase('reviewing')
     setTaskIndex(0)
     setRound(1)
     setSessionReviews([])
     setSessionStats({ a: 0, b: 0, c: 0, d: 0 })
-  }, [tasks.length])
+  }, [tasks])
 
   const handleRate = useCallback((grade: Grade) => {
     if (!currentTask || !selectedChildId) return
@@ -99,14 +108,14 @@ export function useToday(): UseTodayReturn {
 
     // Advance to next task or complete round
     setTimeout(() => {
-      if (taskIndex + 1 < tasks.length) {
+      if (taskIndex + 1 < totalTasks) {
         setTaskIndex(prev => prev + 1)
       } else {
         // Round complete
         setPhase('roundComplete')
       }
     }, 350)
-  }, [currentTask, selectedChildId, round, taskIndex, tasks.length, todayKey, submitReview])
+  }, [currentTask, selectedChildId, round, taskIndex, totalTasks, todayKey, submitReview])
 
   const handleContinueRound = useCallback(() => {
     const cdChars = sessionReviews
@@ -132,6 +141,7 @@ export function useToday(): UseTodayReturn {
     setPhase('idle')
     setTaskIndex(0)
     setRound(1)
+    setSessionTasks(null)  // clear session snapshot
   }, [])
 
   return {
