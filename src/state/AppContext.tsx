@@ -4,6 +4,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   type ReactNode,
 } from 'react'
 import type {
@@ -96,24 +97,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadState()
   }, [isLoggedIn])
 
-  // Helper: append a log entry and update local state
-  async function appendEntry(entry: AnyLogEntry): Promise<void> {
+  // Helper: append a log entry.
+  // Uses functional setState so the callback never goes stale — even callbacks
+  // that captured this on the first render correctly increment the latest count.
+  const appendEntry = useCallback(async (entry: AnyLogEntry): Promise<void> => {
     await appendLog(entry)
-    const newLogCount = logCount + 1
-    setLogCount(newLogCount)
+    setLogCount(prev => prev + 1)
+  }, [])
 
-    // Check if we need to compact
-    if (newLogCount >= LOG_SNAPSHOT_THRESHOLD) {
-      const snapshot = await getLatestSnapshot()
-      const logs = await getAllLogs()
-      const { snapshot: newSnapshot, logs: remaining } = compactLogs(snapshot, logs)
-      await saveSnapshot(newSnapshot)
-      if (snapshot) {
-        await deleteLogsBefore(newSnapshot.timestamp)
+  // Compaction: when the log grows past the threshold, generate a fresh
+  // snapshot and prune old log entries. Separated from appendEntry so that
+  // appendEntry stays stable (no stale logCount dependency).
+  const compacting = useRef(false)
+  useEffect(() => {
+    if (logCount < LOG_SNAPSHOT_THRESHOLD) return
+    if (compacting.current) return
+
+    compacting.current = true
+    let cancelled = false
+
+    async function compact() {
+      try {
+        const snapshot = await getLatestSnapshot()
+        if (cancelled) return
+        const logs = await getAllLogs()
+        if (cancelled) return
+        const { snapshot: newSnapshot, logs: remaining } = compactLogs(snapshot, logs)
+        await saveSnapshot(newSnapshot)
+        if (snapshot && !cancelled) {
+          await deleteLogsBefore(newSnapshot.timestamp)
+        }
+        if (!cancelled) {
+          setLogCount(remaining.length)
+        }
+      } finally {
+        compacting.current = false
       }
-      setLogCount(remaining.length)
     }
-  }
+    compact()
+
+    return () => { cancelled = true }
+  }, [logCount])
 
   // ---- Child Operations ----
 
@@ -295,11 +319,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // Only round 1 affects SM-2 state
     if (round === 1) {
       setState(prev => {
-        const newState = replayLog(null, [entry]) // Reconstruct what changed
+        // Replay the review entry against the current state so existing
+        // children, wordBooks, and settings are preserved.
+        const newState = replayLog({ timestamp: 0, state: prev }, [entry])
         return newState
       })
-      // Note: The above is a simplification. Full impl would replay the entry
-      // through replayLog against the current state.
     }
   }, [])
 
