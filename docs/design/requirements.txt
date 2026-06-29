@@ -1,0 +1,116 @@
+# 记汉字 —— 设计需求
+
+## 应用形态
+
+### PWA（渐进式 Web 应用）
+
+- 通过浏览器安装到系统（桌面/主屏幕），像原生应用一样使用
+- 支持离线使用：离线时数据存在本地 IndexedDB，联网后自动同步
+- 需配合 Service Worker 实现离线缓存和后台同步
+
+### 部署
+
+- 完全无后端，纯前端静态资源
+- 部署到 GitHub Pages
+
+### 设备适配
+
+- 响应式单套 UI，同一份代码适配手机和电脑
+- 核心场景：家长手机操作（每日复习打分），电脑辅助管理（编辑生字本、查看统计）
+
+## 技术栈
+
+- **框架**：React + Vite
+- **构建**：Vite，输出静态文件部署至 GitHub Pages
+- **离线**：Workbox（Service Worker 封装）
+- **PWA 清单**：manifest.json
+
+## 存储方案
+
+### 云端存储：Google Drive
+
+- 数据存储在用户个人的 Google Drive 上
+- 使用 Google Identity Services 进行纯前端 OAuth 认证，无需后端
+- 使用 Google Drive API v3（gapi 客户端库）直接在前端读写文件
+
+### 离线存储：IndexedDB
+
+- 离线时读写本地 IndexedDB
+- 联网后同步到 Google Drive
+
+### 数据组织：操作日志（Append-only Log）
+
+每条操作是一条不可变的日志记录，带时间戳：
+
+```
+{ timestamp: 1703001234567, type: "review", childId: "xm", char: "花", grade: "a" }
+{ timestamp: 1703001235123, type: "add_word", wordBookId: "wb1", char: "雨" }
+{ timestamp: 1703001235678, type: "create_child", name: "小明" }
+```
+
+- 日志条目追加写入、不可变、带时间戳
+- 多设备合并时取并集，天然无冲突
+- 读取时重放日志重建完整状态
+- 日志超过阈值后生成快照（压缩旧日志）
+
+### Google Drive 文件布局
+
+```
+记汉字/
+├── app_meta.json           ← 全局元数据（孩子列表、生字本信息）
+├── xiaoming/
+│   ├── snapshot.json       ← 当前状态快照
+│   └── log.jsonl           ← 快照之后的操作日志
+├── xiaohong/
+│   ├── snapshot.json
+│   └── log.jsonl
+```
+
+### 同步策略
+
+- **即时同步**：每次复习打分、生字本编辑保存后立即推送到 Drive
+- **定时兜底**：每 5 分钟后台同步一次，防止断网期间未推送的数据残留
+- **冲突处理**：操作日志天然无冲突——条目不可变、追加合并取并集
+
+### 多用户共享
+
+- 顶层"记汉字"文件夹通过 Google Drive 原生共享机制分享给配偶
+- 子文件/文件夹自动继承权限
+- 双方各自用自己的 Google 账号登录，读写共享文件夹
+
+## 数据模型
+
+### 生字本（WordBook）
+
+- 汉字的有序集合，定义可学字库及其学习顺序
+- 独立存在，可被多个孩子共享
+- 预留预定义生字本扩展（如"人教版一年级上册"），以只读形式提供
+
+### 孩子（Child）
+
+- 学习者，拥有独立的学习进度
+- 必须关联一个生字本（孩子 → 生字本 正向引用）
+- 多个孩子可共享同一个生字本，也可使用各自独立的生字本
+
+### 数据结构
+
+```typescript
+type WordBook = {
+  id: string;
+  name: string;
+  characters: string[];  // 按学习顺序排列的汉字列表
+};
+
+type Child = {
+  id: string;
+  name: string;
+  wordBookId: string;    // 关联的生字本 ID
+  progress: Map<string, SM2State>;  // 每个汉字的 SM-2 记忆状态
+};
+```
+
+## 录入方式
+
+- **生字本录入**：家长手动输入汉字本身，其他信息（拼音、笔画、笔顺）通过开源数据获取
+- **复习评级**：孩子在纸上书写，家长在 app 中对照批改，选择 a/b/c/d 评级
+- 孩子不直接接触屏幕，app 是家长的工具
