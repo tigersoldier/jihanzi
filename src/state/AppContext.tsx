@@ -37,6 +37,7 @@ import {
 } from '../data/db'
 import { compactLogs } from '../core/snapshot'
 import { LOG_SNAPSHOT_THRESHOLD } from '../core/log'
+import { validateAddChar } from '../utils/chars'
 import { useAuth } from './AuthContext'
 
 interface AppContextState {
@@ -240,6 +241,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setState(prev => {
       const wb = prev.wordBooks.find(w => w.id === wordBookId)
       if (!wb) return prev
+      validateAddChar(character, wb)
       const index = wb.characters.length
       // Async: append log entry
       const entry: AddCharEntry = {

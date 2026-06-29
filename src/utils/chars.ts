@@ -112,6 +112,32 @@ const CHAR_DATABASE: Record<string, CharInfo> = {
   '叶': { pinyin: 'yè', words: ['叶子', '树叶', '红叶'] },
 }
 
+import type { WordBook } from '../core/types'
+
+/**
+ * Check whether a single character is a Chinese (Han) character.
+ * Uses Unicode property escapes to cover all CJK planes,
+ * including Extension A–G in supplementary planes.
+ */
+export function isChineseChar(char: string): boolean {
+  if (!char || char.length === 0) return false
+  // \p{Script=Han} matches all Han characters across all Unicode planes
+  return /^\p{Script=Han}$/u.test(char)
+}
+
+/**
+ * Validate that a character can be added to a word book.
+ * Throws if the character is not Chinese or already exists in the book.
+ */
+export function validateAddChar(character: string, wordBook: WordBook): void {
+  if (!isChineseChar(character)) {
+    throw new Error(`"${character}" 不是汉字，不能添加到生字本`)
+  }
+  if (wordBook.characters.includes(character)) {
+    throw new Error(`"${character}" 已在生字本中，不能重复添加`)
+  }
+}
+
 /**
  * Get character information (pinyin + words).
  * Returns placeholder data if the character is not in the built-in database.
