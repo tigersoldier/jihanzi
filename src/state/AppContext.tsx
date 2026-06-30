@@ -10,6 +10,7 @@ import {
 import type {
   AppState,
   AnyLogEntry,
+  Snapshot,
   Child,
   WordBook,
   Settings,
@@ -30,6 +31,7 @@ import { replayLog } from '../core/log'
 import { generateTimestamp } from '../core/log'
 import {
   appendLog,
+  appendLogs,
   getAllLogs,
   getLatestSnapshot,
   saveSnapshot,
@@ -60,6 +62,8 @@ export interface AppContextState {
   updateSettings: (settings: Partial<Settings>) => Promise<void>
   // Data management
   getLogEntries: () => Promise<AnyLogEntry[]>
+  /** Import a snapshot + log entries — writes to IndexedDB and reloads state */
+  bulkImport: (snapshot: { timestamp: number; state: AppState }, logs: AnyLogEntry[]) => Promise<void>
 }
 
 export const AppContext = createContext<AppContextState | null>(null)
@@ -384,6 +388,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return getAllLogs()
   }, [])
 
+  const bulkImport = useCallback(async (
+    snapshot: { timestamp: number; state: AppState },
+    logs: AnyLogEntry[],
+  ): Promise<void> => {
+    // 1. Save the snapshot to IndexedDB
+    await saveSnapshot(snapshot as Snapshot)
+    // 2. Append all log entries
+    if (logs.length > 0) {
+      await appendLogs(logs)
+    }
+    // 3. Replay to rebuild state
+    const reconstructed = replayLog(snapshot as Snapshot, logs)
+    setState(reconstructed)
+    setLogCount(logs.length)
+  }, [])
+
   return (
     <AppContext.Provider
       value={{
@@ -401,6 +421,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         submitReview,
         updateSettings,
         getLogEntries,
+        bulkImport,
       }}
     >
       {children}

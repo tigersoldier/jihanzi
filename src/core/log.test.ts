@@ -122,6 +122,7 @@ describe('replayLog', () => {
               interval: 3,
               repetitions: 2,
               nextReview: '2026-06-30',
+              lastGrade: 'a',
             },
           },
         },

@@ -8,7 +8,7 @@ interface SettingsPageProps {
 
 export default function SettingsPage({ onClose }: SettingsPageProps) {
   const { user, logout } = useAuth()
-  const { state, updateSettings, getLogEntries } = useApp()
+  const { state, updateSettings, getLogEntries, bulkImport } = useApp()
   const { status, syncNow } = useSync()
 
   const handleExport = async () => {
@@ -38,23 +38,65 @@ export default function SettingsPage({ onClose }: SettingsPageProps) {
   const handleImport = () => {
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = '.json'
-    input.onchange = (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0]
-      if (!file) return
-      const reader = new FileReader()
-      reader.onload = () => {
-        try {
-          const data = JSON.parse(reader.result as string)
-          // TODO: Import data by replaying logs
-          alert(`导入成功：${data.children?.length || 0} 个孩子，${data.wordBooks?.length || 0} 个生字本`)
-          window.location.reload()
-        } catch (err) {
-          console.error('Import failed:', err)
-          alert('导入失败：文件格式不正确')
+    input.accept = '.json,.jsonl'
+    input.multiple = true
+    input.onchange = async (e) => {
+      const files = (e.target as HTMLInputElement).files
+      if (!files || files.length === 0) return
+
+      try {
+        // Read all selected files and identify snapshot vs log
+        let snapshotData: { timestamp: number; state: any } | null = null
+        const logEntries: any[] = []
+
+        for (const file of Array.from(files)) {
+          const text = await file.text()
+          const isJsonl = file.name.endsWith('.jsonl')
+
+          if (isJsonl) {
+            // Parse JSONL — each line is a JSON object
+            text.split('\n').filter(l => l.trim()).forEach(line => {
+              try {
+                logEntries.push(JSON.parse(line))
+              } catch { /* skip invalid lines */ }
+            })
+          } else {
+            // Try parsing as snapshot (has `state` field) or as log array
+            try {
+              const parsed = JSON.parse(text)
+              if (parsed.state && parsed.timestamp !== undefined) {
+                snapshotData = parsed
+              } else if (Array.isArray(parsed)) {
+                logEntries.push(...parsed)
+              } else {
+                // Might be the old monolithic backup format
+                if (parsed.children || parsed.wordBooks) {
+                  snapshotData = {
+                    timestamp: Date.now(),
+                    state: {
+                      children: parsed.children || [],
+                      wordBooks: parsed.wordBooks || [],
+                      settings: parsed.settings || { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+                    },
+                  }
+                  if (parsed.logs) logEntries.push(...parsed.logs)
+                }
+              }
+            } catch { /* skip */ }
+          }
         }
+
+        if (!snapshotData) {
+          alert('未找到 snapshot 文件（需包含 state 和 timestamp 字段）')
+          return
+        }
+
+        await bulkImport(snapshotData as any, logEntries)
+        alert(`导入成功：${snapshotData.state.children?.length || 0} 个孩子，${snapshotData.state.wordBooks?.length || 0} 个生字本，${logEntries.length} 条日志`)
+      } catch (err) {
+        console.error('Import failed:', err)
+        alert('导入失败：' + (err as Error).message)
       }
-      reader.readAsText(file)
     }
     input.click()
   }

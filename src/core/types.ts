@@ -11,6 +11,7 @@ export interface SM2State {
   interval: number   // Current interval in days
   repetitions: number // Number of successful repetitions
   nextReview: string  // ISO date string for next review
+  lastGrade: Grade    // The most recent review grade
 }
 
 /** A word book — ordered list of characters to learn */

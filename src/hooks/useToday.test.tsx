@@ -100,6 +100,7 @@ function createStatefulWrapper(initialState: AppState) {
             interval: 1,
             repetitions: 1,
             nextReview: '2026-01-02',
+            lastGrade: 'a',
           }
 
           return newState
@@ -123,6 +124,7 @@ function createStatefulWrapper(initialState: AppState) {
       submitReview,
       updateSettings: vi.fn() as any,
       getLogEntries: vi.fn() as any,
+      bulkImport: vi.fn() as any,
     }
 
     return React.createElement(AppContext.Provider, { value: contextValue }, children)

@@ -20,6 +20,7 @@ export function createInitialSM2State(): SM2State {
     interval: SM2_INITIAL_INTERVAL,
     repetitions: 0,
     nextReview: toDateKey(tomorrow),
+    lastGrade: 'a', // initial state defaults to 'a' (no grade yet)
   }
 }
 
@@ -60,6 +61,7 @@ export function updateSM2(
       interval: SM2_INITIAL_INTERVAL,
       repetitions: 0,
       nextReview: toDateKey(nextDate),
+      lastGrade: grade,
     }
   }
 
@@ -82,6 +84,7 @@ export function updateSM2(
     interval: newInterval,
     repetitions: current.repetitions + 1,
     nextReview: toDateKey(nextDate),
+    lastGrade: grade,
   }
 }
 

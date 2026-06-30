@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jihanzi.app/snapshot.schema.json",
+  "title": "记汉字 Snapshot",
+  "description": "记汉字应用快照——用于导入/导出的完整应用状态",
+  "type": "object",
+  "required": ["timestamp", "state"],
+  "properties": {
+    "timestamp": {
+      "type": "integer",
+      "description": "Unix 毫秒时间戳，标记快照生成时刻"
+    },
+    "state": {
+      "$ref": "#/$defs/AppState"
+    }
+  },
+  "$defs": {
+    "AppState": {
+      "type": "object",
+      "required": ["children", "wordBooks", "settings"],
+      "properties": {
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Child" }
+        },
+        "wordBooks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/WordBook" }
+        },
+        "settings": { "$ref": "#/$defs/Settings" }
+      }
+    },
+    "Child": {
+      "type": "object",
+      "required": ["id", "name", "wordBookId", "nextCharIndex", "progress"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "小朋友唯一标识"
+        },
+        "name": {
+          "type": "string",
+          "description": "小朋友的名字"
+        },
+        "wordBookId": {
+          "type": "string",
+          "description": "关联的生字本 ID"
+        },
+        "nextCharIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "下一个要学习的汉字在生字本中的索引"
+        },
+        "progress": {
+          "type": "object",
+          "description": "已学习汉字的 SM-2 记忆状态，key 为单个汉字",
+          "additionalProperties": { "$ref": "#/$defs/SM2State" },
+          "propertyNames": {
+            "pattern": "^[\\u4e00-\\u9fff]$"
+          }
+        }
+      }
+    },
+    "WordBook": {
+      "type": "object",
+      "required": ["id", "name", "characters"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "生字本唯一标识"
+        },
+        "name": {
+          "type": "string",
+          "description": "生字本名称"
+        },
+        "characters": {
+          "type": "array",
+          "description": "有序汉字列表",
+          "items": {
+            "type": "string",
+            "pattern": "^[\\u4e00-\\u9fff]$"
+          }
+        }
+      }
+    },
+    "SM2State": {
+      "type": "object",
+      "required": ["ease", "interval", "repetitions", "nextReview", "lastGrade"],
+      "properties": {
+        "ease": {
+          "type": "number",
+          "minimum": 1.3,
+          "description": "简易度因子，初始 2.5，最低 1.3"
+        },
+        "interval": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "当前复习间隔（天）"
+        },
+        "repetitions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "成功复习次数"
+        },
+        "nextReview": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "下次复习日期，格式 YYYY-MM-DD"
+        },
+        "lastGrade": {
+          "type": "string",
+          "enum": ["a", "b", "c", "d"],
+          "description": "最近一次评分等级"
+        }
+      }
+    },
+    "Settings": {
+      "type": "object",
+      "required": ["dailyReviewLimit", "dailyNewChars", "maxRounds"],
+      "properties": {
+        "dailyReviewLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "每日最多复习字数"
+        },
+        "dailyNewChars": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "每日最多新学字数"
+        },
+        "maxRounds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "每字最多巩固轮数"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "timestamp": 1782797512548,
+  "state": {
+    "children": [
+      {
+        "id": "child_m3f8k2",
+        "name": "小明",
+        "wordBookId": "wb_a1b2c3",
+        "nextCharIndex": 3,
+        "progress": {
+          "一": {
+            "ease": 2.5,
+            "interval": 1,
+            "repetitions": 0,
+            "nextReview": "2026-06-30"
+          },
+          "二": {
+            "ease": 2.5,
+            "interval": 1,
+            "repetitions": 0,
+            "nextReview": "2026-07-01"
+          },
+          "花": {
+            "ease": 2.6,
+            "interval": 3,
+            "repetitions": 2,
+            "nextReview": "2026-06-30"
+          }
+        }
+      }
+    ],
+    "wordBooks": [
+      {
+        "id": "wb_a1b2c3",
+        "name": "人教版一年级上册",
+        "characters": [
+          "花",
+          "一",
+          "二",
+          "三",
+          "四",
+          "五",
+          "六",
+          "七",
+          "八",
+          "九",
+          "十"
+        ]
+      }
+    ],
+    "settings": {
+      "dailyReviewLimit": 30,
+      "dailyNewChars": 5,
+      "maxRounds": 3
+    }
+  }
+}

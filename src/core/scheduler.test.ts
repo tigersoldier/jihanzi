@@ -9,8 +9,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { generateTodayTasks } from './scheduler'
-import type { AppState } from './types'
+import { generateTodayTasks, getChildStats } from './scheduler'
+import type { AppState, Child } from './types'
 
 function makeState(overrides?: Partial<AppState>): AppState {
   return {
@@ -68,6 +68,7 @@ describe('generateTodayTasks', () => {
               interval: 1,
               repetitions: 1,
               nextReview: '2026-01-02',
+              lastGrade: 'a',
             },
           },
         },
@@ -98,5 +99,48 @@ describe('generateTodayTasks', () => {
     // 用户就跳过了「二」。
     expect(tasksBefore[1].character).toBe('二')
     expect(tasksAfter[1].character).toBe('三')  // ← 跳过了二！
+  })
+})
+
+describe('getChildStats', () => {
+  it('按 ease 估算导致 grade d 被误算为 a', () => {
+    // SM-2 resets ease to 2.5 on grade d.
+    // Old ease-threshold: 2.5 >= 2.5 → "a" (mastered). Should be "d".
+    const child: Child = {
+      id: 'c1',
+      name: 'test',
+      wordBookId: 'wb1',
+      nextCharIndex: 3,
+      progress: {
+        '花': { ease: 2.7, interval: 8, repetitions: 2, nextReview: '2026-07-08', lastGrade: 'a' },
+        '途': { ease: 2.5, interval: 1, repetitions: 0, nextReview: '2026-07-01', lastGrade: 'd' },
+        '滚': { ease: 2.56, interval: 20, repetitions: 3, nextReview: '2026-07-20', lastGrade: 'b' },
+      },
+    }
+
+    const stats = getChildStats(child)
+
+    // With lastGrade: 花=a, 途=d, 滚=b
+    expect(stats.a).toBe(1)
+    expect(stats.b).toBe(1)
+    expect(stats.d).toBe(1)
+  })
+
+  it('按 ease 估算导致 grade c 被误算为 b', () => {
+    // After grade 'c', ease≈2.38 → old heuristic: 2.0≤2.38<2.5 → "b".
+    // Should be "c".
+    const child: Child = {
+      id: 'c1',
+      name: 'test',
+      wordBookId: 'wb1',
+      nextCharIndex: 1,
+      progress: {
+        '斯': { ease: 2.38, interval: 6, repetitions: 3, nextReview: '2026-07-06', lastGrade: 'c' },
+      },
+    }
+
+    const stats = getChildStats(child)
+    expect(stats.c).toBe(1)
+    expect(stats.b).toBe(0)
   })
 })

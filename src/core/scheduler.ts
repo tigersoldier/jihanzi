@@ -164,18 +164,15 @@ export function getChildStats(child: Child) {
     return { total, a: 0, b: 0, c: 0, d: 0, aPercent: 0, bPercent: 0, cPercent: 0, dPercent: 0 }
   }
 
-  // Count by last review grade (approximate — we track current SM-2 state, not grades directly)
-  // For now, estimate from ease values:
-  // ease >= 2.5 = a (mastered)
-  // ease >= 2.0 = b (partial)
-  // ease >= 1.5 = c (needs hint)
-  // ease < 1.5 = d (forgotten)
+  // Count by last review grade stored in SM2State.lastGrade
   let a = 0, b = 0, c = 0, d = 0
   for (const [, state] of entries) {
-    if (state.ease >= 2.5) a++
-    else if (state.ease >= 2.0) b++
-    else if (state.ease >= 1.5) c++
-    else d++
+    switch (state.lastGrade) {
+      case 'a': a++; break
+      case 'b': b++; break
+      case 'c': c++; break
+      case 'd': d++; break
+    }
   }
 
   return {

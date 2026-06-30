@@ -102,6 +102,7 @@ function createStatefulWrapper(initialState: AppState) {
       submitReview: vi.fn() as any,
       updateSettings: vi.fn() as any,
       getLogEntries: vi.fn() as any,
+      bulkImport: vi.fn() as any,
     }
 
     return React.createElement(AppContext.Provider, { value: contextValue }, children)
@@ -234,6 +235,7 @@ describe('useWordBook', () => {
           submitReview: vi.fn() as any,
           updateSettings: vi.fn() as any,
           getLogEntries: vi.fn() as any,
+      bulkImport: vi.fn() as any,
         }
 
         return React.createElement(AppContext.Provider, { value: contextValue }, children)
