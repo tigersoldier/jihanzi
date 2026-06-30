@@ -75,6 +75,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(EMPTY_STATE)
   const [loading, setLoading] = useState(true)
   const [logCount, setLogCount] = useState(0)
+  // Ref mirror of state.wordBooks so addCharacter can validate without
+  // adding state as a useCallback dependency.
+  const wordBooksRef = useRef(state.wordBooks)
+  wordBooksRef.current = state.wordBooks
 
   // Load state from IndexedDB on mount (after login)
   useEffect(() => {
@@ -109,35 +113,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Compaction: when the log grows past the threshold, generate a fresh
   // snapshot and prune old log entries. Separated from appendEntry so that
   // appendEntry stays stable (no stale logCount dependency).
+  //
+  // Uses a debounce timer so rapid bursts of appends don't repeatedly
+  // cancel and restart the expensive getAllLogs + compactLogs work.
   const compacting = useRef(false)
+  const compactTimer = useRef<ReturnType<typeof setTimeout>>()
   useEffect(() => {
     if (logCount < LOG_SNAPSHOT_THRESHOLD) return
     if (compacting.current) return
 
-    compacting.current = true
-    let cancelled = false
+    // Debounce: wait for a quiet period before starting compaction
+    clearTimeout(compactTimer.current)
+    compactTimer.current = setTimeout(() => {
+      compacting.current = true
+      let cancelled = false
 
-    async function compact() {
-      try {
-        const snapshot = await getLatestSnapshot()
-        if (cancelled) return
-        const logs = await getAllLogs()
-        if (cancelled) return
-        const { snapshot: newSnapshot, logs: remaining } = compactLogs(snapshot, logs)
-        await saveSnapshot(newSnapshot)
-        if (snapshot && !cancelled) {
-          await deleteLogsBefore(newSnapshot.timestamp)
+      async function compact() {
+        try {
+          const oldSnapshot = await getLatestSnapshot()
+          if (cancelled) return
+          const logs = await getAllLogs()
+          if (cancelled) return
+          const { snapshot: newSnapshot, logs: remaining } = compactLogs(oldSnapshot, logs)
+          await saveSnapshot(newSnapshot)
+          if (!cancelled) {
+            // Delete logs covered by the new snapshot.  Use
+            // newSnapshot.timestamp so that only logs already
+            // incorporated into the snapshot are pruned.
+            await deleteLogsBefore(newSnapshot.timestamp)
+          }
+          if (!cancelled) {
+            // Count surviving logs (those appended after the snapshot)
+            setLogCount(remaining.length)
+          }
+        } catch (err) {
+          console.error('Compaction failed:', err)
+        } finally {
+          compacting.current = false
         }
-        if (!cancelled) {
-          setLogCount(remaining.length)
-        }
-      } finally {
-        compacting.current = false
       }
-    }
-    compact()
+      compact()
 
-    return () => { cancelled = true }
+      // Return a no-op cleanup — the cancellation flag is scoped inside
+      // the setTimeout so it only applies to this compaction attempt.
+      return () => { cancelled = true }
+    }, 1000) // 1s quiet period before compacting
+
+    return () => { clearTimeout(compactTimer.current) }
   }, [logCount])
 
   // ---- Child Operations ----
@@ -238,29 +260,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const addCharacter = useCallback(async (wordBookId: string, character: string) => {
-    setState(prev => {
-      const wb = prev.wordBooks.find(w => w.id === wordBookId)
-      if (!wb) return prev
-      validateAddChar(character, wb)
-      const index = wb.characters.length
-      // Async: append log entry
-      const entry: AddCharEntry = {
-        timestamp: generateTimestamp(),
-        type: 'add_char',
-        wordBookId,
-        character,
-        index,
-      }
-      appendEntry(entry)
-      return {
-        ...prev,
-        wordBooks: prev.wordBooks.map(w =>
-          w.id === wordBookId
-            ? { ...w, characters: [...w.characters, character] }
-            : w
-        ),
-      }
-    })
+    // Validate BEFORE setState so errors propagate to the caller.
+    // Reading from a ref avoids adding state.wordBooks as a dependency,
+    // keeping the callback stable across renders.
+    const wb = wordBooksRef.current.find(w => w.id === wordBookId)
+    if (!wb) return
+    validateAddChar(character, wb)
+
+    const entry: AddCharEntry = {
+      timestamp: generateTimestamp(),
+      type: 'add_char',
+      wordBookId,
+      character,
+      index: wb.characters.length,
+    }
+
+    // Persist first, then optimistic update — consistent with all
+    // other mutation operations.
+    await appendEntry(entry)
+    setState(prev => ({
+      ...prev,
+      wordBooks: prev.wordBooks.map(w =>
+        w.id === wordBookId
+          ? { ...w, characters: [...w.characters, character] }
+          : w
+      ),
+    }))
   }, [])
 
   const removeCharacter = useCallback(async (wordBookId: string, character: string, index: number) => {

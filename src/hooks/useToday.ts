@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useRef } from 'react'
 import type { TaskItem, Grade, ReviewEntry } from '../core/types'
 import { useApp } from '../state/AppContext'
 import { generateTodayTasks } from '../core/scheduler'
@@ -47,6 +47,10 @@ export function useToday(): UseTodayReturn {
   // from shifting when state changes mid-session (e.g. submitReview
   // advances nextCharIndex, which would otherwise regenerate the list).
   const [sessionTasks, setSessionTasks] = useState<TaskItem[] | null>(null)
+  const advancingRef = useRef(false)
+  // Ref mirror of tasks so startSession can read the latest task list
+  // without depending on the full array reference.
+  const tasksRef = useRef<TaskItem[]>([])
 
   // Get available children
   const children = useMemo(() => {
@@ -57,11 +61,17 @@ export function useToday(): UseTodayReturn {
     }))
   }, [state.children])
 
-  // Generate tasks for the selected child (idle screen + session init)
+  // Generate tasks for the selected child (idle screen + session init).
+  // Skip recomputation during an active session — sessionTasks is the
+  // source of truth for task order until the session ends.
   const tasks = useMemo(() => {
-    if (!selectedChildId) return []
+    if (!selectedChildId || sessionTasks !== null) return []
     return generateTodayTasks(state, selectedChildId, todayKey)
-  }, [state, selectedChildId, todayKey])
+  }, [state, selectedChildId, todayKey, sessionTasks])
+
+  // Keep the ref in sync so startSession (which has [] deps) always
+  // reads the latest tasks.
+  tasksRef.current = tasks
 
   // Use session-locked tasks when a session is active; otherwise use
   // live tasks (for the idle-screen count).
@@ -71,14 +81,15 @@ export function useToday(): UseTodayReturn {
   const totalTasks = effectiveTasks.length
 
   const startSession = useCallback(() => {
-    if (tasks.length === 0) return
-    setSessionTasks([...tasks])  // snapshot the task list so it won't shift mid-session
+    const currentTasks = tasksRef.current
+    if (currentTasks.length === 0) return
+    setSessionTasks([...currentTasks])  // snapshot so it won't shift mid-session
     setPhase('reviewing')
     setTaskIndex(0)
     setRound(1)
     setSessionReviews([])
     setSessionStats({ a: 0, b: 0, c: 0, d: 0 })
-  }, [tasks])
+  }, [])
 
   const handleRate = useCallback((grade: Grade) => {
     if (!currentTask || !selectedChildId) return
@@ -106,15 +117,20 @@ export function useToday(): UseTodayReturn {
     submitReview(selectedChildId, currentTask.character, grade, round, todayKey)
       .catch(console.error)
 
-    // Advance to next task or complete round
-    setTimeout(() => {
-      if (taskIndex + 1 < totalTasks) {
-        setTaskIndex(prev => prev + 1)
-      } else {
-        // Round complete
-        setPhase('roundComplete')
-      }
-    }, 350)
+    // Advance to next task or complete round.
+    // Guard with advancingRef so rapid clicks don't schedule multiple
+    // concurrent timeouts (which would skip tasks).
+    if (!advancingRef.current) {
+      advancingRef.current = true
+      setTimeout(() => {
+        advancingRef.current = false
+        if (taskIndex + 1 < totalTasks) {
+          setTaskIndex(prev => prev + 1)
+        } else {
+          setPhase('roundComplete')
+        }
+      }, 350)
+    }
   }, [currentTask, selectedChildId, round, taskIndex, totalTasks, todayKey, submitReview])
 
   const handleContinueRound = useCallback(() => {
@@ -127,11 +143,13 @@ export function useToday(): UseTodayReturn {
       return
     }
 
-    // Start new round with c/d characters
+    // Filter sessionTasks to only the characters that need re-review
+    const cdTasks = effectiveTasks.filter(t => cdChars.includes(t.character))
+    setSessionTasks(cdTasks)
     setRound(prev => prev + 1)
     setTaskIndex(0)
     setPhase('reviewing')
-  }, [sessionReviews, round])
+  }, [sessionReviews, round, effectiveTasks])
 
   const handleSkipRound = useCallback(() => {
     setPhase('celebration')
