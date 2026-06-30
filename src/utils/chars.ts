@@ -115,6 +115,18 @@ const CHAR_DATABASE: Record<string, CharInfo> = {
 import type { WordBook } from '../core/types'
 
 /**
+ * Error thrown by validation functions when user input is invalid.
+ * Distinguishable from system errors (IndexedDB, network) so callers
+ * can silently skip validation failures while surfacing real problems.
+ */
+export class ValidationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ValidationError'
+  }
+}
+
+/**
  * Check whether a single character is a Chinese (Han) character.
  * Uses Unicode property escapes to cover all CJK planes,
  * including Extension A–G in supplementary planes.
@@ -131,10 +143,10 @@ export function isChineseChar(char: string): boolean {
  */
 export function validateAddChar(character: string, wordBook: WordBook): void {
   if (!isChineseChar(character)) {
-    throw new Error(`"${character}" 不是汉字，不能添加到生字本`)
+    throw new ValidationError(`"${character}" 不是汉字，不能添加到生字本`)
   }
   if (wordBook.characters.includes(character)) {
-    throw new Error(`"${character}" 已在生字本中，不能重复添加`)
+    throw new ValidationError(`"${character}" 已在生字本中，不能重复添加`)
   }
 }
 

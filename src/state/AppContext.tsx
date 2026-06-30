@@ -275,6 +275,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       index: wb.characters.length,
     }
 
+    // Eagerly update the ref so that sequential calls within the same
+    // microtask (e.g. a batch addCharacter loop) see each other's
+    // additions for validation and correct index assignment.
+    wordBooksRef.current = wordBooksRef.current.map(w =>
+      w.id === wordBookId
+        ? { ...w, characters: [...w.characters, character] }
+        : w
+    )
+
     // Persist first, then optimistic update — consistent with all
     // other mutation operations.
     await appendEntry(entry)

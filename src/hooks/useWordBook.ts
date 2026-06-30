@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useApp } from '../state/AppContext'
+import { isChineseChar, ValidationError } from '../utils/chars'
 
 interface UseWordBookReturn {
   selectedWBId: string | null
@@ -41,10 +42,25 @@ export function useWordBook(): UseWordBookReturn {
   }, [selectedWBId, state.wordBooks])
 
   const addCharacter = useCallback(async (char: string) => {
-    if (!selectedWBId || !char.trim()) return
-    // Add each character separately
-    for (const c of char.trim()) {
-      await addCharFn(selectedWBId, c)
+    const trimmed = char.trim()
+    if (!selectedWBId || !trimmed) return
+    // Add each character separately, skipping non-Chinese characters
+    // (commas, spaces, punctuation) and duplicates.
+    for (const c of trimmed) {
+      if (!isChineseChar(c)) continue
+      try {
+        await addCharFn(selectedWBId, c)
+      } catch (err) {
+        if (err instanceof ValidationError) {
+          // Skip duplicates or other validation failures; continue with
+          // remaining characters so one bad input doesn't block the rest.
+          continue
+        }
+        // System errors (IndexedDB, network, …) must propagate so the
+        // caller can surface them to the user.
+        console.error('addCharacter failed:', err)
+        throw err
+      }
     }
   }, [selectedWBId, addCharFn])
 
