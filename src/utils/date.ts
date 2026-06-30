@@ -2,7 +2,7 @@
  * Date utility helpers for 记汉字.
  */
 
-import type { DayType } from './types'
+import type { DayType } from '../core/types'
 
 /** Reference epoch for day type alternation — a known "learn" day */
 const EPOCH_LEARN_DATE = '2026-01-01'
