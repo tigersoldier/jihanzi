@@ -142,31 +142,41 @@ export async function writeFile(
   setGapiToken(token)
 
   if (existingFileId) {
-    // Update existing file
+    // Update existing file — simple media upload
     const response = await gapi.client.request({
       path: `/upload/drive/v3/files/${existingFileId}`,
       method: 'PATCH',
       params: { uploadType: 'media' },
+      headers: { 'Content-Type': mimeType },
       body: content,
     })
     return existingFileId
   } else {
-    // Create new file
-    const metadata = {
-      name: fileName,
-      parents: [folderId],
-      mimeType,
-    }
+    // Create new file — multipart upload with metadata + content.
+    // gapi.client.request cannot serialize FormData correctly, so we
+    // build the multipart body by hand as a string.
+    const metadata = { name: fileName, parents: [folderId], mimeType }
+    const boundary = `jihanzi_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+    const CRLF = '\r\n'
 
-    const form = new FormData()
-    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }))
-    form.append('file', new Blob([content], { type: mimeType }))
+    const body = [
+      `--${boundary}`,
+      'Content-Type: application/json; charset=UTF-8',
+      '',
+      JSON.stringify(metadata),
+      `--${boundary}`,
+      `Content-Type: ${mimeType}`,
+      '',
+      content,
+      `--${boundary}--`,
+    ].join(CRLF)
 
     const response = await gapi.client.request({
       path: '/upload/drive/v3/files',
       method: 'POST',
       params: { uploadType: 'multipart' },
-      body: form,
+      headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+      body,
     })
 
     return (response.result as { id: string }).id

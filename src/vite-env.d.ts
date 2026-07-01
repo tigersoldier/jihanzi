@@ -33,6 +33,7 @@ declare namespace gapi {
       path: string
       method: string
       params?: Record<string, string>
+      headers?: Record<string, string>
       body?: unknown
     }): Promise<{ result: unknown; body?: string }>
 

@@ -34,6 +34,9 @@ let syncStatus: SyncStatus = 'idle'
 let syncListeners: Array<(status: SyncStatus) => void> = []
 let syncInterval: ReturnType<typeof setInterval> | null = null
 
+// Debounce timer for notifyDataChanged — batched pushes.
+let notifyTimer: ReturnType<typeof setTimeout> | null = null
+
 /** Subscribe to sync status changes */
 export function onSyncStatusChange(listener: (status: SyncStatus) => void): () => void {
   syncListeners.push(listener)
@@ -50,6 +53,22 @@ function setSyncStatus(status: SyncStatus): void {
 /** Get current sync status */
 export function getSyncStatus(): SyncStatus {
   return syncStatus
+}
+
+/**
+ * Notify that local data has changed — triggers a debounced push to Drive.
+ * Call after any local mutation that should be synced.
+ *
+ * Debounced: rapid-fire mutations within 2s are batched into one push.
+ */
+export function notifyDataChanged(): void {
+  if (notifyTimer) clearTimeout(notifyTimer)
+  notifyTimer = setTimeout(() => {
+    notifyTimer = null
+    pushChanges().catch(() => {
+      // Silently ignore — will be picked up by next background sync
+    })
+  }, 2000) // 2s debounce
 }
 
 /**
@@ -107,9 +126,20 @@ export async function pushChanges(): Promise<void> {
       version: '0.1.0',
     }, metaFile?.id)
 
-    // For each child, ensure subfolder and push snapshot + logs
-    // This is a simplification — full implementation would track per-child
-    // Drive file IDs and push incrementally.
+    // Push per-child snapshot + logs
+    const snapshotData = JSON.stringify(snapshot)
+    const logEntries = logs.map(l => JSON.stringify(l))
+
+    if (snapshot) {
+      for (const child of snapshot.state.children) {
+        const childFolderId = await findOrCreateFolder(rootId, child.name)
+        const snapshotFile = await findFile(childFolderId, 'snapshot.json')
+        const logFile = await findFile(childFolderId, 'log.jsonl')
+
+        await pushSnapshot(childFolderId, snapshotData, snapshotFile?.id)
+        await pushLogs(childFolderId, logEntries, logFile?.id)
+      }
+    }
 
     setLastSyncTime(Date.now())
     setSyncStatus('online')

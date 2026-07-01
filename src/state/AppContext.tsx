@@ -41,6 +41,7 @@ import { compactLogs } from '../core/snapshot'
 import { LOG_SNAPSHOT_THRESHOLD } from '../core/log'
 import { validateAddChar } from '../utils/chars'
 import { useAuth } from './AuthContext'
+import { notifyDataChanged } from '../data/sync'
 
 export interface AppContextState {
   state: AppState
@@ -402,6 +403,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const reconstructed = replayLog(snapshot as Snapshot, logs)
     setState(reconstructed)
     setLogCount(logs.length)
+
+    // 4. Trigger sync to push imported data to Drive
+    notifyDataChanged()
   }, [])
 
   return (
