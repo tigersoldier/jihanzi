@@ -8,6 +8,11 @@ import {
   getUserProfile,
   hasValidToken,
   isGoogleConfigured,
+  restoreToken,
+  trySilentLogin,
+  saveUserToStorage,
+  loadUserFromStorage,
+  clearUserStorage,
 } from '../data/gapi'
 
 interface UserProfile {
@@ -31,10 +36,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true)
   const [user, setUser] = useState<UserProfile | null>(null)
 
-  // Initialize Google libraries on mount
+  // Initialize Google libraries and restore auth on mount
   useEffect(() => {
     if (!isGoogleConfigured()) {
-      // Demo mode — no Google config, allow offline-only use
+      // Demo mode — check localStorage for persisted login state
+      const storedUser = loadUserFromStorage()
+      if (storedUser) {
+        setUser(storedUser)
+        setIsLoggedIn(true)
+      }
       setIsLoading(false)
       return
     }
@@ -43,21 +53,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then(() => initGapiClient())
       .then(() => {
         initTokenClient()
-        if (hasValidToken()) {
+
+        // Step 1: try restoring token from localStorage
+        if (restoreToken()) {
           setIsLoggedIn(true)
           getUserProfile()
-            .then(setUser)
-            .catch(() => setIsLoggedIn(false))
+            .then((profile) => {
+              setUser(profile)
+              saveUserToStorage(profile)
+            })
+            .catch(() => {
+              // Token was invalid — clear and fall through to silent refresh
+              setIsLoggedIn(false)
+            })
+        }
+
+        // Step 2: try silent refresh (won't show popup if user has Google session)
+        return trySilentLogin()
+      })
+      .then((silentToken) => {
+        if (silentToken) {
+          setIsLoggedIn(true)
+          return getUserProfile().then((profile) => {
+            setUser(profile)
+            saveUserToStorage(profile)
+          })
         }
       })
-      .catch(console.error)
+      .catch((err) => {
+        // Silent refresh failed — user will need to login manually
+        console.error('Auth restore failed:', err)
+      })
       .finally(() => setIsLoading(false))
   }, [])
 
   const login = useCallback(async () => {
     if (!isGoogleConfigured()) {
-      // Demo mode — simulate login
-      setUser({ name: '演示用户', email: 'demo@example.com', picture: '' })
+      // Demo mode — simulate login and persist state
+      const demoUser = { name: '演示用户', email: 'demo@example.com', picture: '' }
+      saveUserToStorage(demoUser)
+      setUser(demoUser)
       setIsLoggedIn(true)
       return
     }
@@ -66,6 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await requestAccessToken()
       const profile = await getUserProfile()
+      saveUserToStorage(profile)
       setUser(profile)
       setIsLoggedIn(true)
     } catch (err) {
@@ -79,6 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (isGoogleConfigured()) {
       googleSignOut()
     }
+    clearUserStorage()
     setUser(null)
     setIsLoggedIn(false)
   }, [])

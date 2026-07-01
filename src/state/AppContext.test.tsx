@@ -38,6 +38,14 @@ vi.mock('../data/gapi', () => ({
   signOut: vi.fn(),
   getUserProfile: vi.fn(),
   hasValidToken: () => false,
+  restoreToken: () => false,
+  trySilentLogin: () => Promise.resolve(null),
+  saveUserToStorage: vi.fn(),
+  loadUserFromStorage: () => null,
+  clearUserStorage: vi.fn(),
+  saveTokenToStorage: vi.fn(),
+  loadTokenFromStorage: () => null,
+  clearTokenStorage: vi.fn(),
 }))
 
 // Mock db
