@@ -1,10 +1,55 @@
-import { useState, useCallback, useMemo, useRef } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import type { TaskItem, Grade, ReviewEntry } from '../core/types'
 import { useApp } from '../state/AppContext'
 import { generateTodayTasks } from '../core/scheduler'
 import { todayKey as getTodayKey, getDayType, getDayTypeLabel, formatDateLabel } from '../utils/date'
 
 export type SessionPhase = 'idle' | 'reviewing' | 'roundComplete' | 'celebration'
+
+// ---- Session persistence (localStorage) ----
+
+const SESSION_KEY_PREFIX = 'jihanzi_session_'
+
+interface SavedSession {
+  childId: string
+  dayKey: string
+  phase: SessionPhase
+  taskIndex: number
+  round: number
+  sessionTasks: TaskItem[]
+  sessionReviews: ReviewEntry[]
+  sessionStats: { a: number; b: number; c: number; d: number }
+}
+
+function sessionKey(childId: string, dayKey: string): string {
+  return `${SESSION_KEY_PREFIX}${childId}_${dayKey}`
+}
+
+function loadSession(childId: string, dayKey: string): SavedSession | null {
+  try {
+    const raw = localStorage.getItem(sessionKey(childId, dayKey))
+    if (!raw) return null
+    return JSON.parse(raw) as SavedSession
+  } catch {
+    return null
+  }
+}
+
+function saveSession(childId: string, dayKey: string, data: SavedSession): void {
+  try {
+    localStorage.setItem(sessionKey(childId, dayKey), JSON.stringify(data))
+  } catch {
+    // localStorage full or disabled — silently ignore
+  }
+}
+
+function clearSession(childId: string, dayKey: string): void {
+  try {
+    localStorage.removeItem(sessionKey(childId, dayKey))
+  } catch {
+    // ignore
+  }
+}
 
 interface UseTodayReturn {
   phase: SessionPhase
@@ -48,9 +93,63 @@ export function useToday(): UseTodayReturn {
   // advances nextCharIndex, which would otherwise regenerate the list).
   const [sessionTasks, setSessionTasks] = useState<TaskItem[] | null>(null)
   const advancingRef = useRef(false)
+  const continuingRef = useRef(false)
   // Ref mirror of tasks so startSession can read the latest task list
   // without depending on the full array reference.
   const tasksRef = useRef<TaskItem[]>([])
+  // Track whether we've already attempted session restoration from
+  // localStorage (runs once after IndexedDB state is loaded).
+  const didRestore = useRef(false)
+
+  // Restore saved session after IndexedDB state is loaded (page refresh).
+  // Runs when state.children becomes non-empty (i.e. after AppContext
+  // finishes its async load from IndexedDB).
+  useEffect(() => {
+    if (didRestore.current) return
+    if (state.children.length === 0) return
+
+    // Try the currently-selected child first, then fall back to searching
+    // all children for a saved session. This handles multi-child setups
+    // where the user was reviewing a non-first child before refresh.
+    const candidateIds = selectedChildId
+      ? [selectedChildId, ...state.children.map(c => c.id).filter(id => id !== selectedChildId)]
+      : state.children.map(c => c.id)
+
+    for (const childId of candidateIds) {
+      const saved = loadSession(childId, todayKey)
+      if (saved && saved.dayKey === todayKey && saved.phase !== 'idle') {
+        didRestore.current = true
+        setPhase(saved.phase)
+        setTaskIndex(saved.taskIndex)
+        setRound(saved.round)
+        setSelectedChildId(saved.childId)
+        setSessionReviews(saved.sessionReviews)
+        setSessionStats(saved.sessionStats)
+        setSessionTasks(saved.sessionTasks)
+        return
+      }
+    }
+
+    // Mark as done so we don't keep trying on every render
+    didRestore.current = true
+  }, [state.children, selectedChildId, todayKey])
+
+  // Persist session state to localStorage whenever it changes.
+  useEffect(() => {
+    const childId = selectedChildId || state.children[0]?.id
+    if (!childId || phase === 'idle' || !sessionTasks) return
+
+    saveSession(childId, todayKey, {
+      childId,
+      dayKey: todayKey,
+      phase,
+      taskIndex,
+      round,
+      sessionTasks,
+      sessionReviews,
+      sessionStats,
+    })
+  }, [phase, taskIndex, round, sessionTasks, sessionReviews, sessionStats, selectedChildId, todayKey, state.children])
 
   // Get available children
   const children = useMemo(() => {
@@ -83,16 +182,21 @@ export function useToday(): UseTodayReturn {
   const startSession = useCallback(() => {
     const currentTasks = tasksRef.current
     if (currentTasks.length === 0) return
+    // Clear any stale saved session before starting a new one
+    clearSession(selectedChildId, todayKey)
     setSessionTasks([...currentTasks])  // snapshot so it won't shift mid-session
     setPhase('reviewing')
     setTaskIndex(0)
     setRound(1)
     setSessionReviews([])
     setSessionStats({ a: 0, b: 0, c: 0, d: 0 })
-  }, [])
+  }, [selectedChildId, todayKey])
 
   const handleRate = useCallback((grade: Grade) => {
     if (!currentTask || !selectedChildId) return
+    // Guard against rapid double-clicks — advancingRef is true while
+    // a previous rating's task-advancement timeout is still pending.
+    if (advancingRef.current) return
 
     // Show rating animation
     setRatingAnimation(grade)
@@ -113,9 +217,9 @@ export function useToday(): UseTodayReturn {
     }
     setSessionReviews(prev => [...prev, review])
 
-    // Submit to backend (only round 1 affects SM-2)
+    // Submit to backend (only round 1 affects SM-2).
+    // Errors are handled inside submitReview via try/catch.
     submitReview(selectedChildId, currentTask.character, grade, round, todayKey)
-      .catch(console.error)
 
     // Advance to next task or complete round.
     // Guard with advancingRef so rapid clicks don't schedule multiple
@@ -134,12 +238,17 @@ export function useToday(): UseTodayReturn {
   }, [currentTask, selectedChildId, round, taskIndex, totalTasks, todayKey, submitReview])
 
   const handleContinueRound = useCallback(() => {
+    // Guard against rapid double-clicks
+    if (continuingRef.current) return
+    continuingRef.current = true
+
     const cdChars = sessionReviews
       .filter(r => r.round === round && (r.grade === 'c' || r.grade === 'd'))
       .map(r => r.character)
 
     if (cdChars.length === 0) {
       setPhase('celebration')
+      continuingRef.current = false
       return
     }
 
@@ -149,6 +258,7 @@ export function useToday(): UseTodayReturn {
     setRound(prev => prev + 1)
     setTaskIndex(0)
     setPhase('reviewing')
+    continuingRef.current = false
   }, [sessionReviews, round, effectiveTasks])
 
   const handleSkipRound = useCallback(() => {
@@ -156,11 +266,13 @@ export function useToday(): UseTodayReturn {
   }, [])
 
   const handleDone = useCallback(() => {
+    clearSession(selectedChildId, todayKey)
     setPhase('idle')
     setTaskIndex(0)
     setRound(1)
     setSessionTasks(null)  // clear session snapshot
-  }, [])
+    setSessionStats({ a: 0, b: 0, c: 0, d: 0 })
+  }, [selectedChildId, todayKey])
 
   return {
     phase,
@@ -180,6 +292,6 @@ export function useToday(): UseTodayReturn {
     handleContinueRound,
     handleSkipRound,
     handleDone,
-    isReady: selectedChildId !== '' && tasks.length > 0,
+    isReady: selectedChildId !== '' && effectiveTasks.length > 0,
   }
 }

@@ -364,9 +364,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       round,
       dayKey,
     }
-    await appendEntry(entry)
 
-    // Only round 1 affects SM-2 state
+    // Optimistic state update — always apply immediately regardless of
+    // IndexedDB persistence outcome.  This guarantees the UI reflects
+    // the latest review data even when IndexedDB is slow or fails.
     if (round === 1) {
       setState(prev => {
         // Replay the review entry against the current state so existing
@@ -374,6 +375,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const newState = replayLog({ timestamp: 0, state: prev }, [entry])
         return newState
       })
+    }
+
+    // Persist to IndexedDB in the background.
+    try {
+      await appendEntry(entry)
+    } catch (err) {
+      console.error('Failed to persist review:', err)
     }
   }, [])
 

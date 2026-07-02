@@ -10,6 +10,14 @@ import React, { useState, useCallback, type ReactNode } from 'react'
 import type { AppState } from '../core/types'
 import { AppContext, type AppContextState } from '../state/AppContext'
 
+// Mock localStorage (Node 22+ has a built-in stub that overrides jsdom's)
+let localStorageStore = new Map<string, string>()
+vi.stubGlobal('localStorage', {
+  getItem: vi.fn((key: string) => localStorageStore.get(key) ?? null),
+  setItem: vi.fn((key: string, value: string) => { localStorageStore.set(key, value) }),
+  removeItem: vi.fn((key: string) => { localStorageStore.delete(key) }),
+})
+
 // Mock the date module to use a known "learn" day
 vi.mock('../utils/date', async () => {
   const actual = await vi.importActual<typeof import('../utils/date')>('../utils/date')
@@ -138,6 +146,101 @@ function createStatefulWrapper(initialState: AppState) {
 // ---------------------------------------------------------------
 
 describe('useToday', () => {
+  beforeEach(() => {
+    localStorageStore = new Map()
+  })
+
+  it('刷新页面后恢复复习进度', async () => {
+    // Given: 一个孩子有一个包含五个生字的生字本
+    const initialState = freshStateWithChars(['一', '二', '三', '四', '五'])
+    const wrapper = createStatefulWrapper(initialState)
+
+    const { result, unmount } = renderHook(() => useToday(), { wrapper })
+
+    // 开始学习
+    act(() => {
+      result.current.startSession()
+    })
+    expect(result.current.phase).toBe('reviewing')
+    expect(result.current.taskIndex).toBe(0)
+    expect(result.current.currentTask?.character).toBe('一')
+
+    // 评分「一」为 a
+    await act(async () => {
+      result.current.handleRate('a')
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+
+    expect(result.current.taskIndex).toBe(1)
+    expect(result.current.currentTask?.character).toBe('二')
+
+    // 模拟刷新：卸载
+    unmount()
+
+    // 构造刷新后的 state（模拟 IndexedDB 恢复后的状态）
+    // 「一」已被复习，nextCharIndex 推进到 1
+    const afterRefreshState = freshStateWithChars(['一', '二', '三', '四', '五'])
+    afterRefreshState.children[0].nextCharIndex = 1
+    afterRefreshState.children[0].progress = {
+      '一': {
+        ease: 2.6,
+        interval: 1,
+        repetitions: 1,
+        nextReview: '2026-01-02',
+        lastGrade: 'a',
+      },
+    }
+
+    const newWrapper = createStatefulWrapper(afterRefreshState)
+
+    // 重新挂载（模拟刷新后重新进入页面）
+    const { result: result2 } = renderHook(() => useToday(), { wrapper: newWrapper })
+
+    // Then: 应该恢复到之前的进度 — 在「二」而不是回到「一」
+    // 注意：totalTasks 不变（sessionTasks 快照被恢复），但实际剩余任务数会变
+    expect(result2.current.phase).toBe('reviewing')
+    expect(result2.current.taskIndex).toBe(1)
+    expect(result2.current.currentTask?.character).toBe('二')
+  })
+
+  it('正常完成会话后清除持久化的会话', async () => {
+    // Given: 一个孩子有一个生字
+    const initialState = freshStateWithChars(['一'])
+    const wrapper = createStatefulWrapper(initialState)
+
+    const { result, unmount } = renderHook(() => useToday(), { wrapper })
+
+    // 开始学习
+    act(() => {
+      result.current.startSession()
+    })
+    expect(result.current.phase).toBe('reviewing')
+
+    // 评完所有字（只有「一」）
+    await act(async () => {
+      result.current.handleRate('a')
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+
+    // 应该进入 roundComplete
+    expect(result.current.phase).toBe('roundComplete')
+
+    // 完成会话
+    act(() => {
+      result.current.handleDone()
+    })
+    expect(result.current.phase).toBe('idle')
+
+    unmount()
+
+    // 重新挂载 — 已完成会话，不应恢复
+    const newWrapper = createStatefulWrapper(initialState)
+    const { result: result2 } = renderHook(() => useToday(), { wrapper: newWrapper })
+
+    expect(result2.current.phase).toBe('idle')
+    expect(result2.current.taskIndex).toBe(0)
+  })
+
   it('学习新字时按顺序逐字推进，不跳字', async () => {
     // Given: 一个孩子有一个包含五个生字的生字本（一、二、三、四、五）
     const initialState = freshStateWithChars(['一', '二', '三', '四', '五'])
@@ -169,5 +272,101 @@ describe('useToday', () => {
     // Then: 应该在「二」而不是「三」
     expect(result.current.taskIndex).toBe(1)
     expect(result.current.currentTask?.character).toBe('二')
+  })
+
+  it('快速双击评分按钮时只提交一次 review', async () => {
+    // Given: 一个孩子有一个生字
+    const initialState = freshStateWithChars(['一'])
+    const wrapper = createStatefulWrapper(initialState)
+
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    act(() => {
+      result.current.startSession()
+    })
+
+    // When: 在 350ms 内快速双击「a」按钮
+    await act(async () => {
+      result.current.handleRate('a')  // 第一次点击
+      result.current.handleRate('a')  // 第二次点击（双击）
+      // 等待 setTimeout 推进 taskIndex
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+
+    // Then: sessionStats 应该只计一次（验证双击被拦截）
+    expect(result.current.sessionStats.a).toBe(1)
+  })
+
+  it('多孩子场景下刷新后恢复正确的孩子进度', async () => {
+    // Given: 两个孩子各有生字本
+    const initialState = makeState({
+      children: [
+        { id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} },
+        { id: 'child_2', name: '小红', wordBookId: 'wb_2', nextCharIndex: 0, progress: {} },
+      ],
+      wordBooks: [
+        { id: 'wb_1', name: '小明生字本', characters: ['一', '二'] },
+        { id: 'wb_2', name: '小红生字本', characters: ['花', '草'] },
+      ],
+    })
+    const wrapper = createStatefulWrapper(initialState)
+
+    const { result, unmount } = renderHook(() => useToday(), { wrapper })
+
+    // 切换到第二个孩子
+    act(() => {
+      result.current.setSelectedChildId('child_2')
+    })
+
+    // 开始学习
+    act(() => {
+      result.current.startSession()
+    })
+    expect(result.current.phase).toBe('reviewing')
+    expect(result.current.currentTask?.character).toBe('花')
+
+    // 评分「花」为 a
+    await act(async () => {
+      result.current.handleRate('a')
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+
+    expect(result.current.taskIndex).toBe(1)
+    expect(result.current.currentTask?.character).toBe('草')
+
+    // 模拟刷新：卸载
+    unmount()
+
+    // 构造刷新后的 state（第二个孩子的进度被保留）
+    const afterRefreshState = makeState({
+      children: [
+        { id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} },
+        {
+          id: 'child_2',
+          name: '小红',
+          wordBookId: 'wb_2',
+          nextCharIndex: 1,
+          progress: {
+            '花': { ease: 2.6, interval: 1, repetitions: 1, nextReview: '2026-01-02', lastGrade: 'a' },
+          },
+        },
+      ],
+      wordBooks: [
+        { id: 'wb_1', name: '小明生字本', characters: ['一', '二'] },
+        { id: 'wb_2', name: '小红生字本', characters: ['花', '草'] },
+      ],
+    })
+
+    const newWrapper = createStatefulWrapper(afterRefreshState)
+
+    // 重新挂载（模拟刷新后重新进入页面）
+    // selectedChildId 会重置为第一个孩子（'child_1'），但应恢复到 'child_2'
+    const { result: result2 } = renderHook(() => useToday(), { wrapper: newWrapper })
+
+    // Then: 应该恢复到第二个孩子的进度
+    expect(result2.current.selectedChildId).toBe('child_2')
+    expect(result2.current.phase).toBe('reviewing')
+    expect(result2.current.taskIndex).toBe(1)
+    expect(result2.current.currentTask?.character).toBe('草')
   })
 })
