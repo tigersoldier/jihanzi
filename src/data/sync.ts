@@ -73,30 +73,99 @@ export function notifyDataChanged(): void {
 
 /**
  * Initial data pull from Google Drive on first load.
- * Merges remote data with local data.
+ * Merges remote data with local data and saves to IndexedDB.
+ *
+ * Merge strategy (append-only log ⇒ conflict-free):
+ * 1. Parse snapshot and log entries from every child folder on Drive.
+ * 2. Pick the newest snapshot (by timestamp) across local and remote.
+ * 3. Union all log entries — duplicate detection by (timestamp, type, entityId)
+ *    since log entries are immutable, union is naturally conflict-free.
+ * 4. Save the merged result to local IndexedDB.
+ *
+ * @returns true if remote data was found and merged into local DB.
  */
-export async function initialPull(): Promise<void> {
+export async function initialPull(): Promise<boolean> {
   if (!hasValidToken()) {
     setSyncStatus('offline')
-    return
+    return false
   }
 
   setSyncStatus('syncing')
 
   try {
-    const { meta, childData } = await pullAllData()
+    const { childData } = await pullAllData()
 
-    // TODO: Merge Drive data with local data
-    // For now, this is a placeholder. The full merge logic will:
-    // 1. Read local logs
-    // 2. Parse remote logs from childData
-    // 3. Merge by union of timestamps
-    // 4. Save merged result back to local DB
+    // Parse remote snapshots and log entries from all child folders
+    let remoteSnapshot: Snapshot | null = null
+    const remoteLogEntries: AnyLogEntry[] = []
+
+    for (const [, data] of Object.entries(childData)) {
+      if (data.snapshot) {
+        try {
+          const parsed = JSON.parse(data.snapshot)
+          if (parsed.state && parsed.timestamp !== undefined) {
+            if (!remoteSnapshot || parsed.timestamp > remoteSnapshot.timestamp) {
+              remoteSnapshot = parsed as Snapshot
+            }
+          }
+        } catch {
+          console.warn('Failed to parse remote snapshot')
+        }
+      }
+      if (data.logs) {
+        for (const line of data.logs) {
+          try {
+            remoteLogEntries.push(JSON.parse(line) as AnyLogEntry)
+          } catch {
+            console.warn('Failed to parse remote log line')
+          }
+        }
+      }
+    }
+
+    // Nothing to merge — Drive is empty
+    if (!remoteSnapshot && remoteLogEntries.length === 0) {
+      setSyncStatus('online')
+      return false
+    }
+
+    // Read local data for merge
+    const localSnapshot = await getLatestSnapshot()
+    const localLogs = await getAllLogs()
+
+    // Pick the newer snapshot
+    const bestSnapshot =
+      !localSnapshot || (remoteSnapshot && remoteSnapshot.timestamp > localSnapshot.timestamp)
+        ? remoteSnapshot
+        : localSnapshot
+
+    if (bestSnapshot && bestSnapshot !== localSnapshot) {
+      await saveSnapshot(bestSnapshot)
+    }
+
+    // Union log entries — use (timestamp, type, entityId) as dedup key.
+    // Entity id varies by entry type: childId for child/review entries,
+    // wordBookId for wordbook/char entries.
+    const makeKey = (e: AnyLogEntry): string => {
+      const entityId =
+        (e as any).childId || (e as any).wordBookId || ''
+      return `${e.timestamp}:${e.type}:${entityId}`
+    }
+    const localKeys = new Set(localLogs.map(makeKey))
+    const newEntries = remoteLogEntries.filter(e => !localKeys.has(makeKey(e)))
+
+    if (newEntries.length > 0) {
+      // Sort by timestamp so log replay is chronological
+      newEntries.sort((a, b) => a.timestamp - b.timestamp)
+      await appendLogs(newEntries)
+    }
 
     setSyncStatus('online')
+    return true
   } catch (err) {
     console.error('Sync pull failed:', err)
     setSyncStatus('error')
+    return false
   }
 }
 

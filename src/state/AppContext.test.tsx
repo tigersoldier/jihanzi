@@ -99,4 +99,16 @@ describe('AppContext — sync triggers', () => {
     // After bulkImport, notifyDataChanged should have been called
     expect(mockNotifyDataChanged).toHaveBeenCalledTimes(1)
   })
+
+  it('exposes reloadState as a callable function', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+
+    await vi.waitFor(() => {
+      // Wait for auth + initial load
+    }, { timeout: 1000 })
+
+    expect(typeof result.current.reloadState).toBe('function')
+    // Calling reloadState should not throw
+    expect(() => result.current.reloadState()).not.toThrow()
+  })
 })

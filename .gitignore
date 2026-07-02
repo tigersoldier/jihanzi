@@ -25,3 +25,4 @@ tsconfig.tsbuildinfo
 # Logs
 *.log
 npm-debug.log*
+..env.~undo-tree~

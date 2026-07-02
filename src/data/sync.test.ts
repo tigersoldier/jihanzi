@@ -32,11 +32,17 @@ const { mockHasValidToken } = vi.hoisted(() => ({
   mockHasValidToken: vi.fn().mockReturnValue(true),
 }))
 
+const { mockPullAllData, mockSaveSnapshot, mockAppendLogs } = vi.hoisted(() => ({
+  mockPullAllData: vi.fn(),
+  mockSaveSnapshot: vi.fn(),
+  mockAppendLogs: vi.fn(),
+}))
+
 vi.mock('./drive', () => ({
   findOrCreateRootFolder: (...args: any[]) => mockFindOrCreateRootFolder(...args),
   findOrCreateFolder: (...args: any[]) => mockFindOrCreateFolder(...args),
   findFile: (...args: any[]) => mockFindFile(...args),
-  pullAllData: vi.fn(),
+  pullAllData: (...args: any[]) => mockPullAllData(...args),
   pushMeta: (...args: any[]) => mockPushMeta(...args),
   pushSnapshot: (...args: any[]) => mockPushSnapshot(...args),
   pushLogs: (...args: any[]) => mockPushLogs(...args),
@@ -53,9 +59,9 @@ vi.mock('./db', () => ({
   getLatestSnapshot: () => mockGetLatestSnapshot(),
   getLastSyncTime: vi.fn(),
   setLastSyncTime: vi.fn(),
-  saveSnapshot: vi.fn(),
+  saveSnapshot: (...args: any[]) => mockSaveSnapshot(...args),
   appendLog: vi.fn(),
-  appendLogs: vi.fn(),
+  appendLogs: (...args: any[]) => mockAppendLogs(...args),
 }))
 
 const MOCK_LOG_ENTRIES = [
@@ -75,7 +81,7 @@ const MOCK_SNAPSHOT = {
   },
 }
 
-import { pushChanges } from './sync'
+import { pushChanges, initialPull } from './sync'
 
 describe('pushChanges', () => {
   beforeEach(() => {
@@ -125,5 +131,134 @@ describe('pushChanges', () => {
     await pushChanges()
 
     expect(mockFindOrCreateRootFolder).not.toHaveBeenCalled()
+  })
+})
+
+// ---- initialPull -------------------------------------------------------
+
+const MOCK_REMOTE_SNAPSHOT = {
+  timestamp: 2000,
+  state: {
+    children: [
+      { id: 'child_x', name: '小明', wordBookId: 'wb_1', nextCharIndex: 5, progress: {} },
+    ],
+    wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '二', '三', '四', '五'] }],
+    settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+  },
+}
+
+const MOCK_REMOTE_LOG_LINES = [
+  '{"timestamp":2001,"type":"create_child","childId":"child_x","name":"小明","wordBookId":"wb_1"}',
+  '{"timestamp":2002,"type":"create_wordbook","wordBookId":"wb_1","name":"生字本","characters":["一","二","三","四","五"]}',
+]
+
+const MOCK_REMOTE_CHILD_DATA = {
+  '小明': {
+    snapshot: JSON.stringify(MOCK_REMOTE_SNAPSHOT),
+    logs: MOCK_REMOTE_LOG_LINES,
+  },
+}
+
+describe('initialPull', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockHasValidToken.mockReturnValue(true)
+    mockGetAllLogs.mockResolvedValue([])
+    mockGetLatestSnapshot.mockResolvedValue(null)
+    mockPullAllData.mockResolvedValue({
+      meta: { lastSyncTime: Date.now(), version: '0.1.0' },
+      childData: MOCK_REMOTE_CHILD_DATA,
+    })
+  })
+
+  // ---- Tracer bullet: data from Drive is saved to local IndexedDB ----
+
+  it('saves pulled snapshot and log entries to IndexedDB', async () => {
+    await initialPull()
+
+    // Snapshot saved
+    expect(mockSaveSnapshot).toHaveBeenCalledTimes(1)
+    expect(mockSaveSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timestamp: MOCK_REMOTE_SNAPSHOT.timestamp,
+        state: expect.objectContaining({
+          children: expect.arrayContaining([
+            expect.objectContaining({ id: 'child_x', name: '小明' }),
+          ]),
+        }),
+      }),
+    )
+
+    // Log entries saved
+    expect(mockAppendLogs).toHaveBeenCalledTimes(1)
+    const appendedLogs = mockAppendLogs.mock.calls[0][0] as any[]
+    expect(appendedLogs.length).toBe(2)
+    expect(appendedLogs[0]).toMatchObject({ timestamp: 2001, type: 'create_child' })
+    expect(appendedLogs[1]).toMatchObject({ timestamp: 2002, type: 'create_wordbook' })
+  })
+
+  // ---- Edge: empty Drive (no child folders) ----
+
+  it('does nothing when Drive has no data', async () => {
+    mockPullAllData.mockResolvedValue({
+      meta: null,
+      childData: {},
+    })
+
+    await initialPull()
+
+    expect(mockSaveSnapshot).not.toHaveBeenCalled()
+    expect(mockAppendLogs).not.toHaveBeenCalled()
+  })
+
+  // ---- Edge: invalid token skips pull entirely ----
+
+  it('skips pull when token is invalid', async () => {
+    mockHasValidToken.mockReturnValue(false)
+
+    await initialPull()
+
+    expect(mockPullAllData).not.toHaveBeenCalled()
+  })
+
+  // ---- Merge: does not duplicate log entries already present locally ----
+
+  it('only appends new log entries not already in local IndexedDB', async () => {
+    // Local already has the first log entry
+    mockGetAllLogs.mockResolvedValue([
+      { timestamp: 2001, type: 'create_child', childId: 'child_x', name: '小明', wordBookId: 'wb_1' },
+    ])
+
+    await initialPull()
+
+    expect(mockAppendLogs).toHaveBeenCalledTimes(1)
+    const appendedLogs = mockAppendLogs.mock.calls[0][0] as any[]
+    expect(appendedLogs.length).toBe(1)
+    expect(appendedLogs[0]).toMatchObject({ timestamp: 2002, type: 'create_wordbook' })
+  })
+
+  // ---- Merge: keeps local snapshot when it is newer than remote ----
+
+  it('keeps local snapshot when it is newer than remote', async () => {
+    const newerLocalSnapshot = {
+      timestamp: 3000,
+      state: {
+        children: [
+          { id: 'child_y', name: '小红', wordBookId: 'wb_2', nextCharIndex: 3, progress: {} },
+        ],
+        wordBooks: [{ id: 'wb_2', name: '另一个生字本', characters: ['山', '水', '火'] }],
+        settings: { dailyReviewLimit: 20, dailyNewChars: 3, maxRounds: 3 },
+      },
+    }
+    mockGetLatestSnapshot.mockResolvedValue(newerLocalSnapshot)
+
+    await initialPull()
+
+    // Should NOT overwrite the newer local snapshot with the older remote one
+    const saveCalls = mockSaveSnapshot.mock.calls
+    const overwriteCall = saveCalls.find(
+      (call: any[]) => call[0]?.timestamp === MOCK_REMOTE_SNAPSHOT.timestamp,
+    )
+    expect(overwriteCall).toBeUndefined()
   })
 })

@@ -16,6 +16,7 @@ import {
   initialPull,
 } from '../data/sync'
 import { useAuth } from './AuthContext'
+import { useApp } from './AppContext'
 
 interface SyncContextState {
   status: SyncStatus
@@ -27,6 +28,7 @@ const SyncContext = createContext<SyncContextState | null>(null)
 
 export function SyncProvider({ children }: { children: ReactNode }) {
   const { isLoggedIn } = useAuth()
+  const { reloadState } = useApp()
   const [status, setStatus] = useState<SyncStatus>('idle')
   const [lastSyncTime, setLastSyncTime] = useState<number | null>(null)
 
@@ -38,9 +40,13 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isLoggedIn) return
 
-    // Initial pull from Drive
-    initialPull().then(() => {
+    // Initial pull from Drive — if remote data was merged into
+    // IndexedDB, tell AppContext to reload so the UI picks it up.
+    initialPull().then((didMerge) => {
       setLastSyncTime(Date.now())
+      if (didMerge) {
+        reloadState()
+      }
     })
 
     // Start background sync

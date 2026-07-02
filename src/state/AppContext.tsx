@@ -65,6 +65,8 @@ export interface AppContextState {
   getLogEntries: () => Promise<AnyLogEntry[]>
   /** Import a snapshot + log entries — writes to IndexedDB and reloads state */
   bulkImport: (snapshot: { timestamp: number; state: AppState }, logs: AnyLogEntry[]) => Promise<void>
+  /** Reload state from IndexedDB — called after Drive pull merges new data */
+  reloadState: () => void
 }
 
 export const AppContext = createContext<AppContextState | null>(null)
@@ -85,7 +87,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const wordBooksRef = useRef(state.wordBooks)
   wordBooksRef.current = state.wordBooks
 
-  // Load state from IndexedDB on mount (after login)
+  // Load state from IndexedDB on mount (after login) or when
+  // reloadKey is incremented by SyncContext after a Drive pull.
+  const [reloadKey, setReloadKey] = useState(0)
+
+  const reloadState = useCallback(() => {
+    setReloadKey(k => k + 1)
+  }, [])
+
   useEffect(() => {
     if (!isLoggedIn) return
 
@@ -105,7 +114,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     loadState()
-  }, [isLoggedIn])
+  }, [isLoggedIn, reloadKey])
 
   // Helper: append a log entry.
   // Uses functional setState so the callback never goes stale — even callbacks
@@ -426,6 +435,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updateSettings,
         getLogEntries,
         bulkImport,
+        reloadState,
       }}
     >
       {children}
