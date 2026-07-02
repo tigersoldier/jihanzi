@@ -142,5 +142,77 @@ describe('gapi localStorage persistence', () => {
 
       expect(restoreToken()).toBe(false)
     })
+
+    // With custom buffer parameter
+    it('restoreToken() without arguments defaults to 60000ms buffer', () => {
+      const token = 'token-90s'
+      const expiry = Date.now() + 90000 // 90 seconds from now — within default 60s? No, 90s > 60s
+      saveTokenToStorage(token, expiry)
+
+      // 90s > 60s default buffer, so token is valid
+      expect(restoreToken()).toBe(true)
+    })
+
+    it('restoreToken(180000) with 3-min buffer rejects token expiring in 2 minutes', () => {
+      const token = 'token-2min'
+      const expiry = Date.now() + 120000 // 2 minutes from now
+      saveTokenToStorage(token, expiry)
+
+      // 120s < 180s buffer, so token is "too close to expiry" — rejected
+      expect(restoreToken(180000)).toBe(false)
+    })
+
+    it('restoreToken(300000) with 5-min buffer accepts token expiring in 10 minutes', () => {
+      const token = 'token-10min'
+      const expiry = Date.now() + 600000 // 10 minutes from now
+      saveTokenToStorage(token, expiry)
+
+      // 600s > 300s buffer, so token is valid
+      expect(restoreToken(300000)).toBe(true)
+    })
+
+    it('restoreToken(60000) rejects token exactly at buffer boundary (59s from expiry)', () => {
+      const token = 'token-59s'
+      const expiry = Date.now() + 59000 // 59 seconds from now — just inside 60s buffer
+      saveTokenToStorage(token, expiry)
+
+      // Strictly less-than: 59000 < 60000, should NOT be valid
+      expect(restoreToken(60000)).toBe(false)
+    })
+
+    it('restoreToken(60000) accepts token just past buffer boundary (61s from expiry)', () => {
+      const token = 'token-61s'
+      const expiry = Date.now() + 61000 // 61 seconds from now — just outside 60s buffer
+      saveTokenToStorage(token, expiry)
+
+      // Strictly less-than: 61000 > 60000, should be valid
+      expect(restoreToken(60000)).toBe(true)
+    })
+  })
+
+  describe('hasValidToken', () => {
+    it('hasValidToken() defaults to 60000ms buffer', () => {
+      const expiry = Date.now() + 90000 // 90s from now — > 60s default buffer
+      saveTokenToStorage('token-90s', expiry)
+      restoreToken(0) // Load into memory (0 buffer accepts anything not expired)
+
+      expect(hasValidToken()).toBe(true)
+    })
+
+    it('hasValidToken(180000) rejects token expiring in 2 minutes', () => {
+      const expiry = Date.now() + 120000 // 2 minutes from now
+      saveTokenToStorage('token-2min', expiry)
+      restoreToken(0)
+
+      expect(hasValidToken(180000)).toBe(false)
+    })
+
+    it('hasValidToken(300000) accepts token expiring in 10 minutes', () => {
+      const expiry = Date.now() + 600000 // 10 minutes from now
+      saveTokenToStorage('token-10min', expiry)
+      restoreToken(0)
+
+      expect(hasValidToken(300000)).toBe(true)
+    })
   })
 })

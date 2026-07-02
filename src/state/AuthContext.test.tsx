@@ -111,6 +111,21 @@ describe('AuthContext', () => {
       })
     })
 
+    it('does NOT call trySilentLogin when valid token is already restored', async () => {
+      mockIsGoogleConfigured.mockReturnValue(true)
+      mockRestoreToken.mockReturnValue(true)
+
+      const { result } = renderHook(() => useAuth(), { wrapper })
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false)
+      })
+
+      expect(result.current.isLoggedIn).toBe(true)
+      // Core fix: silent login should be skipped when a valid token exists
+      expect(mockTrySilentLogin).not.toHaveBeenCalled()
+    })
+
     it('tries silent refresh when no token in localStorage but token restore fails', async () => {
       mockIsGoogleConfigured.mockReturnValue(true)
       mockRestoreToken.mockReturnValue(false)

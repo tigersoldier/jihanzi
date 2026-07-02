@@ -54,34 +54,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then(() => {
         initTokenClient()
 
+        // 5-minute buffer: proactively refresh tokens that expire soon
+        const REFRESH_THRESHOLD_MS = 5 * 60 * 1000
+
         // Step 1: try restoring token from localStorage
-        if (restoreToken()) {
+        if (restoreToken(REFRESH_THRESHOLD_MS)) {
           setIsLoggedIn(true)
-          getUserProfile()
+          return getUserProfile()
             .then((profile) => {
               setUser(profile)
               saveUserToStorage(profile)
             })
             .catch(() => {
-              // Token was invalid — clear and fall through to silent refresh
+              // Token was invalid — clear login state
               setIsLoggedIn(false)
             })
         }
 
-        // Step 2: try silent refresh (won't show popup if user has Google session)
-        return trySilentLogin()
-      })
-      .then((silentToken) => {
-        if (silentToken) {
-          setIsLoggedIn(true)
-          return getUserProfile().then((profile) => {
-            setUser(profile)
-            saveUserToStorage(profile)
-          })
-        }
+        // Step 2: no valid stored token — try silent refresh
+        // (won't show popup if user has Google session)
+        return trySilentLogin().then((silentToken) => {
+          if (silentToken) {
+            setIsLoggedIn(true)
+            return getUserProfile().then((profile) => {
+              setUser(profile)
+              saveUserToStorage(profile)
+            })
+          }
+        })
       })
       .catch((err) => {
-        // Silent refresh failed — user will need to login manually
+        // Auth restore failed — user will need to login manually
         console.error('Auth restore failed:', err)
       })
       .finally(() => setIsLoading(false))

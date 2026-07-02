@@ -12,6 +12,9 @@ const GOOGLE_API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || ''
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 const DRIVE_DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'
 
+/** Default buffer in ms: tokens expiring within this window are treated as expired. */
+export const DEFAULT_TOKEN_BUFFER_MS = 60000
+
 // localStorage keys
 const STORAGE_KEY_TOKEN = 'jihanzi_auth_token'
 const STORAGE_KEY_EXPIRY = 'jihanzi_auth_expiry'
@@ -102,9 +105,9 @@ export function clearUserStorage(): void {
  * Restore token from localStorage into module variables.
  * Returns true if a valid (non-expired) token was restored.
  */
-export function restoreToken(): boolean {
+export function restoreToken(bufferMs: number = DEFAULT_TOKEN_BUFFER_MS): boolean {
   const stored = loadTokenFromStorage()
-  if (stored && Date.now() < stored.expiry - 60000) {
+  if (stored && Date.now() < stored.expiry - bufferMs) {
     accessToken = stored.token
     tokenExpiry = stored.expiry
     return true
@@ -234,8 +237,8 @@ export function setGapiToken(token: string): void {
 /**
  * Check if we have a valid token.
  */
-export function hasValidToken(): boolean {
-  return accessToken !== null && Date.now() < tokenExpiry - 60000
+export function hasValidToken(bufferMs: number = DEFAULT_TOKEN_BUFFER_MS): boolean {
+  return accessToken !== null && Date.now() < tokenExpiry - bufferMs
 }
 
 /**
