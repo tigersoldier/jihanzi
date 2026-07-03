@@ -17,6 +17,14 @@ const META_FILE_NAME = 'app_meta.json'
 const SNAPSHOT_FILE_NAME = 'snapshot.json'
 const LOG_FILE_NAME = 'log.jsonl'
 
+// MIME types with explicit UTF-8 charset. Without charset=utf-8, Google
+// Drive may serve files without encoding metadata, causing browsers/gapi
+// to decode UTF-8 bytes incorrectly — especially problematic in the
+// read-modify-write cycle of pushLogs, where each sync compounds the
+// corruption (single hanzi → long garbled strings).
+const JSON_MIME = 'application/json; charset=utf-8'
+const NDJSON_MIME = 'application/x-ndjson; charset=utf-8'
+
 // ============================================================
 // Folder Operations
 // ============================================================
@@ -135,7 +143,7 @@ export async function writeFile(
   folderId: string,
   fileName: string,
   content: string,
-  mimeType: string = 'application/json',
+  mimeType: string = JSON_MIME,
   existingFileId?: string | null,
 ): Promise<string> {
   const token = await getAccessToken()
@@ -161,7 +169,7 @@ export async function writeFile(
 
     const body = [
       `--${boundary}`,
-      'Content-Type: application/json; charset=UTF-8',
+      `Content-Type: ${JSON_MIME}`,
       '',
       JSON.stringify(metadata),
       `--${boundary}`,
@@ -199,9 +207,9 @@ export async function appendToLogFile(
     // For Drive, we need to read-modify-write since there's no real append
     const current = await readFile(existingFileId)
     const updated = current + entry + '\n'
-    return writeFile(folderId, LOG_FILE_NAME, updated, 'application/x-ndjson', existingFileId)
+    return writeFile(folderId, LOG_FILE_NAME, updated, NDJSON_MIME, existingFileId)
   } else {
-    return writeFile(folderId, LOG_FILE_NAME, entry + '\n', 'application/x-ndjson')
+    return writeFile(folderId, LOG_FILE_NAME, entry + '\n', NDJSON_MIME)
   }
 }
 
@@ -289,7 +297,7 @@ export async function pushMeta(
   meta: Record<string, unknown>,
   existingFileId?: string | null,
 ): Promise<string> {
-  return writeFile(rootId, META_FILE_NAME, JSON.stringify(meta, null, 2), 'application/json', existingFileId)
+  return writeFile(rootId, META_FILE_NAME, JSON.stringify(meta, null, 2), JSON_MIME, existingFileId)
 }
 
 /**
@@ -300,7 +308,7 @@ export async function pushSnapshot(
   snapshotData: string,
   existingFileId?: string | null,
 ): Promise<string> {
-  return writeFile(childFolderId, SNAPSHOT_FILE_NAME, snapshotData, 'application/json', existingFileId)
+  return writeFile(childFolderId, SNAPSHOT_FILE_NAME, snapshotData, JSON_MIME, existingFileId)
 }
 
 /**
@@ -322,8 +330,8 @@ export async function pushLogs(
     // Normalize: ensure newline-terminated before appending new entries
     const normalized = current && !current.endsWith('\n') ? current + '\n' : current
     const updated = normalized + logEntries.join('\n') + '\n'
-    return writeFile(childFolderId, LOG_FILE_NAME, updated, 'application/x-ndjson', existingFileId)
+    return writeFile(childFolderId, LOG_FILE_NAME, updated, NDJSON_MIME, existingFileId)
   } else {
-    return writeFile(childFolderId, LOG_FILE_NAME, logEntries.join('\n') + '\n', 'application/x-ndjson')
+    return writeFile(childFolderId, LOG_FILE_NAME, logEntries.join('\n') + '\n', NDJSON_MIME)
   }
 }

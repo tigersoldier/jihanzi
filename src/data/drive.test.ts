@@ -47,7 +47,7 @@ describe('writeFile', () => {
       'folder-xyz',
       'snapshot.json',
       '{"version":1}',
-      'application/json',
+      'application/json; charset=utf-8',
     )
 
     expect(fileId).toBe('file-abc-123')
@@ -66,7 +66,7 @@ describe('writeFile', () => {
 
     // Verify multipart structure
     const body = reqConfig.body as string
-    expect(body).toContain('Content-Type: application/json; charset=UTF-8')
+    expect(body).toContain('Content-Type: application/json; charset=utf-8')
     expect(body).toContain('"name":"snapshot.json"')
     expect(body).toContain('{"version":1}')
   })
@@ -74,12 +74,12 @@ describe('writeFile', () => {
   it('includes multipart Content-Type header with boundary', async () => {
     mockGapiRequest.mockResolvedValue({ result: { id: 'file-456' } })
 
-    await writeFile('folder-xyz', 'log.jsonl', '{"entry":1}\n', 'application/x-ndjson')
+    await writeFile('folder-xyz', 'log.jsonl', '{"entry":1}\n', 'application/x-ndjson; charset=utf-8')
 
     const reqConfig = mockGapiRequest.mock.calls[0][0]
     expect(reqConfig.headers).toBeDefined()
     expect(reqConfig.headers['Content-Type']).toMatch(/^multipart\/related; boundary=/)
-    expect(reqConfig.body).toContain('Content-Type: application/x-ndjson')
+    expect(reqConfig.body).toContain('Content-Type: application/x-ndjson; charset=utf-8')
   })
 
   it('updates an existing file with media upload (not multipart)', async () => {
@@ -89,7 +89,7 @@ describe('writeFile', () => {
       'folder-xyz',
       'app_meta.json',
       '{"lastSync":123}',
-      'application/json',
+      'application/json; charset=utf-8',
       'existing-id', // existingFileId
     )
 
@@ -98,6 +98,45 @@ describe('writeFile', () => {
     expect(reqConfig.path).toBe('/upload/drive/v3/files/existing-id')
     expect(reqConfig.method).toBe('PATCH')
     expect(reqConfig.params).toEqual({ uploadType: 'media' })
+  })
+
+  it('includes charset=utf-8 in PATCH Content-Type header for media uploads', async () => {
+    mockGapiRequest.mockResolvedValue({ result: { id: 'file-id' } })
+
+    await writeFile(
+      'folder-xyz',
+      'log.jsonl',
+      '{"entry":"花"}\n',
+      'application/x-ndjson; charset=utf-8',
+      'existing-id',
+    )
+
+    const reqConfig = mockGapiRequest.mock.calls[0][0]
+    expect(reqConfig.headers['Content-Type']).toBe('application/x-ndjson; charset=utf-8')
+  })
+
+  it('includes charset=utf-8 in multipart content part header', async () => {
+    mockGapiRequest.mockResolvedValue({ result: { id: 'file-new' } })
+
+    await writeFile(
+      'folder-xyz',
+      'log.jsonl',
+      '{"entry":"花"}\n',
+      'application/x-ndjson; charset=utf-8',
+    )
+
+    const reqConfig = mockGapiRequest.mock.calls[0][0]
+    expect(reqConfig.body).toContain('Content-Type: application/x-ndjson; charset=utf-8')
+  })
+
+  it('default mimeType includes charset=utf-8', async () => {
+    mockGapiRequest.mockResolvedValue({ result: { id: 'file-default' } })
+
+    // No existingFileId → multipart upload; charset goes in the body part header
+    await writeFile('folder-xyz', 'snapshot.json', '{"state":{}}')
+
+    const reqConfig = mockGapiRequest.mock.calls[0][0]
+    expect(reqConfig.body).toContain('Content-Type: application/json; charset=utf-8')
   })
 })
 
