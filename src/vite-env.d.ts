@@ -4,6 +4,7 @@ interface TokenResponse {
   access_token: string
   expires_in: string
   error?: string
+  error_description?: string
 }
 
 declare namespace google {

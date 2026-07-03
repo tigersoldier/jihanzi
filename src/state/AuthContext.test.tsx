@@ -15,11 +15,15 @@ const {
   mockTrySilentLogin,
   mockIsGoogleConfigured,
   mockLoadUserFromStorage,
+  mockClearTokenStorage,
+  mockGetUserProfile,
 } = vi.hoisted(() => ({
   mockRestoreToken: vi.fn(() => false),
   mockTrySilentLogin: vi.fn(() => Promise.resolve(null)),
   mockIsGoogleConfigured: vi.fn(() => false),
   mockLoadUserFromStorage: vi.fn(() => null),
+  mockClearTokenStorage: vi.fn(),
+  mockGetUserProfile: vi.fn(),
 }))
 
 vi.mock('../data/gapi', () => ({
@@ -29,17 +33,14 @@ vi.mock('../data/gapi', () => ({
   initTokenClient: vi.fn(),
   requestAccessToken: vi.fn().mockResolvedValue('test-token'),
   signOut: vi.fn(),
-  getUserProfile: vi.fn().mockResolvedValue({
-    name: 'Test User',
-    email: 'test@example.com',
-    picture: 'https://example.com/photo.jpg',
-  }),
+  getUserProfile: () => mockGetUserProfile(),
   hasValidToken: () => false,
   restoreToken: () => mockRestoreToken(),
   trySilentLogin: () => mockTrySilentLogin(),
   saveUserToStorage: vi.fn(),
   loadUserFromStorage: () => mockLoadUserFromStorage(),
   clearUserStorage: vi.fn(),
+  clearTokenStorage: () => mockClearTokenStorage(),
 }))
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -52,6 +53,14 @@ describe('AuthContext', () => {
     mockTrySilentLogin.mockResolvedValue(null)
     mockIsGoogleConfigured.mockReturnValue(false)
     mockLoadUserFromStorage.mockReturnValue(null)
+    mockClearTokenStorage.mockClear()
+    mockTrySilentLogin.mockClear()
+    mockGetUserProfile.mockReset()
+    mockGetUserProfile.mockResolvedValue({
+      name: 'Test User',
+      email: 'test@example.com',
+      picture: 'https://example.com/photo.jpg',
+    })
   })
 
   describe('on mount (demo mode — no Google config)', () => {
@@ -126,9 +135,14 @@ describe('AuthContext', () => {
       expect(mockTrySilentLogin).not.toHaveBeenCalled()
     })
 
-    it('tries silent refresh when no token in localStorage but token restore fails', async () => {
+    it('tries silent refresh when no token in localStorage but stored user exists (returning user)', async () => {
       mockIsGoogleConfigured.mockReturnValue(true)
       mockRestoreToken.mockReturnValue(false)
+      mockLoadUserFromStorage.mockReturnValue({
+        name: 'Returning User',
+        email: 'returning@example.com',
+        picture: '',
+      })
       mockTrySilentLogin.mockResolvedValue('silent-token')
 
       const { result } = renderHook(() => useAuth(), { wrapper })
@@ -141,9 +155,31 @@ describe('AuthContext', () => {
       expect(result.current.isLoggedIn).toBe(true)
     })
 
+    it('skips silent login when no stored user profile (fresh browser / cleared data)', async () => {
+      mockIsGoogleConfigured.mockReturnValue(true)
+      mockRestoreToken.mockReturnValue(false)
+      mockLoadUserFromStorage.mockReturnValue(null) // No previous user
+      mockTrySilentLogin.mockResolvedValue('silent-token') // Would succeed if called
+
+      const { result } = renderHook(() => useAuth(), { wrapper })
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false)
+      })
+
+      // Should NOT attempt silent login — user must explicitly click Login
+      expect(mockTrySilentLogin).not.toHaveBeenCalled()
+      expect(result.current.isLoggedIn).toBe(false)
+    })
+
     it('stays logged out when both restore and silent refresh fail', async () => {
       mockIsGoogleConfigured.mockReturnValue(true)
       mockRestoreToken.mockReturnValue(false)
+      mockLoadUserFromStorage.mockReturnValue({
+        name: 'Returning User',
+        email: 'returning@example.com',
+        picture: '',
+      })
       mockTrySilentLogin.mockResolvedValue(null)
 
       const { result } = renderHook(() => useAuth(), { wrapper })
@@ -153,6 +189,23 @@ describe('AuthContext', () => {
       })
 
       expect(mockTrySilentLogin).toHaveBeenCalled()
+      expect(result.current.isLoggedIn).toBe(false)
+    })
+
+    it('clears invalid token from storage when restored token gets 401 from getUserProfile', async () => {
+      mockIsGoogleConfigured.mockReturnValue(true)
+      mockRestoreToken.mockReturnValue(true) // Token looks valid in localStorage
+      mockGetUserProfile.mockRejectedValue(new Error('Failed to get user profile'))
+
+      const { result } = renderHook(() => useAuth(), { wrapper })
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false)
+      })
+
+      // Must clear the invalid token so next page load doesn't repeat the 401
+      expect(mockClearTokenStorage).toHaveBeenCalledTimes(1)
+      // Must revert to logged-out state
       expect(result.current.isLoggedIn).toBe(false)
     })
   })
@@ -177,6 +230,80 @@ describe('AuthContext', () => {
         email: 'demo@example.com',
         picture: '',
       })
+    })
+  })
+
+  describe('error state', () => {
+    it('exposes error when Google API initialization fails', async () => {
+      // Make the init chain fail (initGapiClient is the default mock which resolves)
+      // We need to simulate the catch path. The easiest way is to make
+      // the entire init chain reject — initGoogleLibraries rejects.
+      const { initGoogleLibraries } = await import('../data/gapi')
+      const mockInitLibs = initGoogleLibraries as ReturnType<typeof vi.fn>
+      mockInitLibs.mockRejectedValueOnce(new Error('⛔ Core error code: MissingUrl'))
+
+      mockIsGoogleConfigured.mockReturnValue(true)
+
+      const { result } = renderHook(() => useAuth(), { wrapper })
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false)
+      })
+
+      // Error message should be surfaced
+      expect(result.current.error).toBe('⛔ Core error code: MissingUrl')
+      expect(result.current.isLoggedIn).toBe(false)
+    })
+
+    it('exposes error when login() fails', async () => {
+      const { requestAccessToken } = await import('../data/gapi')
+      const mockReqToken = requestAccessToken as ReturnType<typeof vi.fn>
+      mockReqToken.mockRejectedValueOnce(new Error('⛔ Core error code: MissingUrl'))
+
+      mockIsGoogleConfigured.mockReturnValue(true)
+
+      const { result } = renderHook(() => useAuth(), { wrapper })
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false)
+      })
+
+      await act(async () => {
+        await result.current.login()
+      })
+
+      expect(result.current.error).toBe('⛔ Core error code: MissingUrl')
+      expect(result.current.isLoggedIn).toBe(false)
+    })
+
+    it('clears error on successful login after a previous error', async () => {
+      const { requestAccessToken } = await import('../data/gapi')
+      const mockReqToken = requestAccessToken as ReturnType<typeof vi.fn>
+      // First call fails
+      mockReqToken.mockRejectedValueOnce(new Error('Some error'))
+      // Second call succeeds
+      mockReqToken.mockResolvedValueOnce('valid-token')
+
+      mockIsGoogleConfigured.mockReturnValue(true)
+
+      const { result } = renderHook(() => useAuth(), { wrapper })
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false)
+      })
+
+      // First attempt — fails
+      await act(async () => {
+        await result.current.login()
+      })
+      expect(result.current.error).toBe('Some error')
+
+      // Second attempt — succeeds
+      await act(async () => {
+        await result.current.login()
+      })
+      expect(result.current.error).toBeNull()
+      expect(result.current.isLoggedIn).toBe(true)
     })
   })
 

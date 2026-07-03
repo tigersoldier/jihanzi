@@ -10,6 +10,9 @@
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
 const GOOGLE_API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || ''
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
+const USERINFO_PROFILE_SCOPE = 'https://www.googleapis.com/auth/userinfo.profile'
+const USERINFO_EMAIL_SCOPE = 'https://www.googleapis.com/auth/userinfo.email'
+const OAUTH_SCOPE = [DRIVE_SCOPE, USERINFO_PROFILE_SCOPE, USERINFO_EMAIL_SCOPE].join(' ')
 const DRIVE_DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'
 
 /** Default buffer in ms: tokens expiring within this window are treated as expired. */
@@ -179,10 +182,10 @@ export async function initGapiClient(): Promise<void> {
 export function initTokenClient(): void {
   const client = google.accounts.oauth2.initTokenClient({
     client_id: GOOGLE_CLIENT_ID,
-    scope: DRIVE_SCOPE,
+    scope: OAUTH_SCOPE,
     callback: (response) => {
       if (response.error) {
-        console.error('OAuth error:', response.error)
+        console.error('OAuth error:', response.error, response.error_description || '')
         return
       }
       accessToken = response.access_token
@@ -205,7 +208,10 @@ export async function requestAccessToken(): Promise<string> {
   return new Promise((resolve, reject) => {
     tokenClient!.callback = (response) => {
       if (response.error) {
-        reject(new Error(`OAuth error: ${response.error}`))
+        const detail = response.error_description
+          ? `${response.error}: ${response.error_description}`
+          : response.error
+        reject(new Error(`OAuth error: ${detail}`))
         return
       }
       accessToken = response.access_token
@@ -250,7 +256,8 @@ export async function getUserProfile(): Promise<{ name: string; email: string; p
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!response.ok) {
-    throw new Error('Failed to get user profile')
+    const body = await response.text().catch(() => '')
+    throw new Error(`Failed to get user profile (${response.status}): ${body}`)
   }
   return response.json()
 }

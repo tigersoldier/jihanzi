@@ -1,7 +1,7 @@
 import { useAuth } from '../../state/AuthContext'
 
 export default function LoginPage() {
-  const { login, isLoading } = useAuth()
+  const { login, isLoading, error } = useAuth()
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-indigo-50 to-white px-4">
@@ -54,6 +54,13 @@ export default function LoginPage() {
         <p className="text-xs text-gray-400 mt-6">
           登录后将数据安全地保存在你的 Google Drive 上
         </p>
+
+        {/* Error display */}
+        {error && (
+          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+            {error}
+          </div>
+        )}
       </div>
     </div>
   )

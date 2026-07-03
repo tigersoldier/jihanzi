@@ -12,6 +12,7 @@ import {
   trySilentLogin,
   saveUserToStorage,
   loadUserFromStorage,
+  clearTokenStorage,
   clearUserStorage,
 } from '../data/gapi'
 
@@ -25,6 +26,7 @@ interface AuthState {
   isLoggedIn: boolean
   isLoading: boolean
   user: UserProfile | null
+  error: string | null
   login: () => Promise<void>
   logout: () => void
 }
@@ -35,6 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [user, setUser] = useState<UserProfile | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   // Initialize Google libraries and restore auth on mount
   useEffect(() => {
@@ -66,12 +69,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               saveUserToStorage(profile)
             })
             .catch(() => {
-              // Token was invalid — clear login state
+              // Token was invalid — clear login state and stored token
+              clearTokenStorage()
               setIsLoggedIn(false)
             })
         }
 
         // Step 2: no valid stored token — try silent refresh
+        // Only for returning users (we have their profile in localStorage).
+        // For fresh browsers / cleared data, skip silent login so the user
+        // can explicitly choose which Google account to use.
+        const storedUser = loadUserFromStorage()
+        if (!storedUser) return
+
         // (won't show popup if user has Google session)
         return trySilentLogin().then((silentToken) => {
           if (silentToken) {
@@ -85,6 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .catch((err) => {
         // Auth restore failed — user will need to login manually
+        setError(err instanceof Error ? err.message : String(err))
         console.error('Auth restore failed:', err)
       })
       .finally(() => setIsLoading(false))
@@ -107,7 +118,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       saveUserToStorage(profile)
       setUser(profile)
       setIsLoggedIn(true)
+      setError(null)
     } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
       console.error('Login failed:', err)
     } finally {
       setIsLoading(false)
@@ -121,10 +134,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearUserStorage()
     setUser(null)
     setIsLoggedIn(false)
+    setError(null)
   }, [])
 
   return (
-    <AuthContext.Provider value={{ isLoggedIn, isLoading, user, login, logout }}>
+    <AuthContext.Provider value={{ isLoggedIn, isLoading, user, error, login, logout }}>
       {children}
     </AuthContext.Provider>
   )
