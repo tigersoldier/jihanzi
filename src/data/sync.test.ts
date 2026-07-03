@@ -174,8 +174,8 @@ const MOCK_REMOTE_SNAPSHOT = {
 }
 
 const MOCK_REMOTE_LOG_LINES = [
-  '{"timestamp":2001,"type":"create_child","childId":"child_x","name":"小明","wordBookId":"wb_1"}',
-  '{"timestamp":2002,"type":"create_wordbook","wordBookId":"wb_1","name":"生字本","characters":["一","二","三","四","五"]}',
+  '{"timestamp":2001,"type":"create_child","childId":"child_x","name":"小明","wordBookId":"wb_1","id":1}',
+  '{"timestamp":2002,"type":"create_wordbook","wordBookId":"wb_1","name":"生字本","characters":["一","二","三","四","五"],"id":2}',
 ]
 
 const MOCK_REMOTE_CHILD_DATA = {
@@ -261,6 +261,20 @@ describe('initialPull', () => {
     const appendedLogs = mockAppendLogs.mock.calls[0][0] as any[]
     expect(appendedLogs.length).toBe(1)
     expect(appendedLogs[0]).toMatchObject({ timestamp: 2002, type: 'create_wordbook' })
+  })
+
+  // ---- Data integrity: remote id fields must be stripped before insert ----
+
+  it('strips auto-increment id from remote entries before saving to IndexedDB', async () => {
+    await initialPull()
+
+    expect(mockAppendLogs).toHaveBeenCalledTimes(1)
+    const appendedLogs = mockAppendLogs.mock.calls[0][0] as Record<string, unknown>[]
+    for (const entry of appendedLogs) {
+      // Auto-increment id must NOT be present — Dexie would try to use it
+      // as the primary key, causing ConstraintError on duplicate.
+      expect(entry).not.toHaveProperty('id')
+    }
   })
 
   // ---- Merge: keeps local snapshot when it is newer than remote ----

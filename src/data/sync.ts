@@ -116,7 +116,13 @@ export async function initialPull(): Promise<boolean> {
       if (data.logs) {
         for (const line of data.logs) {
           try {
-            remoteLogEntries.push(JSON.parse(line) as AnyLogEntry)
+            const parsed = JSON.parse(line)
+            // Strip Dexie auto-increment 'id' — it's a DB artifact, not a
+            // domain value. If passed to appendLogs → bulkAdd, Dexie tries
+            // to insert with that primary key and throws ConstraintError
+            // when the id already exists in local IndexedDB.
+            delete parsed.id
+            remoteLogEntries.push(parsed as AnyLogEntry)
           } catch {
             console.warn('Failed to parse remote log line')
           }
