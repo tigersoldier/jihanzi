@@ -297,6 +297,76 @@ describe('useToday', () => {
     expect(result.current.sessionStats.a).toBe(1)
   })
 
+  it('首次加载 state.children 异步到达后自动选中第一个孩子', async () => {
+    // 模拟真实的 AppContext 行为：初始化时 state.children 为空（IndexedDB
+    // 尚未加载），之后 async loadState 完成才 setState 填入 children。
+    // useToday 在首次渲染时 selectedChildId = ''，等 children 到达后应
+    // 自动设置为第一个孩子的 ID 并生成任务队列。
+    function AsyncLoadingWrapper({ children: inner }: { children: ReactNode }) {
+      const [state, setState] = useState<AppState>(
+        makeState({
+          children: [],
+          wordBooks: [
+            { id: 'wb_1', name: '测试生字本', characters: ['一', '二', '三'] },
+          ],
+        })
+      )
+
+      // 模拟 IndexedDB 异步加载 — 在 useEffect 中延迟填入 children
+      React.useEffect(() => {
+        // 使用 queueMicrotask 确保在本次渲染提交之后执行
+        queueMicrotask(() => {
+          setState(makeState({
+            children: [
+              { id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} },
+            ],
+            wordBooks: [
+              { id: 'wb_1', name: '测试生字本', characters: ['一', '二', '三'] },
+            ],
+          }))
+        })
+      }, [])
+
+      const contextValue: AppContextState = {
+        state,
+        loading: false,
+        createChild: vi.fn() as any,
+        updateChild: vi.fn() as any,
+        deleteChild: vi.fn() as any,
+        createWordBook: vi.fn() as any,
+        updateWordBook: vi.fn() as any,
+        deleteWordBook: vi.fn() as any,
+        addCharacter: vi.fn() as any,
+        removeCharacter: vi.fn() as any,
+        reorderCharacters: vi.fn() as any,
+        submitReview: vi.fn() as any,
+        updateSettings: vi.fn() as any,
+        getLogEntries: vi.fn() as any,
+        bulkImport: vi.fn() as any,
+      }
+
+      return React.createElement(AppContext.Provider, { value: contextValue }, inner)
+    }
+    AsyncLoadingWrapper.displayName = 'AsyncLoadingWrapper'
+
+    const { result, rerender } = renderHook(() => useToday(), { wrapper: AsyncLoadingWrapper })
+
+    // 首次渲染：还没有 children
+    expect(result.current.selectedChildId).toBe('')
+    expect(result.current.isReady).toBe(false)
+    expect(result.current.totalTasks).toBe(0)
+
+    // 等待异步状态更新（setState 在 microtask 中）
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+
+    // 状态更新后：应自动选中第一个孩子并生成任务
+    expect(result.current.selectedChildId).toBe('child_1')
+    expect(result.current.isReady).toBe(true)
+    expect(result.current.totalTasks).toBe(3) // 学新日，3 个新字
+  })
+
   it('多孩子场景下刷新后恢复正确的孩子进度', async () => {
     // Given: 两个孩子各有生字本
     const initialState = makeState({

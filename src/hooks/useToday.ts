@@ -134,6 +134,16 @@ export function useToday(): UseTodayReturn {
     didRestore.current = true
   }, [state.children, selectedChildId, todayKey])
 
+  // Auto-select the first child when children become available after
+  // async IndexedDB load. The useState initializer (line 85-87) runs
+  // during the first render when state.children may still be empty;
+  // this effect fills the gap.
+  useEffect(() => {
+    if (state.children.length > 0 && !selectedChildId) {
+      setSelectedChildId(state.children[0].id)
+    }
+  }, [state.children, selectedChildId])
+
   // Persist session state to localStorage whenever it changes.
   useEffect(() => {
     const childId = selectedChildId || state.children[0]?.id
