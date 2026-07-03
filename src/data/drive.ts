@@ -331,6 +331,12 @@ export async function pushLogs(
   logEntries: string[],
   existingFileId?: string | null,
 ): Promise<string> {
+  // Nothing to push — skip read-modify-write to avoid appending spurious
+  // trailing newlines to the Drive file on every sync cycle.
+  if (logEntries.length === 0) {
+    return existingFileId || ''
+  }
+
   const token = await getAccessToken()
   setGapiToken(token)
 

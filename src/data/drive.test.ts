@@ -274,4 +274,19 @@ describe('pushLogs', () => {
     const result = await pushLogs('folder-abc', [logEntries[0]], null)
     expect(result).toBe('new-file-id')
   })
+
+  it('skips read and write when logEntries is empty (no-op for existing file)', async () => {
+    await pushLogs('folder-abc', [], 'existing-log-id')
+
+    // Must NOT read or write — nothing to append
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockGapiRequest).not.toHaveBeenCalled()
+  })
+
+  it('skips write when logEntries is empty (no-op for new file)', async () => {
+    await pushLogs('folder-abc', [], null)
+
+    // Must NOT create an empty file with just a newline
+    expect(mockGapiRequest).not.toHaveBeenCalled()
+  })
 })
