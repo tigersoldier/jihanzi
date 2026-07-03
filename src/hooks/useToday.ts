@@ -25,6 +25,28 @@ function sessionKey(childId: string, dayKey: string): string {
   return `${SESSION_KEY_PREFIX}${childId}_${dayKey}`
 }
 
+const DONE_KEY_PREFIX = 'jihanzi_done_'
+
+function doneKey(childId: string, dayKey: string): string {
+  return `${DONE_KEY_PREFIX}${childId}_${dayKey}`
+}
+
+function isDayDone(childId: string, dayKey: string): boolean {
+  try {
+    return localStorage.getItem(doneKey(childId, dayKey)) === '1'
+  } catch {
+    return false
+  }
+}
+
+function markDayDone(childId: string, dayKey: string): void {
+  try {
+    localStorage.setItem(doneKey(childId, dayKey), '1')
+  } catch {
+    // ignore
+  }
+}
+
 function loadSession(childId: string, dayKey: string): SavedSession | null {
   try {
     const raw = localStorage.getItem(sessionKey(childId, dayKey))
@@ -92,6 +114,7 @@ export function useToday(): UseTodayReturn {
   // from shifting when state changes mid-session (e.g. submitReview
   // advances nextCharIndex, which would otherwise regenerate the list).
   const [sessionTasks, setSessionTasks] = useState<TaskItem[] | null>(null)
+  const [doneToday, setDoneToday] = useState(false)
   const advancingRef = useRef(false)
   const continuingRef = useRef(false)
   // Ref mirror of tasks so startSession can read the latest task list
@@ -132,6 +155,16 @@ export function useToday(): UseTodayReturn {
 
     // Mark as done so we don't keep trying on every render
     didRestore.current = true
+  }, [state.children, selectedChildId, todayKey])
+
+  // Check whether today's session was already completed (survives page
+  // refresh).  Runs once after IndexedDB state is loaded, and whenever
+  // the selected child changes.
+  useEffect(() => {
+    if (state.children.length === 0) return
+    const childId = selectedChildId || state.children[0]?.id
+    if (!childId) return
+    setDoneToday(isDayDone(childId, todayKey))
   }, [state.children, selectedChildId, todayKey])
 
   // Auto-select the first child when children become available after
@@ -277,6 +310,8 @@ export function useToday(): UseTodayReturn {
 
   const handleDone = useCallback(() => {
     clearSession(selectedChildId, todayKey)
+    markDayDone(selectedChildId, todayKey)
+    setDoneToday(true)
     setPhase('idle')
     setTaskIndex(0)
     setRound(1)
@@ -302,6 +337,6 @@ export function useToday(): UseTodayReturn {
     handleContinueRound,
     handleSkipRound,
     handleDone,
-    isReady: selectedChildId !== '' && effectiveTasks.length > 0,
+    isReady: selectedChildId !== '' && effectiveTasks.length > 0 && !doneToday,
   }
 }

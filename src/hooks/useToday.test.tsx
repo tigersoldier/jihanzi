@@ -439,4 +439,56 @@ describe('useToday', () => {
     expect(result2.current.taskIndex).toBe(1)
     expect(result2.current.currentTask?.character).toBe('草')
   })
+
+  it('完成当日全部复习后不应允许立即开始新一轮', async () => {
+    // Bug: handleDone() resets to idle, but generateTodayTasks() still
+    // returns the next batch of new characters from the wordbook (because
+    // nextCharIndex only advanced by dailyNewChars, not to the end).
+    // The user can immediately start a new session on the same day.
+    //
+    // Given: 一个孩子有一个包含 10 个生字的生字本（超过 dailyNewChars=5）
+    const initialState = freshStateWithChars([
+      '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+    ])
+    const wrapper = createStatefulWrapper(initialState)
+
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    // 开始学习 — 应该只有 5 个新字任务（dailyNewChars=5）
+    expect(result.current.totalTasks).toBe(5)
+
+    act(() => {
+      result.current.startSession()
+    })
+    expect(result.current.phase).toBe('reviewing')
+
+    // 逐字评分 'a'，完成第一轮
+    const chars = ['一', '二', '三', '四', '五']
+    for (let i = 0; i < chars.length; i++) {
+      expect(result.current.currentTask?.character).toBe(chars[i])
+      await act(async () => {
+        result.current.handleRate('a')
+        await new Promise(resolve => setTimeout(resolve, 400))
+      })
+    }
+
+    // 全部评完 → roundComplete（无 c/d，needReview=0）
+    expect(result.current.phase).toBe('roundComplete')
+
+    // 跳到 celebration
+    act(() => {
+      result.current.handleSkipRound()
+    })
+    expect(result.current.phase).toBe('celebration')
+
+    // 用户点击"返回首页"
+    act(() => {
+      result.current.handleDone()
+    })
+    expect(result.current.phase).toBe('idle')
+
+    // Then: 不应该允许开始新一轮 — isReady 应为 false
+    // 即使生字本中还有更多字（六、七、八、九、十），今天的配额已用完
+    expect(result.current.isReady).toBe(false)
+  })
 })
