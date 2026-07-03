@@ -1047,6 +1047,191 @@ isReady = selectedChildId !== ''  // true ("child_1")
 
 ---
 
+### 场景 8e：一账号复习到一半，切换到另一账号能否接力
+
+**核心问题：** 账号 A 开始复习但未完成（例如 5 个新字评了 2 个），此时账号 B 登录同步，能否从剩余 3 个字继续复习？
+
+**短答案：** 能否接力取决于两个账号之间**是否发生了同步**。由于 `submitReview` 不触发即时推送（如附录 B 所述），通常需要后台同步（最多 5 分钟）将 A 的进度推送到 Drive 后，B 才能看到更新后的状态。
+
+#### 分情况分析
+
+**前提：** 今天是学新日 (`dailyNewChars=5`)，生字本 `["花","山","水","日","月","星","云","雨","雪","风"]` (10 个字)。
+
+---
+
+#### 情况 1：A 的进度已同步到 Drive（B 可接力）
+
+**条件：** A 开始复习后，后台同步（5 分钟定时）恰好触发，将 A 的复习日志推送到 Drive。
+
+**步骤 1：** A 开始复习，前 2 个字评分完毕。
+
+```
+A 的 IndexedDB 新增:
+  review@T1 { character: "花", grade: "a", round: 1, dayKey: "2026-06-10" }
+  review@T2 { character: "山", grade: "b", round: 1, dayKey: "2026-06-10" }
+
+A 的状态 (乐观更新 + 日志重放):
+  nextCharIndex = 2
+  progress = {
+    "花": { nextReview: "2026-06-13", lastGrade: "a", ease: 2.6, interval: 3, ... },
+    "山": { nextReview: "2026-06-12", lastGrade: "b", ease: 2.36, interval: 2, ... },
+  }
+
+A 的会话状态 (localStorage):
+  sessionTasks: ["花","山","水","日","月"], taskIndex=2, round=1, phase='reviewing'
+```
+
+**步骤 2：** 后台同步触发 → `pushChanges()` 将 review@T1 和 review@T2 推送到 Drive。
+
+```
+Drive log.jsonl 新增:
+  review@T1 (花,a), review@T2 (山,b)
+```
+
+**步骤 3：** B 登录 → `initialPull()` → `reloadState()`。
+
+```
+B 重建后的状态:
+  nextCharIndex = 2
+  progress = { "花": {...}, "山": {...} }
+
+B 的 generateTodayTasks():
+  到期复习: getDueReviews("2026-06-10")
+    "花".nextReview = "2026-06-13" → 未到期
+    "山".nextReview = "2026-06-12" → 未到期
+    → dueReviews = []
+
+  新字 (学新日):
+    getNewCharacters(child, chars, 5)
+      从 index=2 开始:
+        chars[2]="水" 不在 progress → ✓
+        chars[3]="日" 不在 progress → ✓
+        chars[4]="月" 不在 progress → ✓
+        chars[5]="星" 不在 progress → ✓
+        chars[6]="云" 不在 progress → ✓
+      → newTasks = ["水","日","月","星","云"]
+    → 返回 5 个新字任务
+```
+
+**步骤 4：** B 可以正常开始复习 5 个新字。
+
+**结论：** B 可以接力，但并非从 A 停下的位置（第 3 个任务）继续，而是看到**全新的 5 个任务**（A 评过的 2 个字已被排除，顺延取后续的字）。当日总量达到 2(A) + 5(B) = 7 个新字，**超过 dailyNewChars=5 的配额**。
+
+```
+接力结果:
+  A 评了: 花, 山
+  B 评了: 水, 日, 月, 星, 云
+  当日总计: 7 个新字（配额 5）← 超额
+```
+
+> **配额分析：** `nextCharIndex` 从 0→2（A 贡献）→2→7（B 贡献），生字本共 10 字。B 的 `getNewCharacters` 从 index=2 取 5 个字，不感知 A 已经"用掉了 2 个配额"的事实。配额跟踪是本地的、非持久化的——这是一个设计局限。
+
+---
+
+#### 情况 2：A 的进度尚未同步（B 重复劳动）
+
+**条件：** A 开始复习后不满 5 分钟，后台同步尚未触发。A 的复习日志仅存在于 A 的 IndexedDB，Drive 上仍是旧状态。
+
+**步骤 1：** A 评分了 花(a) 和 山(b)，数据在 IndexedDB 但未推送到 Drive。
+
+```
+Drive 上的数据: 仍是旧状态
+  nextCharIndex = 0, progress = {}
+  (A 的 review@T1, review@T2 还在 A 本地 IndexedDB)
+```
+
+**步骤 2：** B 登录 → `initialPull()` → Drive 上没有新数据 → B 看到旧状态。
+
+```
+B 重建后的状态:
+  nextCharIndex = 0, progress = {}
+
+B 的 generateTodayTasks():
+  → ["花","山","水","日","月"]  （与 A 初始完全相同的 5 个字）
+```
+
+**步骤 3：** B 开始复习，可能与 A 产生的评分完全或部分重叠。
+
+```
+B 评分了: 花(b), 山(a), 水(a), 日(b), 月(a)  (B 不知道 A 已经评了花和山)
+```
+
+**步骤 4：** A 和 B 的日志最终通过后台同步合并到 Drive。
+
+```
+双方 merge 后的日志:
+  A 的: review@T1(花,a), review@T2(山,b)
+  B 的: review@T3(花,b), review@T4(山,a), review@T5(水,a), review@T6(日,b), review@T7(月,a)
+
+replayLog 重放 (按 timestamp 排序):
+  - review@T1(花,a) → progress["花"] = SM2 from A (grade a)
+  - review@T2(山,b) → progress["山"] = SM2 from B (grade b)
+  - review@T3(花,b) → progress["花"] = SM2 from B (grade b) ← 覆盖了 A 的 a
+  - review@T4(山,a) → progress["山"] = SM2 from B (grade a) ← 覆盖了 A 的 b
+  - review@T5(水,a) → progress["水"] = SM2 from B
+  - review@T6(日,b) → progress["日"] = SM2 from B
+  - review@T7(月,a) → progress["月"] = SM2 from B
+
+最终:
+  nextCharIndex = 5
+  花 → lastGrade: "b" (B 的结果，A 的 "a" 被覆盖)
+  山 → lastGrade: "a" (B 的结果，A 的 "b" 被覆盖)
+  当日新字总量: 5 个（只有 B 的 5 个字生效；A 的重复评分被 LWW 覆盖）
+```
+
+**结论：** B 重复了 A 已经完成的复习。最终状态中，"花"和"山"的评级以 timestamp 较晚的 B 为准（LWW 覆盖）。A 的评级虽然被写入日志，但 SM-2 状态被 B 的后续评分覆盖。**当日新字总量看起来是 5 个，但实际两个账号都投入了时间。**
+
+---
+
+#### 情况 3：A 未完成，B 也未完成，两者交替（最复杂）
+
+A 和 B 交替多轮复习同一批字（如两个家长轮流辅导），每次评分后推送到 Drive。
+
+```
+T1: A 评 花(a) → push
+T2: B pull → B 评 花(b) → push
+T3: A pull → A 评 山(a) → push
+T4: B pull → B 评 山(b) → push
+...
+```
+
+对于同一汉字，每次 pull 后状态同步，SM-2 的 `updateSM2` 从前一次的状态开始计算。例如：
+
+```
+花:
+  T1: A 评 a → SM2: ease=2.6, interval=3, nextReview=06-13
+  T2: B pull → B 评 b
+      updateSM2(current={ease:2.6, interval:3, ...}, grade='b')
+      → newEase = 2.6 + (0.1 - 2*(0.08+2*0.02)) = 2.6 + (-0.14) = 2.46
+      → newInterval = round(3 * 2.46) = 7
+      → SM2: ease=2.46, interval=7, nextReview=06-17
+```
+
+这种场景下 SM-2 计算是**正确的**——因为每次 review 都是从最新同步的状态开始，而非凭空创建。LWW 不再是问题，因为两次评分的时间顺序被正确保留。
+
+> **关键区别：** 情况 3 与情况 2 的本质区别在于**同步是否在评分之间发生**。如果每次评分之间都有 sync，SM-2 计算是累积式的；如果多次评分在没有 sync 的情况下发生，则只有 timestamp 最新的那次生效。
+
+---
+
+#### 总结
+
+| 条件 | B 看到的任务 | 接力可行？ | 配额 | SM-2 正确性 |
+|------|------------|-----------|------|-----------|
+| A 进度已同步到 Drive | 剩余字 + 后续字（共 5 个新任务） | ✓（但非从原位置继续） | 超额 | ✓ |
+| A 进度未同步 | A 原始的全部 5 个字 | ✗（重复劳动） | 取决于合并结果 | LWW 覆盖 |
+| 交替同步（每步都 sync） | 逐次更新后的剩余任务 | ✓（逐次接力） | 超额 | ✓（累积式 SM-2） |
+
+**根本原因：** 以下几项因素共同导致了接力不完美——
+
+1. **`submitReview` 不触发即时同步**（附录 B.1）：A 的评分不会立即推送到 Drive，需要等后台同步（最多 5 分钟）。
+2. **localStorage 会话状态不同步**：B 看不到 A 的 `taskIndex` 和 `sessionTasks` 快照，无法从 A 中断的位置精确继续，只能重新生成任务队列。
+3. **无"当日已用配额"计数器**：`nextCharIndex` 只记录学到的位置，不记录"今日已学字数"。A 用掉的配额对 B 不可见。
+4. **SM-2 的 LWW 特性**：同一汉字的多次评分如果没有被中间同步分隔，只有 timestamp 最晚的生效。
+
+> **改进方向：** 如果 `submitReview` 调用 `notifyDataChanged()`（启用即时同步），A 的每次评分都会在 2 秒内推送到 Drive。B 刷新后即可看到最新状态，实现接近实时的接力。
+
+---
+
 ## 附录 A：架构决策记录
 
 ### ADR-1：为什么选择 Append-Only Log 而非传统 CRUD？
