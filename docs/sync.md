@@ -45,6 +45,47 @@ interface SM2State {
 }
 ```
 
+**已学字数与正确性统计：**
+
+孩子的学习统计由 `getChildStats()` 函数（`src/core/scheduler.ts:159`）实时计算，**不单独存储**——数据源自 `Child.progress` 中已有的 SM-2 状态。
+
+```typescript
+// getChildStats 返回值
+{
+  total: number      // 已学字数 = Object.keys(child.progress).length
+  a: number          // 最近评级为 'a' 的字数
+  b: number          // 最近评级为 'b' 的字数
+  c: number          // 最近评级为 'c' 的字数
+  d: number          // 最近评级为 'd' 的字数
+  aPercent: number   // Math.round((a / total) * 100)
+  bPercent: number
+  cPercent: number
+  dPercent: number
+}
+```
+
+**统计更新流程：**
+
+```
+用户评分（round 1）
+  → submitReview() 创建 ReviewEntry
+  → 乐观更新: replayLog({ timestamp: 0, state: prev }, [entry])   ← 先更新 UI
+     └─ applyReview():
+        1. updateSM2(current, grade, dayKey) → 新的 SM2State
+           └─ lastGrade 被设置为本次评级
+        2. child.progress[character] = 新 SM2State
+        3. 若为新字（current === undefined）→ 推进 nextCharIndex
+  → appendLog(entry)  写入 IndexedDB logs 表（后续异步持久化）
+```
+
+**关键细节：**
+
+- **已学字数** 等于 `progress` 中的 key 数量，即至少被 round 1 评过一次的汉字数。这个值等同于 `total` 统计量。
+- **正确性分类** 按 `SM2State.lastGrade`（最近一次评级）分组归类。例如，一个汉字第一次评 'a' 后又被评 'd'，则它计入 `d` 列而非 `a` 列。这反映的是**当前掌握状态**，而非历史平均。
+- **持久化路径**：`progress` 是 `Child` 对象的一部分 → `AppState` → `Snapshot.state`。Snapshot 写入 IndexedDB（持久化存储）并同步到 Drive。日志重放时通过 `applyReview` 重建 `progress`。
+- **round ≥ 2 的评分** 不影响 SM-2 长期记忆模型（`applyReview` 中 `if (entry.round !== 1) return`），因此也不改变 `lastGrade` 和统计结果。巩固轮只是当天的短期巩固练习。
+- `getChildStats()` 在 `useChild` hook 中被调用，用于 UI 展示（如孩子切换器中显示掌握度分布）。
+
 **WordBook** — 生字本：
 
 ```typescript
@@ -871,6 +912,138 @@ children[0].nextCharIndex = 5
 | 月 | B | 无 | 仅 B 评了 |
 
 > **注意：** "山" 字的合并采用了 Last Writer Wins 策略——B 在第二天给出的 'd'（遗忘）评级覆盖了 A 在之前给出的 'b' 评级。这是因为 SM-2 状态更新是**覆盖式**的（`child.progress[character] = updated`），而非增量式的。最终 SM-2 状态反映了最后一次复习的结果。在实际使用场景中，如果 A 和 B 是两位家长分别辅导同一个孩子，这个结果在语义上是合理的（后来的复习反映孩子的当前状态）。
+
+---
+
+### 场景 8d：一账号复习完毕同步后，另一账号如何获知当日已完成
+
+**核心问题：** 账号 A 完成当日全部复习并同步到 Drive 后，账号 B 从 Drive 拉取数据，如何知道今天的复习已经完成、不需要再做？
+
+**答案：** "当日已完成"的判断不是通过一个显式的标记传播的，而是**隐含在同步的状态数据中**——B 拉取数据后重新生成任务队列，若队列为空即表示当日已完成。
+
+#### 机制分析
+
+"当日已完成"涉及两个层面：
+
+| 层面 | 存储位置 | 同步到 Drive？ | 账号 B 如何获知？ |
+|------|---------|--------------|------------------|
+| `jihanzi_done_<childId>_<dayKey>` 标记 | localStorage | **否** | 无法直接获知 |
+| 任务队列是否为空 | 由 `generateTodayTasks()` 实时计算 | 隐含在 snapshot + logs 中 | 拉取同步后重新生成任务队列，若为空则完成 |
+
+#### 逐步追踪
+
+**初始状态（账号 A 复习前，两账号一致）：**
+
+```
+今天是 2026-06-10（学新日）
+孩子 "小明"，生字本 ["花","山","水","日","月","星","云","雨","雪","风"]
+nextCharIndex = 0, progress = {}
+```
+
+**步骤 1：** 账号 A 完成当日复习（5 个新字 + 无到期复习字）。
+
+A 的操作：
+- 复习 5 个新字："花"(a), "山"(b), "水"(a), "日"(b), "月"(a)
+- `handleDone()` → localStorage 写入 `jihanzi_done_child_1_2026-06-10 = "1"`
+
+A 本地状态变更：
+```
+nextCharIndex = 5
+progress = {
+  "花": { nextReview: "2026-06-13", lastGrade: "a", ... },  // SM-2: interval=3 for grade 'a' on new char
+  "山": { nextReview: "2026-06-12", lastGrade: "b", ... },  // SM-2: interval=2 for grade 'b' on new char
+  "水": { nextReview: "2026-06-13", lastGrade: "a", ... },
+  "日": { nextReview: "2026-06-12", lastGrade: "b", ... },
+  "月": { nextReview: "2026-06-13", lastGrade: "a", ... },
+}
+```
+
+**步骤 2：** 账号 A 同步到 Drive。
+
+pushChanges 推送：
+- snapshot（含更新后的 nextCharIndex=5 和 progress）
+- 5 条 ReviewEntry 日志
+
+**步骤 3：** 账号 B 执行 initialPull。
+
+```
+B 的 initialPull():
+  1. 从 Drive 拉取 snapshot + 5 条新日志
+  2. 合并到本地 IndexedDB
+  3. reloadState() → replayLog(snapshot, logs) 重建状态
+     → nextCharIndex = 5, progress 含 5 个新 SM-2 状态
+```
+
+**步骤 4：** 账号 B 的 `useToday` 判断是否可开始学习。
+
+```typescript
+// useToday 中的判断链：
+
+// ① 检查 localStorage 的 done 标记
+doneToday = isDayDone("child_1", "2026-06-10")  // → false
+// localStorage 标记是本地独立的，不会随 Drive 同步
+
+// ② 生成今日任务队列
+tasks = generateTodayTasks(state, "child_1", "2026-06-10")
+```
+
+`generateTodayTasks` 的执行过程（`src/core/scheduler.ts:21`）：
+
+```
+1. 收集到期复习字：getDueReviews(child, "2026-06-10")
+   - "花".nextReview = "2026-06-13" > "2026-06-10" → 未到期
+   - "山".nextReview = "2026-06-12" > "2026-06-10" → 未到期
+   - "水".nextReview = "2026-06-13" > "2026-06-10" → 未到期
+   - "日".nextReview = "2026-06-12" > "2026-06-10" → 未到期
+   - "月".nextReview = "2026-06-13" > "2026-06-10" → 未到期
+   → dueReviews = []（所有字刚被 A 复习过，都未到期）
+
+2. 生成复习任务：
+   reviewTasks = [].slice(0, 30) = []
+
+3. 学新日，填充新字：
+   remainingQuota = min(5, 30 + 5 - 0) = 5
+   getNewCharacters(child, allChars, 5):
+     - i=5: "星" 不在 progress 中 → 加入
+     - i=6: "云" → 加入
+     - i=7: "雨" → 加入
+     - i=8: "雪" → 加入
+     - i=9: "风" → 加入
+   → newTasks = ["星", "云", "雨", "雪", "风"]
+
+→ 返回 5 个新字任务
+```
+
+**步骤 5：** 最终判断。
+
+```typescript
+effectiveTasks = ["星", "云", "雨", "雪", "风"]  // 5 个任务
+isReady = selectedChildId !== ''  // true ("child_1")
+       && effectiveTasks.length > 0  // true (5)
+       && !doneToday                 // true (localStorage 标记为 false)
+       → true  // 账号 B 可以开始学习！
+```
+
+**结论：** 在此场景中，账号 B 看到了新的 5 个任务字（"星""云""雨""雪""风"），**并未**获知当日已完成。这是因为生字本还有剩余汉字，而"当日已学 5 个新字"这个事实（即 A 已用完今日配额）没有被显式记录到可同步的数据中。
+
+#### 何时账号 B 会看到"已完成"？
+
+账号 B 的 `isReady === false` 仅在 `effectiveTasks.length === 0` 时成立，这需要以下条件**同时**满足：
+
+1. **到期复习字全部已处理**：所有 `nextReview <= today` 的字都已被任一账号评过 → `getDueReviews()` 返回空。
+2. **新字配额已耗尽且不可再取**：
+   - 学新日：`nextCharIndex >= wordBook.characters.length`（生字本已学到末尾），或当日已被标记完成的复习字已占满配额 → `getNewCharacters()` 返回空。
+   - 纯复习日：不添加新字 → 仅需条件 1 满足即可。
+
+**关键限制：** 系统**不追踪"当日已用配额"**——只追踪 `nextCharIndex`（已学到哪个字）和各字的 `nextReview`（下次复习日）。因此：
+
+| 场景 | 账号 A 完成当日配额后 | 账号 B 同步后看到的 |
+|------|---------------------|-------------------|
+| 纯复习日，全部到期字已复习 | 任务队列为空 | 任务队列为空 ✓（完成） |
+| 学新日，生字本已学到末尾 | 任务队列为空 | 任务队列为空 ✓（完成） |
+| 学新日，生字本还有剩余字 | 任务队列为空（本地标记完成） | 显示下一批新字 ✗（超额） |
+
+> **设计影响：** 在多账号协作场景中，如果生字本尚未学完，"当日已完成"的状态无法跨设备传播。第二个账号将会看到生字本中剩余的新字并继续学习。这可能导致当日新字总量超过 `dailyNewChars` 配额。如果需要在多设备间严格限制每日配额，需要额外增加一个可同步的"今日已学字数"计数器（例如作为一条每日汇总日志或 meta 字段同步到 Drive）。
 
 ---
 
