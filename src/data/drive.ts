@@ -311,9 +311,19 @@ export async function pushLogs(
   logEntries: string[],
   existingFileId?: string | null,
 ): Promise<string> {
-  let fileId = existingFileId
-  for (const entry of logEntries) {
-    fileId = await appendToLogFile(childFolderId, entry, fileId)
+  const token = await getAccessToken()
+  setGapiToken(token)
+
+  if (existingFileId) {
+    // Read existing content once, append all new entries in batch, write once.
+    // This avoids the O(n²) read-modify-write loop where each entry triggered
+    // a full download + upload of the growing log file.
+    const current = await readFile(existingFileId)
+    // Normalize: ensure newline-terminated before appending new entries
+    const normalized = current && !current.endsWith('\n') ? current + '\n' : current
+    const updated = normalized + logEntries.join('\n') + '\n'
+    return writeFile(childFolderId, LOG_FILE_NAME, updated, 'application/x-ndjson', existingFileId)
+  } else {
+    return writeFile(childFolderId, LOG_FILE_NAME, logEntries.join('\n') + '\n', 'application/x-ndjson')
   }
-  return fileId!
 }

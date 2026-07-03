@@ -37,7 +37,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-import { writeFile } from './drive'
+import { writeFile, pushLogs } from './drive'
 
 describe('writeFile', () => {
   it('sends multipart body as a string (not FormData) so gapi can handle it', async () => {
@@ -98,5 +98,96 @@ describe('writeFile', () => {
     expect(reqConfig.path).toBe('/upload/drive/v3/files/existing-id')
     expect(reqConfig.method).toBe('PATCH')
     expect(reqConfig.params).toEqual({ uploadType: 'media' })
+  })
+})
+
+describe('pushLogs', () => {
+  // Track calls to gapi.client.drive.files.get (used by readFile)
+  // and gapi.client.request (used by writeFile)
+  const mockFilesGet = vi.fn()
+  const logEntries = [
+    '{"timestamp":1,"type":"review","childId":"c1","character":"花","grade":"a","round":1,"dayKey":"2026-01-01"}',
+    '{"timestamp":2,"type":"review","childId":"c1","character":"山","grade":"b","round":1,"dayKey":"2026-01-01"}',
+    '{"timestamp":3,"type":"review","childId":"c1","character":"水","grade":"c","round":1,"dayKey":"2026-01-01"}',
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGapiRequest.mockReset()
+    mockFilesGet.mockReset()
+    // Re-set gapi mock with files.get tracking
+    vi.stubGlobal('gapi', {
+      client: {
+        request: mockGapiRequest,
+        drive: {
+          files: {
+            list: vi.fn().mockResolvedValue({ result: { files: [] } }),
+            create: vi.fn().mockImplementation(({ resource }) =>
+              Promise.resolve({ result: { id: `mock-id-${resource.name}` } }),
+            ),
+            get: mockFilesGet,
+          },
+        },
+      },
+    })
+  })
+
+  it('batches multiple entries into a single gapi read + single write (not N read-modify-write cycles)', async () => {
+    // Existing log file with some content
+    mockFilesGet.mockResolvedValue({ body: '{"old":"entry"}\n' })
+    mockGapiRequest.mockResolvedValue({ result: { id: 'existing-log-id' } })
+
+    await pushLogs('folder-abc', logEntries, 'existing-log-id')
+
+    // KEY ASSERTION: only ONE read (gapi.client.drive.files.get)
+    expect(mockFilesGet).toHaveBeenCalledTimes(1)
+
+    // KEY ASSERTION: only ONE write (gapi.client.request for PATCH)
+    expect(mockGapiRequest).toHaveBeenCalledTimes(1)
+
+    const reqConfig = mockGapiRequest.mock.calls[0][0]
+    expect(reqConfig.method).toBe('PATCH')
+    expect(reqConfig.path).toBe('/upload/drive/v3/files/existing-log-id')
+
+    // All three entries should be in the body
+    expect(reqConfig.body).toContain('{"old":"entry"}')
+    expect(reqConfig.body).toContain('"timestamp":1')
+    expect(reqConfig.body).toContain('"timestamp":2')
+    expect(reqConfig.body).toContain('"timestamp":3')
+  })
+
+  it('creates a new file with all entries when no existing file', async () => {
+    mockGapiRequest.mockResolvedValue({ result: { id: 'new-log-id' } })
+
+    await pushLogs('folder-abc', logEntries, null)
+
+    // No read when creating a new file
+    expect(mockFilesGet).not.toHaveBeenCalled()
+
+    // Single write
+    expect(mockGapiRequest).toHaveBeenCalledTimes(1)
+    const reqConfig = mockGapiRequest.mock.calls[0][0]
+    expect(reqConfig.method).toBe('POST')
+    expect(reqConfig.path).toBe('/upload/drive/v3/files')
+
+    // All entries should be in the body
+    expect(reqConfig.body).toContain('"timestamp":1')
+    expect(reqConfig.body).toContain('"timestamp":2')
+    expect(reqConfig.body).toContain('"timestamp":3')
+  })
+
+  it('returns the file id after pushing (returns existingFileId for updates)', async () => {
+    mockFilesGet.mockResolvedValue({ body: '' })
+    mockGapiRequest.mockResolvedValue({ result: { id: 'returned-id' } })
+
+    const result = await pushLogs('folder-abc', [logEntries[0]], 'existing-log-id')
+    expect(result).toBe('existing-log-id')
+  })
+
+  it('returns a new file id when creating a new log file', async () => {
+    mockGapiRequest.mockResolvedValue({ result: { id: 'new-file-id' } })
+
+    const result = await pushLogs('folder-abc', [logEntries[0]], null)
+    expect(result).toBe('new-file-id')
   })
 })

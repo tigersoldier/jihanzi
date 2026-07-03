@@ -12,6 +12,7 @@ import {
   appendLog,
   appendLogs,
   getAllLogs,
+  getLogsAfter,
   getLatestSnapshot,
   getLastSyncTime,
   setLastSyncTime,
@@ -182,7 +183,11 @@ export async function pushChanges(): Promise<void> {
   setSyncStatus('syncing')
 
   try {
-    const logs = await getAllLogs()
+    // Only push log entries created since the last successful sync.
+    // This avoids re-uploading the entire log history on every push,
+    // which grew unboundedly and caused O(n²) allocation pressure.
+    const lastSync = await getLastSyncTime()
+    const logs = lastSync > 0 ? await getLogsAfter(lastSync) : await getAllLogs()
     const snapshot = await getLatestSnapshot()
 
     // Ensure Drive folder structure exists

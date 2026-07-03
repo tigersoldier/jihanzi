@@ -6,9 +6,11 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { mockGetAllLogs, mockGetLatestSnapshot } = vi.hoisted(() => ({
+const { mockGetAllLogs, mockGetLogsAfter, mockGetLatestSnapshot, mockGetLastSyncTime } = vi.hoisted(() => ({
   mockGetAllLogs: vi.fn(),
+  mockGetLogsAfter: vi.fn(),
   mockGetLatestSnapshot: vi.fn(),
+  mockGetLastSyncTime: vi.fn().mockResolvedValue(0),
 }))
 
 // ---- Mock drive operations ----
@@ -56,8 +58,9 @@ vi.mock('./gapi', () => ({
 
 vi.mock('./db', () => ({
   getAllLogs: () => mockGetAllLogs(),
+  getLogsAfter: (...args: any[]) => mockGetLogsAfter(...args),
   getLatestSnapshot: () => mockGetLatestSnapshot(),
-  getLastSyncTime: vi.fn(),
+  getLastSyncTime: () => mockGetLastSyncTime(),
   setLastSyncTime: vi.fn(),
   saveSnapshot: (...args: any[]) => mockSaveSnapshot(...args),
   appendLog: vi.fn(),
@@ -131,6 +134,29 @@ describe('pushChanges', () => {
     await pushChanges()
 
     expect(mockFindOrCreateRootFolder).not.toHaveBeenCalled()
+  })
+
+  it('only pushes new log entries (since last sync), not all logs', async () => {
+    // After first sync, lastSyncTime is set
+    mockGetLastSyncTime.mockResolvedValue(1000)
+
+    // getAllLogs would return all 100 entries, but getLogsAfter should only
+    // return the 5 entries created after timestamp 1000
+    const newEntries = MOCK_LOG_ENTRIES.slice(0, 1) // Just one new entry
+    mockGetLogsAfter.mockResolvedValue(newEntries)
+
+    await pushChanges()
+
+    // Should NOT have called getAllLogs (which returns everything)
+    expect(mockGetAllLogs).not.toHaveBeenCalled()
+
+    // Should have called getLogsAfter with the last sync timestamp
+    expect(mockGetLogsAfter).toHaveBeenCalledWith(1000)
+
+    // Should push only the new entries, not all of them
+    const pushedEntries = mockPushLogs.mock.calls[0][1] as string[]
+    expect(pushedEntries.length).toBe(1)
+    expect(pushedEntries[0]).toContain('child_a')
   })
 })
 
