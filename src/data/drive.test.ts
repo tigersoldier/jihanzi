@@ -37,7 +37,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-import { writeFile, pushLogs } from './drive'
+import { writeFile, pushLogs, readFile } from './drive'
 
 describe('writeFile', () => {
   it('sends multipart body as a string (not FormData) so gapi can handle it', async () => {
@@ -74,12 +74,12 @@ describe('writeFile', () => {
   it('includes multipart Content-Type header with boundary', async () => {
     mockGapiRequest.mockResolvedValue({ result: { id: 'file-456' } })
 
-    await writeFile('folder-xyz', 'log.jsonl', '{"entry":1}\n', 'application/x-ndjson; charset=utf-8')
+    await writeFile('folder-xyz', 'log.jsonl', '{"entry":1}\n', 'application/json; charset=utf-8')
 
     const reqConfig = mockGapiRequest.mock.calls[0][0]
     expect(reqConfig.headers).toBeDefined()
     expect(reqConfig.headers['Content-Type']).toMatch(/^multipart\/related; boundary=/)
-    expect(reqConfig.body).toContain('Content-Type: application/x-ndjson; charset=utf-8')
+    expect(reqConfig.body).toContain('Content-Type: application/json; charset=utf-8')
   })
 
   it('updates an existing file with media upload (not multipart)', async () => {
@@ -107,12 +107,12 @@ describe('writeFile', () => {
       'folder-xyz',
       'log.jsonl',
       '{"entry":"花"}\n',
-      'application/x-ndjson; charset=utf-8',
+      'application/json; charset=utf-8',
       'existing-id',
     )
 
     const reqConfig = mockGapiRequest.mock.calls[0][0]
-    expect(reqConfig.headers['Content-Type']).toBe('application/x-ndjson; charset=utf-8')
+    expect(reqConfig.headers['Content-Type']).toBe('application/json; charset=utf-8')
   })
 
   it('includes charset=utf-8 in multipart content part header', async () => {
@@ -122,11 +122,11 @@ describe('writeFile', () => {
       'folder-xyz',
       'log.jsonl',
       '{"entry":"花"}\n',
-      'application/x-ndjson; charset=utf-8',
+      'application/json; charset=utf-8',
     )
 
     const reqConfig = mockGapiRequest.mock.calls[0][0]
-    expect(reqConfig.body).toContain('Content-Type: application/x-ndjson; charset=utf-8')
+    expect(reqConfig.body).toContain('Content-Type: application/json; charset=utf-8')
   })
 
   it('default mimeType includes charset=utf-8', async () => {
@@ -140,10 +140,49 @@ describe('writeFile', () => {
   })
 })
 
+describe('readFile', () => {
+  const mockFetch = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockFetch.mockReset()
+    vi.stubGlobal('fetch', mockFetch)
+  })
+
+  it('decodes UTF-8 Chinese characters correctly', async () => {
+    const testContent = '{"character":"修","grade":"a"}\n{"character":"奏","grade":"b"}\n'
+    const utf8Bytes = new TextEncoder().encode(testContent)
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(utf8Bytes.buffer.slice(0)),
+    })
+
+    const result = await readFile('file-id-123')
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://www.googleapis.com/drive/v3/files/file-id-123?alt=media',
+      { headers: { Authorization: 'Bearer mock-access-token' } },
+    )
+    expect(result).toBe(testContent)
+    expect(result).toContain('修')
+    expect(result).toContain('奏')
+  })
+
+  it('throws on HTTP error response', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 404,
+    })
+
+    await expect(readFile('bad-file-id')).rejects.toThrow('Failed to read file')
+  })
+})
+
 describe('pushLogs', () => {
-  // Track calls to gapi.client.drive.files.get (used by readFile)
-  // and gapi.client.request (used by writeFile)
-  const mockFilesGet = vi.fn()
+  const mockGapiRequest = vi.fn()
+  const mockFetch = vi.fn()
   const logEntries = [
     '{"timestamp":1,"type":"review","childId":"c1","character":"花","grade":"a","round":1,"dayKey":"2026-01-01"}',
     '{"timestamp":2,"type":"review","childId":"c1","character":"山","grade":"b","round":1,"dayKey":"2026-01-01"}',
@@ -153,8 +192,9 @@ describe('pushLogs', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockGapiRequest.mockReset()
-    mockFilesGet.mockReset()
-    // Re-set gapi mock with files.get tracking
+    mockFetch.mockReset()
+    vi.stubGlobal('fetch', mockFetch)
+    // Re-set gapi mock without files.get (readFile now uses fetch)
     vi.stubGlobal('gapi', {
       client: {
         request: mockGapiRequest,
@@ -164,7 +204,6 @@ describe('pushLogs', () => {
             create: vi.fn().mockImplementation(({ resource }) =>
               Promise.resolve({ result: { id: `mock-id-${resource.name}` } }),
             ),
-            get: mockFilesGet,
           },
         },
       },
@@ -173,13 +212,16 @@ describe('pushLogs', () => {
 
   it('batches multiple entries into a single gapi read + single write (not N read-modify-write cycles)', async () => {
     // Existing log file with some content
-    mockFilesGet.mockResolvedValue({ body: '{"old":"entry"}\n' })
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new TextEncoder().encode('{"old":"entry"}\n').buffer.slice(0)),
+    })
     mockGapiRequest.mockResolvedValue({ result: { id: 'existing-log-id' } })
 
     await pushLogs('folder-abc', logEntries, 'existing-log-id')
 
-    // KEY ASSERTION: only ONE read (gapi.client.drive.files.get)
-    expect(mockFilesGet).toHaveBeenCalledTimes(1)
+    // KEY ASSERTION: only ONE read (fetch)
+    expect(mockFetch).toHaveBeenCalledTimes(1)
 
     // KEY ASSERTION: only ONE write (gapi.client.request for PATCH)
     expect(mockGapiRequest).toHaveBeenCalledTimes(1)
@@ -201,7 +243,7 @@ describe('pushLogs', () => {
     await pushLogs('folder-abc', logEntries, null)
 
     // No read when creating a new file
-    expect(mockFilesGet).not.toHaveBeenCalled()
+    expect(mockFetch).not.toHaveBeenCalled()
 
     // Single write
     expect(mockGapiRequest).toHaveBeenCalledTimes(1)
@@ -216,7 +258,10 @@ describe('pushLogs', () => {
   })
 
   it('returns the file id after pushing (returns existingFileId for updates)', async () => {
-    mockFilesGet.mockResolvedValue({ body: '' })
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+    })
     mockGapiRequest.mockResolvedValue({ result: { id: 'returned-id' } })
 
     const result = await pushLogs('folder-abc', [logEntries[0]], 'existing-log-id')

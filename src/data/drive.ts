@@ -17,13 +17,15 @@ const META_FILE_NAME = 'app_meta.json'
 const SNAPSHOT_FILE_NAME = 'snapshot.json'
 const LOG_FILE_NAME = 'log.jsonl'
 
-// MIME types with explicit UTF-8 charset. Without charset=utf-8, Google
-// Drive may serve files without encoding metadata, causing browsers/gapi
-// to decode UTF-8 bytes incorrectly — especially problematic in the
-// read-modify-write cycle of pushLogs, where each sync compounds the
-// corruption (single hanzi → long garbled strings).
+// MIME types with explicit UTF-8 charset for Google Drive uploads.
+// Including charset=utf-8 tells Drive to serve the file with charset metadata,
+// giving the browser a correct decoding hint. For downloading, readFile()
+// uses fetch + TextDecoder('utf-8') to decode bytes explicitly instead of
+// relying on Drive's Content-Type — which may strip charset from custom MIME
+// types. Together, these two layers prevent the progressive Chinese-character
+// corruption that occurred in the read-modify-write cycle of pushLogs.
 const JSON_MIME = 'application/json; charset=utf-8'
-const NDJSON_MIME = 'application/x-ndjson; charset=utf-8'
+const NDJSON_MIME = 'text/plain; charset=utf-8'
 
 // ============================================================
 // Folder Operations
@@ -122,17 +124,27 @@ export async function findFile(
 
 /**
  * Read a file's content from Drive.
+ * Uses fetch + explicit UTF-8 decoding instead of gapi.client.drive.files.get.
+ * gapi's response.body relies on Google Drive's Content-Type charset — and
+ * Drive may strip charset=utf-8 from custom MIME types, causing the browser
+ * to decode UTF-8 bytes as Latin-1 (mojibake). By reading raw bytes via
+ * fetch and decoding with TextDecoder, we bypass Drive's charset handling
+ * entirely and always get correct UTF-8 strings.
  */
 export async function readFile(fileId: string): Promise<string> {
   const token = await getAccessToken()
-  setGapiToken(token)
 
-  const response = await gapi.client.drive.files.get({
-    fileId,
-    alt: 'media',
-  })
+  const response = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  )
 
-  return response.body as string
+  if (!response.ok) {
+    throw new Error(`Failed to read file ${fileId}: HTTP ${response.status}`)
+  }
+
+  const buffer = await response.arrayBuffer()
+  return new TextDecoder('utf-8').decode(buffer)
 }
 
 /**
