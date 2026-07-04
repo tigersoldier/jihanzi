@@ -42,6 +42,48 @@ function filterReviews(entries: AnyLogEntry[]): ReviewEntry[] {
 }
 
 // ============================================================
+// UTF-8 Corruption Detection
+// ============================================================
+
+/**
+ * Check whether a string contains UTF-8 corruption.
+ *
+ * Detects two classes of corruption:
+ * 1. Lone surrogates (U+D800–U+DFFF) — invalid UTF-16 that cannot
+ *    be encoded to valid UTF-8.
+ * 2. C1 control characters (U+0080–U+009F) — these almost never appear
+ *    in valid text and are a strong signal of UTF-8 bytes being
+ *    misinterpreted as Latin-1 (mojibake).
+ *
+ * This function is used by getAllLogs to auto-repair corrupted data
+ * caused by the historical Drive sync encoding bug where UTF-8 bytes
+ * were decoded as Latin-1.
+ */
+export function isUTF8Corrupted(str: string): boolean {
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i)
+    if (code >= 0xD800 && code <= 0xDFFF) {
+      // High surrogate must be followed by a low surrogate
+      if (code >= 0xDC00) return true // Lone low surrogate
+      if (i + 1 >= str.length || str.charCodeAt(i + 1) < 0xDC00 || str.charCodeAt(i + 1) > 0xDFFF) {
+        return true // Lone high surrogate
+      }
+      i++ // Skip the paired low surrogate
+      continue
+    }
+    // C1 control characters (U+0080–U+009F): almost certainly mojibake
+    // from UTF-8 bytes misinterpreted as Latin-1
+    if (code >= 0x0080 && code <= 0x009F) return true
+  }
+  return false
+}
+
+/** Check if a log entry has a character field */
+function hasCharacter(entry: AnyLogEntry): entry is AnyLogEntry & { character: string } {
+  return 'character' in entry && typeof (entry as any).character === 'string'
+}
+
+// ============================================================
 // Log Operations
 // ============================================================
 
@@ -57,7 +99,23 @@ export async function appendLogs(entries: AnyLogEntry[]): Promise<number> {
 
 /** Get all log entries, sorted by timestamp */
 export async function getAllLogs(): Promise<AnyLogEntry[]> {
-  return db.logs.orderBy('timestamp').toArray()
+  const result = await db.logs.orderBy('timestamp').toArray()
+
+  // ---- UTF-8 corruption auto-repair ----
+  // If entries were synced from Drive during the encoding-bug period,
+  // Chinese characters may have been corrupted (UTF-8 bytes → Latin-1).
+  // Detect by checking the first entry with a character field.
+  const firstWithChar = result.find(hasCharacter)
+  if (firstWithChar && isUTF8Corrupted(firstWithChar.character)) {
+    const corrupted = result.filter(e => hasCharacter(e) && isUTF8Corrupted(e.character))
+    const corruptedIds = corrupted.map(e => (e as any).id).filter((id): id is number => typeof id === 'number')
+    if (corruptedIds.length > 0) {
+      await db.logs.bulkDelete(corruptedIds)
+    }
+    return result.filter(e => !hasCharacter(e) || !isUTF8Corrupted(e.character))
+  }
+
+  return result
 }
 
 /** Get log entries after a specific timestamp */
@@ -129,12 +187,13 @@ export async function getReviewsForChildInRange(
   fromDay: string,
   toDay: string,
 ): Promise<ReviewEntry[]> {
-  return db.logs
+  const result = await db.logs
     .where('[childId+dayKey]')
     .between([childId, fromDay], [childId, toDay], true, true)
     .filter(r => r.type === 'review')
     .sortBy('dayKey')
     .then(filterReviews)
+  return result
 }
 
 // ============================================================
