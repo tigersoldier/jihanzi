@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import type { Grade, SM2State } from '../core/types'
 import { useApp } from '../state/AppContext'
 import { getReviewsForChildChar, getReviewsForChildInRange, getFirstReviewDays } from '../data/db'
@@ -101,19 +101,41 @@ function toDayKey(yearMonth: string, day: number): string {
   return `${year}-${month}-${String(day).padStart(2, '0')}`
 }
 
+function currentYearMonth(): string {
+  return new Date().toISOString().slice(0, 7)
+}
+
 export function useHistory(childId: string, yearMonth: string): MonthHistory {
   const { dataVersion } = useApp()
   const [days, setDays] = useState<DaySummary[]>([])
 
+  // Past months are immutable — skip the full historical scan on
+  // dataVersion bumps when the viewed month hasn't changed.
+  const lastFetch = useRef<{ ym: string; dv: number; child: string } | null>(null)
+
   useEffect(() => {
     let cancelled = false
 
+    const isCurrentMonth = yearMonth === currentYearMonth()
+    const sameParams = lastFetch.current
+      && lastFetch.current.ym === yearMonth
+      && lastFetch.current.child === childId
+
+    // For past months, skip the entire load when only dataVersion
+    // changed — past-month review data is immutable.
+    if (sameParams && !isCurrentMonth) {
+      lastFetch.current = { ym: yearMonth, dv: dataVersion, child: childId }
+      return
+    }
+
     async function load() {
+      lastFetch.current = { ym: yearMonth, dv: dataVersion, child: childId }
+
       const totalDays = daysInMonth(yearMonth)
       const fromDay = toDayKey(yearMonth, 1)
       const toDay = toDayKey(yearMonth, totalDays)
 
-      const [entries, firstReviewDays] = await Promise.all([
+      const [entries, firstDays] = await Promise.all([
         getReviewsForChildInRange(childId, fromDay, toDay),
         getFirstReviewDays(childId),
       ])
@@ -151,7 +173,7 @@ export function useHistory(childId: string, yearMonth: string): MonthHistory {
 
         // Classify new vs review using all-time first-review days
         for (const [character, grade] of charRound1) {
-          const firstDay = firstReviewDays.get(character)
+          const firstDay = firstDays.get(character)
           if (firstDay === dayKey) {
             newChars.push({ character, grade })
           } else {
