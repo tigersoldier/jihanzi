@@ -32,7 +32,15 @@ export function useCharacterStats(childId: string, character: string): Character
     return child?.progress[character]
   }, [state.children, childId, character])
 
+  // Track SM2State fingerprint to skip re-query when only dataVersion
+  // bumped but this character's data didn't change.
+  const lastSM2 = useRef('')
+
   useEffect(() => {
+    const sm2Key = sm2State ? JSON.stringify(sm2State) : ''
+    if (lastSM2.current === sm2Key) return
+    lastSM2.current = sm2Key
+
     let cancelled = false
 
     async function load() {
@@ -67,7 +75,7 @@ export function useCharacterStats(childId: string, character: string): Character
 
     load()
     return () => { cancelled = true }
-  }, [childId, character, dataVersion])
+  }, [childId, character, sm2State, dataVersion])
 
   return { sm2State, totalReviews, gradeCounts, timeline }
 }
