@@ -36,6 +36,11 @@ class JihanziDB extends Dexie {
 
 const db = new JihanziDB()
 
+/** Type guard: filter AnyLogEntry[] down to ReviewEntry[] at runtime */
+function filterReviews(entries: AnyLogEntry[]): ReviewEntry[] {
+  return entries.filter((e): e is ReviewEntry => e.type === 'review')
+}
+
 // ============================================================
 // Log Operations
 // ============================================================
@@ -74,14 +79,16 @@ export async function deleteLogsBefore(timestamp: number): Promise<number> {
 export async function getReviewsForChild(childId: string): Promise<ReviewEntry[]> {
   return db.logs
     .where({ type: 'review', childId })
-    .toArray() as Promise<ReviewEntry[]>
+    .toArray()
+    .then(filterReviews)
 }
 
 /** Get reviews for a specific day */
 export async function getReviewsForDay(dayKey: string): Promise<ReviewEntry[]> {
   return db.logs
     .where({ type: 'review', dayKey })
-    .toArray() as Promise<ReviewEntry[]>
+    .toArray()
+    .then(filterReviews)
 }
 
 /** Get all reviews for a specific child and character */
@@ -91,8 +98,9 @@ export async function getReviewsForChildChar(
 ): Promise<ReviewEntry[]> {
   return db.logs
     .where({ type: 'review', childId })
-    .filter(r => r.type === 'review' && r.character === character)
-    .toArray() as Promise<ReviewEntry[]>
+    .toArray()
+    .then(filterReviews)
+    .then(entries => entries.filter(r => r.character === character))
 }
 
 /**
@@ -125,7 +133,8 @@ export async function getReviewsForChildInRange(
     .where('[childId+dayKey]')
     .between([childId, fromDay], [childId, toDay], true, true)
     .filter(r => r.type === 'review')
-    .sortBy('dayKey') as Promise<ReviewEntry[]>
+    .sortBy('dayKey')
+    .then(filterReviews)
 }
 
 // ============================================================
