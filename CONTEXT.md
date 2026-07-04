@@ -67,6 +67,17 @@
 - **成功重复次数 (Repetitions)**：该字被成功回忆（评级 a/b/c）的累计次数，每次非 d 评级递增，d 评级重置为 0。
 - **最近评级 (Last Grade)**：该字最近一次的复习评级，用于统计掌握度分布。
 
+### 熟练度 (Proficiency)
+
+从记忆状态派生的四色分类，用于在生字本中快速可视化掌握程度：
+
+| 等级 | 英文 | 条件 | 含义 |
+|------|------|------|------|
+| 🟢 熟练 | mastered | lastGrade = a 且 repetitions ≥ 3 | 已稳固掌握 |
+| 🔵 进行中 | progressing | 不符合其它三类的中间状态 | 正在巩固中 |
+| 🟡 薄弱 | weak | lastGrade = d，或 lastGrade = c 且 repetitions < 2 | 需要加强 |
+| ⚪ 未学 | unlearned | 无 SM2State | 尚未学习 |
+
 ### 学习进度 (Learning Progress)
 
 孩子在其关联生字本中的推进位置，由 `nextCharIndex` 指针标记。指针之前
@@ -201,6 +212,7 @@
 | 下次复习日 | Next Review Date | 学习过程 |
 | 成功重复次数 | Repetitions | 学习过程 |
 | 最近评级 | Last Grade | 学习过程 |
+| 熟练度 | Proficiency | 学习过程 |
 | 学习进度 | Learning Progress | 学习过程 |
 | 任务 | Task | 学习过程 |
 | 任务队列 | Task Queue | 学习过程 |

@@ -1,6 +1,7 @@
 import { useCharacterStats } from '../../hooks/useStats'
 import { getCharInfo } from '../../utils/chars'
 import { formatDateLabel, getDayTypeLabel, getDayType } from '../../utils/date'
+import { GRADE_LABELS, GRADE_COLORS } from '../../core/types'
 
 interface CharacterDetailProps {
   childId: string
@@ -11,20 +12,6 @@ interface CharacterDetailProps {
 export default function CharacterDetail({ childId, character, onBack }: CharacterDetailProps) {
   const { sm2State, totalReviews, gradeCounts, timeline } = useCharacterStats(childId, character)
   const { pinyin, words } = getCharInfo(character)
-
-  const gradeLabels: Record<string, string> = {
-    a: '完全掌握',
-    b: '部分正确',
-    c: '需提示',
-    d: '遗忘',
-  }
-
-  const gradeColors: Record<string, string> = {
-    a: 'bg-green-100 text-green-700',
-    b: 'bg-blue-100 text-blue-700',
-    c: 'bg-yellow-100 text-yellow-700',
-    d: 'bg-red-100 text-red-700',
-  }
 
   return (
     <div className="space-y-4">
@@ -55,10 +42,10 @@ export default function CharacterDetail({ childId, character, onBack }: Characte
           </div>
           {(['a', 'b', 'c', 'd'] as const).map(g => (
             <div key={g}>
-              <div className={`text-2xl font-bold ${g === 'a' ? 'text-green-600' : g === 'b' ? 'text-blue-600' : g === 'c' ? 'text-yellow-600' : 'text-red-600'}`}>
+              <div className={`text-2xl font-bold ${GRADE_COLORS[g]}`}>
                 {gradeCounts[g]}
               </div>
-              <div className="text-xs text-gray-400">{g} · {gradeLabels[g]}</div>
+              <div className="text-xs text-gray-400">{g} · {GRADE_LABELS[g]}</div>
             </div>
           ))}
         </div>
@@ -106,7 +93,7 @@ export default function CharacterDetail({ childId, character, onBack }: Characte
                   {rounds.map((r, i) => (
                     <span
                       key={i}
-                      className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${gradeColors[r.grade]}`}
+                      className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${GRADE_COLORS[r.grade]}`}
                     >
                       R{r.round}: {r.grade}
                     </span>

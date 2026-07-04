@@ -194,6 +194,22 @@ export const GRADE_TO_Q: Record<Grade, number> = {
   d: 0,
 }
 
+/** Human-readable Chinese labels for each grade */
+export const GRADE_LABELS: Record<Grade, string> = {
+  a: '完全掌握',
+  b: '部分正确',
+  c: '需提示',
+  d: '遗忘',
+}
+
+/** Tailwind color classes for each grade */
+export const GRADE_COLORS: Record<Grade, string> = {
+  a: 'bg-green-100 text-green-700',
+  b: 'bg-blue-100 text-blue-700',
+  c: 'bg-yellow-100 text-yellow-700',
+  d: 'bg-red-100 text-red-700',
+}
+
 /** SM-2 constants (from the algorithm authors, not adjustable) */
 export const SM2_INITIAL_EASE = 2.5
 export const SM2_MIN_EASE = 1.3

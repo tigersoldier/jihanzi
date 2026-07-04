@@ -3,6 +3,7 @@ import { useApp } from '../../state/AppContext'
 import { useToday } from '../../hooks/useToday'
 import { useHistory, type DaySummary } from '../../hooks/useStats'
 import { todayKey, formatDateLabel, getDayTypeLabel, getDayType } from '../../utils/date'
+import { GRADE_LABELS, GRADE_COLORS, type Grade } from '../../core/types'
 import ProgressBar from './ProgressBar'
 import CharacterCard from './CharacterCard'
 import RatingButtons from './RatingButtons'
@@ -354,16 +355,6 @@ function DayDetailView({
   const dayLabel = formatDateLabel(daySummary.dayKey)
   const dayTypeLabel = getDayTypeLabel(daySummary.dayType)
 
-  const gradeColor = (g: string) => {
-    switch (g) {
-      case 'a': return 'text-green-600'
-      case 'b': return 'text-blue-600'
-      case 'c': return 'text-yellow-600'
-      case 'd': return 'text-red-600'
-      default: return 'text-gray-500'
-    }
-  }
-
   return (
     <div className="space-y-4">
       <button
@@ -403,8 +394,8 @@ function DayDetailView({
                 className="w-full flex items-center justify-between py-2 px-3 rounded-lg hover:bg-gray-50 transition-colors text-left"
               >
                 <span className="text-lg font-kai text-gray-800">{character}</span>
-                <span className={`text-sm font-medium ${gradeColor(grade)}`}>
-                  {grade === 'a' ? '完全掌握' : grade === 'b' ? '部分正确' : grade === 'c' ? '需提示' : '遗忘'}
+                <span className={`text-sm font-medium ${GRADE_COLORS[grade]}`}>
+                  {GRADE_LABELS[grade as Grade]}
                 </span>
               </button>
             ))}
@@ -424,8 +415,8 @@ function DayDetailView({
                 className="w-full flex items-center justify-between py-2 px-3 rounded-lg hover:bg-gray-50 transition-colors text-left"
               >
                 <span className="text-lg font-kai text-gray-800">{character}</span>
-                <span className={`text-sm font-medium ${gradeColor(grade)}`}>
-                  {grade === 'a' ? '完全掌握' : grade === 'b' ? '部分正确' : grade === 'c' ? '需提示' : '遗忘'}
+                <span className={`text-sm font-medium ${GRADE_COLORS[grade]}`}>
+                  {GRADE_LABELS[grade as Grade]}
                 </span>
               </button>
             ))}
@@ -439,7 +430,7 @@ function DayDetailView({
         <div className="grid grid-cols-4 gap-2 text-center">
           {(['a', 'b', 'c', 'd'] as const).map(g => (
             <div key={g}>
-              <div className={`text-xl font-bold ${gradeColor(g)}`}>{daySummary.stats[g]}</div>
+              <div className={`text-xl font-bold ${GRADE_COLORS[g]}`}>{daySummary.stats[g]}</div>
               <div className="text-xs text-gray-400">{g}</div>
             </div>
           ))}
