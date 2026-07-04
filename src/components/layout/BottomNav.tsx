@@ -6,7 +6,7 @@ interface BottomNavProps {
 }
 
 const tabs: { key: Tab; label: string; icon: string }[] = [
-  { key: 'today', label: '今天', icon: '📅' },
+  { key: 'progress', label: '学习进度', icon: '📅' },
   { key: 'child', label: '孩子', icon: '👶' },
   { key: 'wordbook', label: '生字本', icon: '📚' },
 ]

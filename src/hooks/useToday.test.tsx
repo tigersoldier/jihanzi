@@ -75,6 +75,9 @@ function freshStateWithChars(characters: string[]): AppState {
 function createStatefulWrapper(initialState: AppState) {
   function StatefulWrapper({ children }: { children: ReactNode }) {
     const [state, setState] = useState<AppState>(initialState)
+    const [selectedChildId, setSelectedChildId] = useState<string>(
+      () => state.children[0]?.id || ''
+    )
 
     const submitReview = useCallback(
       async (
@@ -120,6 +123,10 @@ function createStatefulWrapper(initialState: AppState) {
     const contextValue: AppContextState = {
       state,
       loading: false,
+      dataVersion: 0,
+      selectedChildId,
+      setSelectedChildId,
+      reloadState: vi.fn(),
       createChild: vi.fn() as any,
       updateChild: vi.fn() as any,
       deleteChild: vi.fn() as any,
@@ -311,6 +318,7 @@ describe('useToday', () => {
           ],
         })
       )
+      const [selectedChildId, setSelectedChildId] = useState('')
 
       // 模拟 IndexedDB 异步加载 — 在 useEffect 中延迟填入 children
       React.useEffect(() => {
@@ -327,9 +335,20 @@ describe('useToday', () => {
         })
       }, [])
 
+      // 模拟 AppContext 的 auto-select 逻辑
+      React.useEffect(() => {
+        if (state.children.length > 0 && !selectedChildId) {
+          setSelectedChildId(state.children[0].id)
+        }
+      }, [state.children, selectedChildId])
+
       const contextValue: AppContextState = {
         state,
         loading: false,
+        dataVersion: 0,
+        selectedChildId,
+        setSelectedChildId,
+        reloadState: vi.fn(),
         createChild: vi.fn() as any,
         updateChild: vi.fn() as any,
         deleteChild: vi.fn() as any,

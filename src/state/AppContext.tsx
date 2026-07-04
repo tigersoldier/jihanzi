@@ -46,6 +46,11 @@ import { notifyDataChanged } from '../data/sync'
 export interface AppContextState {
   state: AppState
   loading: boolean
+  /** Incremented after each sync-driven reload — hooks can watch this to re-query IndexedDB */
+  dataVersion: number
+  /** Currently selected child — shared across tabs */
+  selectedChildId: string
+  setSelectedChildId: (id: string) => void
   // Child operations
   createChild: (name: string, wordBookId: string) => Promise<string>
   updateChild: (childId: string, updates: { name?: string; wordBookId?: string }) => Promise<void>
@@ -82,6 +87,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(EMPTY_STATE)
   const [loading, setLoading] = useState(true)
   const [logCount, setLogCount] = useState(0)
+  const [dataVersion, setDataVersion] = useState(0)
+  const [selectedChildId, setSelectedChildId] = useState<string>('')
+
+  // Auto-select the first child when children become available
+  useEffect(() => {
+    if (state.children.length > 0 && !selectedChildId) {
+      setSelectedChildId(state.children[0].id)
+    }
+  }, [state.children, selectedChildId])
+
   // Ref mirror of state.wordBooks so addCharacter can validate without
   // adding state as a useCallback dependency.
   const wordBooksRef = useRef(state.wordBooks)
@@ -106,6 +121,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const reconstructed = replayLog(snapshot, logs)
         setState(reconstructed)
         setLogCount(logs.length)
+        setDataVersion(v => v + 1)
       } catch (err) {
         console.error('Failed to load state:', err)
       } finally {
@@ -430,6 +446,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       value={{
         state,
         loading,
+        dataVersion,
+        selectedChildId,
+        setSelectedChildId,
         createChild,
         updateChild,
         deleteChild,

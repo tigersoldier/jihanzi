@@ -3,10 +3,15 @@ import { useWordBook } from '../../hooks/useWordBook'
 import { useApp } from '../../state/AppContext'
 import WordBookSwitcher from './WordBookSwitcher'
 import CharacterList from './CharacterList'
+import CharacterDetail from '../common/CharacterDetail'
 import EmptyState from '../common/EmptyState'
+import { getProficiency, PROFICIENCY_DOT } from '../../hooks/useStats'
+import type { SM2State } from '../../core/types'
+
+type FilterMode = 'all' | 'learned' | 'unlearned'
 
 export default function WordBookPage() {
-  const { state } = useApp()
+  const { state, selectedChildId, setSelectedChildId } = useApp()
   const {
     selectedWBId,
     setSelectedWBId,
@@ -22,6 +27,12 @@ export default function WordBookPage() {
   const [newCharInput, setNewCharInput] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newWBName, setNewWBName] = useState('')
+  const [filterMode, setFilterMode] = useState<FilterMode>('all')
+  const [detailChar, setDetailChar] = useState<string | null>(null)
+
+  // Get current child's progress for proficiency lookup
+  const currentChild = state.children.find(c => c.id === selectedChildId)
+  const progress = currentChild?.progress ?? {}
 
   const handleAddChar = async () => {
     if (!newCharInput.trim()) return
@@ -34,6 +45,17 @@ export default function WordBookPage() {
     await createWB(newWBName.trim())
     setNewWBName('')
     setShowCreateForm(false)
+  }
+
+  // Show character detail sub-view
+  if (detailChar && selectedChildId) {
+    return (
+      <CharacterDetail
+        childId={selectedChildId}
+        character={detailChar}
+        onBack={() => setDetailChar(null)}
+      />
+    )
   }
 
   // No word books created yet
@@ -82,8 +104,68 @@ export default function WordBookPage() {
     )
   }
 
+  // Filter characters
+  const allChars = currentWB?.characters ?? []
+  const filteredChars = allChars.filter(char => {
+    const learned = char in progress
+    if (filterMode === 'learned') return learned
+    if (filterMode === 'unlearned') return !learned
+    return true
+  })
+
+  // Build proficiency map
+  const proficiencyMap: Record<string, ReturnType<typeof getProficiency>> = {}
+  for (const char of filteredChars) {
+    proficiencyMap[char] = getProficiency(progress[char])
+  }
+
+  const learnedCount = allChars.filter(c => c in progress).length
+
+  // Wrappers to translate filtered-list indices back to full-array indices.
+  // When filterMode !== 'all', filteredChars is a subset, so the index
+  // from CharacterList refers to a position in the subset, not the full array.
+  const handleRemove = (char: string, _filteredIndex: number) => {
+    const realIndex = allChars.indexOf(char)
+    if (realIndex !== -1) removeCharacter(char, realIndex)
+  }
+
+  const handleReorder = (reorderedSubset: string[]) => {
+    if (filterMode === 'all') {
+      reorderCharacters(reorderedSubset)
+      return
+    }
+    // Reconstruct the full array: unfiltered chars stay in place;
+    // filtered chars are placed in their new relative order at the
+    // positions that originally held filtered chars.
+    const subsetSet = new Set(reorderedSubset)
+    const result = [...allChars]
+    let si = 0
+    for (let i = 0; i < result.length; i++) {
+      if (subsetSet.has(result[i])) {
+        result[i] = reorderedSubset[si++]
+      }
+    }
+    reorderCharacters(result)
+  }
+
   return (
     <div className="space-y-4">
+      {/* Child selector */}
+      {state.children.length > 0 && (
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-400 whitespace-nowrap">当前孩子：</span>
+          <select
+            value={selectedChildId}
+            onChange={e => setSelectedChildId(e.target.value)}
+            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white flex-1"
+          >
+            {state.children.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {/* Word book switcher */}
       <div className="flex items-center gap-2">
         <div className="flex-1">
@@ -120,23 +202,48 @@ export default function WordBookPage() {
         </button>
       </div>
 
-      {/* Character count */}
+      {/* Filter tabs + count */}
       {currentWB && (
-        <p className="text-sm text-gray-400">
-          共 {currentWB.characters.length} 字
-        </p>
+        <div className="flex items-center justify-between">
+          <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+            {([
+              ['all', '全部'],
+              ['learned', `已学 ${learnedCount}`],
+              ['unlearned', `未学 ${allChars.length - learnedCount}`],
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setFilterMode(key)}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                  filterMode === key
+                    ? 'bg-white text-gray-800 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="text-sm text-gray-400">共 {allChars.length} 字</p>
+        </div>
       )}
 
       {/* Character list */}
-      {currentWB && currentWB.characters.length > 0 ? (
+      {currentWB && filteredChars.length > 0 ? (
         <CharacterList
-          characters={currentWB.characters}
-          onReorder={reorderCharacters}
-          onRemove={removeCharacter}
+          characters={filteredChars}
+          onReorder={handleReorder}
+          onRemove={handleRemove}
+          proficiencyMap={progress ? proficiencyMap : undefined}
+          onCharClick={selectedChildId ? (char => setDetailChar(char)) : undefined}
         />
       ) : (
         <div className="text-center py-12 text-gray-400 text-sm">
-          生字本为空，在上方输入框添加汉字
+          {filterMode === 'all'
+            ? '生字本为空，在上方输入框添加汉字'
+            : filterMode === 'learned'
+              ? '还没有已学字'
+              : '所有字都已学过 ✨'}
         </div>
       )}
 

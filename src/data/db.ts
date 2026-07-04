@@ -8,7 +8,7 @@
  */
 
 import Dexie, { type Table } from 'dexie'
-import type { AnyLogEntry, Snapshot } from '../core/types'
+import type { AnyLogEntry, ReviewEntry, Snapshot } from '../core/types'
 
 /** Database schema version and definition */
 class JihanziDB extends Dexie {
@@ -21,6 +21,13 @@ class JihanziDB extends Dexie {
 
     this.version(1).stores({
       logs: '++id, timestamp, type, childId, wordBookId, character, dayKey',
+      snapshot: '++id, timestamp',
+      meta: 'key',
+    })
+
+    // v2: add compound index for efficient child+date range queries
+    this.version(2).stores({
+      logs: '++id, timestamp, type, childId, wordBookId, character, dayKey, [childId+dayKey]',
       snapshot: '++id, timestamp',
       meta: 'key',
     })
@@ -64,17 +71,61 @@ export async function deleteLogsBefore(timestamp: number): Promise<number> {
 }
 
 /** Get reviews for a specific child */
-export async function getReviewsForChild(childId: string): Promise<AnyLogEntry[]> {
+export async function getReviewsForChild(childId: string): Promise<ReviewEntry[]> {
   return db.logs
     .where({ type: 'review', childId })
-    .toArray()
+    .toArray() as Promise<ReviewEntry[]>
 }
 
 /** Get reviews for a specific day */
-export async function getReviewsForDay(dayKey: string): Promise<AnyLogEntry[]> {
+export async function getReviewsForDay(dayKey: string): Promise<ReviewEntry[]> {
   return db.logs
     .where({ type: 'review', dayKey })
-    .toArray()
+    .toArray() as Promise<ReviewEntry[]>
+}
+
+/** Get all reviews for a specific child and character */
+export async function getReviewsForChildChar(
+  childId: string,
+  character: string,
+): Promise<ReviewEntry[]> {
+  return db.logs
+    .where({ type: 'review', childId })
+    .filter(r => r.type === 'review' && r.character === character)
+    .toArray() as Promise<ReviewEntry[]>
+}
+
+/**
+ * Get the first review dayKey for each character for a child.
+ * Used to classify characters as "new" vs "review" on a given day.
+ */
+export async function getFirstReviewDays(
+  childId: string,
+): Promise<Map<string, string>> {
+  const firstDays = new Map<string, string>()
+  await db.logs
+    .where({ type: 'review', childId })
+    .each(r => {
+      if (r.type !== 'review') return
+      const current = firstDays.get(r.character)
+      if (!current || r.dayKey < current) {
+        firstDays.set(r.character, r.dayKey)
+      }
+    })
+  return firstDays
+}
+
+/** Get reviews for a child within a dayKey range (inclusive) */
+export async function getReviewsForChildInRange(
+  childId: string,
+  fromDay: string,
+  toDay: string,
+): Promise<ReviewEntry[]> {
+  return db.logs
+    .where('[childId+dayKey]')
+    .between([childId, fromDay], [childId, toDay], true, true)
+    .filter(r => r.type === 'review')
+    .sortBy('dayKey') as Promise<ReviewEntry[]>
 }
 
 // ============================================================

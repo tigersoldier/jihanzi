@@ -95,7 +95,7 @@ interface UseTodayReturn {
 }
 
 export function useToday(): UseTodayReturn {
-  const { state, submitReview } = useApp()
+  const { state, submitReview, selectedChildId, setSelectedChildId } = useApp()
   const todayKey = getTodayKey()
   const dayType = getDayType(todayKey)
   const dayTypeLabel = getDayTypeLabel(dayType)
@@ -104,9 +104,6 @@ export function useToday(): UseTodayReturn {
   const [phase, setPhase] = useState<SessionPhase>('idle')
   const [taskIndex, setTaskIndex] = useState(0)
   const [round, setRound] = useState(1)
-  const [selectedChildId, setSelectedChildId] = useState<string>(
-    () => state.children[0]?.id || ''
-  )
   const [sessionReviews, setSessionReviews] = useState<ReviewEntry[]>([])
   const [sessionStats, setSessionStats] = useState({ a: 0, b: 0, c: 0, d: 0 })
   const [ratingAnimation, setRatingAnimation] = useState<string | null>(null)
@@ -166,16 +163,6 @@ export function useToday(): UseTodayReturn {
     if (!childId) return
     setDoneToday(isDayDone(childId, todayKey))
   }, [state.children, selectedChildId, todayKey])
-
-  // Auto-select the first child when children become available after
-  // async IndexedDB load. The useState initializer (line 85-87) runs
-  // during the first render when state.children may still be empty;
-  // this effect fills the gap.
-  useEffect(() => {
-    if (state.children.length > 0 && !selectedChildId) {
-      setSelectedChildId(state.children[0].id)
-    }
-  }, [state.children, selectedChildId])
 
   // Persist session state to localStorage whenever it changes.
   useEffect(() => {

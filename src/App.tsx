@@ -4,16 +4,16 @@ import { AppProvider, useApp } from './state/AppContext'
 import { SyncProvider } from './state/SyncContext'
 import Layout from './components/layout/Layout'
 import LoginPage from './components/auth/LoginPage'
-import TodayPage from './components/today/TodayPage'
+import ProgressPage from './components/today/ProgressPage'
 import ChildPage from './components/child/ChildPage'
 import WordBookPage from './components/wordbook/WordBookPage'
 import SettingsPage from './components/settings/SettingsPage'
 
-export type Tab = 'today' | 'child' | 'wordbook'
+export type Tab = 'progress' | 'child' | 'wordbook'
 
 function AppContent() {
   const { isLoggedIn, isLoading } = useAuth()
-  const [activeTab, setActiveTab] = useState<Tab>('today')
+  const [activeTab, setActiveTab] = useState<Tab>('progress')
   const [showSettings, setShowSettings] = useState(false)
 
   // Show loading state
@@ -44,7 +44,7 @@ function AppContent() {
       onTabChange={setActiveTab}
       onSettingsClick={() => setShowSettings(true)}
     >
-      {activeTab === 'today' && <TodayPage />}
+      {activeTab === 'progress' && <ProgressPage />}
       {activeTab === 'child' && <ChildPage />}
       {activeTab === 'wordbook' && <WordBookPage />}
     </Layout>
