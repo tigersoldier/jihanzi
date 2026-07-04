@@ -427,13 +427,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     logs: AnyLogEntry[],
   ): Promise<void> => {
     // 1. Save the snapshot to IndexedDB
-    await saveSnapshot(snapshot as Snapshot)
+    await saveSnapshot(snapshot)
     // 2. Append all log entries
     if (logs.length > 0) {
       await appendLogs(logs)
     }
     // 3. Replay to rebuild state
-    const reconstructed = replayLog(snapshot as Snapshot, logs)
+    const reconstructed = replayLog(snapshot, logs)
     setState(reconstructed)
     setLogCount(logs.length)
 

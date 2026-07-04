@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import {
   DndContext,
   closestCenter,
@@ -39,18 +39,24 @@ export default function CharacterList({ characters, onReorder, onRemove, profici
     }),
   )
 
+  // Stable refs so handleDragEnd never invalidates on array reference changes
+  const charsRef = useRef(characters)
+  charsRef.current = characters
+  const onReorderRef = useRef(onReorder)
+  onReorderRef.current = onReorder
+
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event
     if (!over || active.id === over.id) return
 
-    const oldIndex = characters.findIndex((_, i) => `char-${i}` === active.id)
-    const newIndex = characters.findIndex((_, i) => `char-${i}` === over.id)
+    const chars = charsRef.current
+    const oldIndex = chars.findIndex((_, i) => `char-${i}` === active.id)
+    const newIndex = chars.findIndex((_, i) => `char-${i}` === over.id)
 
     if (oldIndex === -1 || newIndex === -1) return
 
-    const newChars = arrayMove(characters, oldIndex, newIndex)
-    onReorder(newChars)
-  }, [characters, onReorder])
+    onReorderRef.current(arrayMove(chars, oldIndex, newIndex))
+  }, [])
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
