@@ -4,32 +4,7 @@ import { useApp } from '../state/AppContext'
 import { getReviewsForChildChar, getReviewsForChildInRange, getFirstReviewDays } from '../data/db'
 import { getDayType } from '../utils/date'
 
-// ============================================================
-// Proficiency helpers
-// ============================================================
-
-export type Proficiency = 'mastered' | 'progressing' | 'weak' | 'unlearned'
-
-export function getProficiency(sm2State: SM2State | undefined): Proficiency {
-  if (!sm2State) return 'unlearned'
-  if (sm2State.lastGrade === 'a' && sm2State.repetitions >= 3) return 'mastered'
-  if (sm2State.lastGrade === 'd' || (sm2State.lastGrade === 'c' && sm2State.repetitions < 2)) return 'weak'
-  return 'progressing'
-}
-
-export const PROFICIENCY_COLORS: Record<Proficiency, string> = {
-  mastered: 'bg-green-100 text-green-700 border-green-300',
-  progressing: 'bg-blue-100 text-blue-700 border-blue-300',
-  weak: 'bg-yellow-100 text-yellow-700 border-yellow-300',
-  unlearned: 'bg-gray-100 text-gray-400 border-gray-200',
-}
-
-export const PROFICIENCY_DOT: Record<Proficiency, string> = {
-  mastered: '🟢',
-  progressing: '🔵',
-  weak: '🟡',
-  unlearned: '⚪',
-}
+export { type Proficiency, getProficiency, PROFICIENCY_COLORS, PROFICIENCY_DOT } from '../core/proficiency'
 
 // ============================================================
 // Character stats

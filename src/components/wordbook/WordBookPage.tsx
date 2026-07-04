@@ -5,8 +5,7 @@ import WordBookSwitcher from './WordBookSwitcher'
 import CharacterList from './CharacterList'
 import CharacterDetail from '../common/CharacterDetail'
 import EmptyState from '../common/EmptyState'
-import { getProficiency, PROFICIENCY_DOT } from '../../hooks/useStats'
-import type { SM2State } from '../../core/types'
+import { getProficiency } from '../../core/proficiency'
 
 type FilterMode = 'all' | 'learned' | 'unlearned'
 
@@ -234,7 +233,7 @@ export default function WordBookPage() {
           characters={filteredChars}
           onReorder={handleReorder}
           onRemove={handleRemove}
-          proficiencyMap={progress ? proficiencyMap : undefined}
+          proficiencyMap={proficiencyMap}
           onCharClick={selectedChildId ? (char => setDetailChar(char)) : undefined}
         />
       ) : (

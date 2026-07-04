@@ -17,7 +17,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { getPinyin } from '../../utils/chars'
-import { PROFICIENCY_DOT, type Proficiency } from '../../hooks/useStats'
+import { PROFICIENCY_DOT, type Proficiency } from '../../core/proficiency'
 
 interface CharacterListProps {
   characters: string[]
