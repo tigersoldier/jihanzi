@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useApp } from '../../state/AppContext'
 import { useToday } from '../../hooks/useToday'
 import { useHistory, type DaySummary } from '../../hooks/useStats'
-import { formatDateLabel, getDayTypeLabel, getDayType } from '../../utils/date'
+import { todayKey, formatDateLabel, getDayTypeLabel, getDayType } from '../../utils/date'
 import ProgressBar from './ProgressBar'
 import CharacterCard from './CharacterCard'
 import RatingButtons from './RatingButtons'
@@ -10,14 +10,6 @@ import RoundComplete from './RoundComplete'
 import Celebration from './Celebration'
 import CharacterDetail from '../common/CharacterDetail'
 import EmptyState from '../common/EmptyState'
-
-function todayKey(): string {
-  const d = new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
 
 function currentYearMonth(): string {
   const d = new Date()
@@ -43,9 +35,119 @@ function nextMonth(ym: string): string {
   return `${y}-${String(m + 1).padStart(2, '0')}`
 }
 
+// ============================================================
+// TodaySession — self-contained learning session UI.
+// Calls useToday() internally so it only runs when mounted.
+// ============================================================
+
+export function TodaySession() {
+  const { state, setSelectedChildId } = useApp()
+  const today = useToday()
+  const {
+    phase,
+    dayType,
+    currentTask,
+    taskIndex,
+    totalTasks,
+    round,
+    sessionStats,
+    ratingAnimation,
+    children,
+    selectedChildId,
+    handleRate,
+    startSession,
+    handleContinueRound,
+    handleSkipRound,
+    handleDone,
+    isReady,
+  } = today
+
+  return (
+    <div className="space-y-4">
+      {/* Child selector when multiple children */}
+      {children.length > 1 && (
+        <div className="flex justify-end">
+          <select
+            value={selectedChildId}
+            onChange={e => setSelectedChildId(e.target.value)}
+            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white"
+          >
+            {children.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* Idle state */}
+      {phase === 'idle' && (
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
+          <div className="text-6xl mb-4">{dayType === '学新日' ? '📖' : '📝'}</div>
+          <h2 className="text-xl font-bold text-gray-800 mb-2">
+            {isReady ? `准备复习 ${totalTasks} 个字` : '今天没有需要复习的字'}
+          </h2>
+          <p className="text-gray-400 text-sm mb-6">
+            {dayType === '学新日' ? '学新日：复习 + 新字学习' : '纯复习日：巩固已学汉字'}
+          </p>
+          {isReady && (
+            <button
+              onClick={startSession}
+              className="w-full py-3 px-6 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors"
+            >
+              开始学习
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Reviewing phase */}
+      {phase === 'reviewing' && currentTask && (
+        <div className="space-y-4">
+          {round > 1 && (
+            <div className="text-center">
+              <span className="inline-block bg-amber-100 text-amber-700 text-xs font-medium px-3 py-1 rounded-full">
+                第 {round} 轮
+              </span>
+            </div>
+          )}
+          <ProgressBar current={taskIndex} total={totalTasks} />
+          <CharacterCard
+            character={currentTask.character}
+            isNew={currentTask.isNew}
+            sm2State={currentTask.sm2State}
+            ratingAnimation={ratingAnimation}
+            slideDirection="in"
+          />
+          <RatingButtons onRate={handleRate} />
+        </div>
+      )}
+
+      {/* Round complete */}
+      {phase === 'roundComplete' && (
+        <RoundComplete
+          round={round}
+          needReview={sessionStats.c + sessionStats.d}
+          maxRounds={state.settings.maxRounds}
+          onContinue={handleContinueRound}
+          onSkip={handleSkipRound}
+        />
+      )}
+
+      {/* Celebration */}
+      {phase === 'celebration' && (
+        <Celebration
+          total={sessionStats.a + sessionStats.b + sessionStats.c + sessionStats.d}
+          stats={sessionStats}
+          onDone={handleDone}
+        />
+      )}
+    </div>
+  )
+}
+
 export default function ProgressPage() {
   const { state, selectedChildId, setSelectedChildId } = useApp()
-  const today = todayKey()
+  const tKey = todayKey()
   const curYM = currentYearMonth()
 
   const [viewMonth, setViewMonth] = useState(curYM)
@@ -54,26 +156,10 @@ export default function ProgressPage() {
 
   const isCurrentMonth = viewMonth === curYM
 
-  // ---- Today session (only for current month) ----
-  const todayHook = useToday()
-  const {
-    phase,
-    dayType,
-    dateLabel,
-    currentTask,
-    taskIndex,
-    totalTasks,
-    round,
-    sessionStats,
-    ratingAnimation,
-    children,
-    handleRate,
-    startSession,
-    handleContinueRound,
-    handleSkipRound,
-    handleDone,
-    isReady,
-  } = todayHook
+  // Header values — computed without useToday
+  const dateLabel = formatDateLabel(tKey)
+  const dayType = getDayTypeLabel(getDayType(tKey))
+  const dayChildren = state.children.map(c => ({ id: c.id, name: c.name, hasTasks: true }))
 
   const activeChildId = selectedChildId || state.children[0]?.id || ''
 
@@ -141,92 +227,25 @@ export default function ProgressPage() {
             {dayType}
           </span>
         </div>
-        {children.length > 1 && (
+        {dayChildren.length > 1 && (
           <select
             value={activeChildId}
             onChange={e => setSelectedChildId(e.target.value)}
             className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white"
           >
-            {children.map(c => (
+            {dayChildren.map(c => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
         )}
-        {children.length === 1 && (
-          <span className="text-sm text-gray-500">{children[0]?.name}</span>
+        {dayChildren.length === 1 && (
+          <span className="text-sm text-gray-500">{dayChildren[0]?.name}</span>
         )}
       </div>
 
       {/* ---- Today's tasks (only in current month) ---- */}
-      {isCurrentMonth && (
-        <>
-          {/* Idle state */}
-          {phase === 'idle' && (
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
-              <div className="text-6xl mb-4">{dayType === '学新日' ? '📖' : '📝'}</div>
-              <h2 className="text-xl font-bold text-gray-800 mb-2">
-                {isReady ? `准备复习 ${totalTasks} 个字` : '今天没有需要复习的字'}
-              </h2>
-              <p className="text-gray-400 text-sm mb-6">
-                {dayType === '学新日' ? '学新日：复习 + 新字学习' : '纯复习日：巩固已学汉字'}
-              </p>
-              {isReady && (
-                <button
-                  onClick={startSession}
-                  className="w-full py-3 px-6 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors"
-                >
-                  开始学习
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Reviewing phase */}
-          {phase === 'reviewing' && currentTask && (
-            <div className="space-y-4">
-              {round > 1 && (
-                <div className="text-center">
-                  <span className="inline-block bg-amber-100 text-amber-700 text-xs font-medium px-3 py-1 rounded-full">
-                    第 {round} 轮
-                  </span>
-                </div>
-              )}
-              <ProgressBar current={taskIndex} total={totalTasks} />
-              <CharacterCard
-                character={currentTask.character}
-                isNew={currentTask.isNew}
-                sm2State={currentTask.sm2State}
-                ratingAnimation={ratingAnimation}
-                slideDirection="in"
-              />
-              <RatingButtons onRate={handleRate} />
-            </div>
-          )}
-
-          {/* Round complete */}
-          {phase === 'roundComplete' && (
-            <RoundComplete
-              round={round}
-              needReview={sessionStats.c + sessionStats.d}
-              maxRounds={state.settings.maxRounds}
-              onContinue={handleContinueRound}
-              onSkip={handleSkipRound}
-            />
-          )}
-
-          {/* Celebration */}
-          {phase === 'celebration' && (
-            <Celebration
-              total={sessionStats.a + sessionStats.b + sessionStats.c + sessionStats.d}
-              stats={sessionStats}
-              onDone={handleDone}
-            />
-          )}
-
-          {/* Divider between today and history */}
-          <div className="border-t border-gray-200" />
-        </>
-      )}
+      {isCurrentMonth && <TodaySession />}
+      {isCurrentMonth && <div className="border-t border-gray-200" />}
 
       {/* ---- Monthly history ---- */}
       <div>
