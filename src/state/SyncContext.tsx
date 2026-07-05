@@ -12,8 +12,9 @@ import {
   startBackgroundSync,
   stopBackgroundSync,
   checkOnlineStatus,
-  pushChanges,
+  syncOnce,
   initialPull,
+  ensureIntervalFilesOnDrive,
 } from '../data/sync'
 import { useAuth } from './AuthContext'
 import { useApp } from './AppContext'
@@ -42,11 +43,13 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
     // Initial pull from Drive — if remote data was merged into
     // IndexedDB, tell AppContext to reload so the UI picks it up.
-    initialPull().then((didMerge) => {
+    initialPull().then((pullResult) => {
       setLastSyncTime(Date.now())
-      if (didMerge) {
+      if (pullResult.didMerge) {
         reloadState()
       }
+      // Ensure Drive has all local interval files (startup check only)
+      ensureIntervalFilesOnDrive().catch(() => {})
     })
 
     // Start background sync
@@ -65,8 +68,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   }, [isLoggedIn])
 
   const syncNow = async () => {
-    await pushChanges()
-    await initialPull()
+    await syncOnce()
     setLastSyncTime(Date.now())
   }
 

@@ -9,7 +9,7 @@
 // These should be configured by the user for their own Google Cloud project
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
 const GOOGLE_API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || ''
-const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive'
 const USERINFO_PROFILE_SCOPE = 'https://www.googleapis.com/auth/userinfo.profile'
 const USERINFO_EMAIL_SCOPE = 'https://www.googleapis.com/auth/userinfo.email'
 const OAUTH_SCOPE = [DRIVE_SCOPE, USERINFO_PROFILE_SCOPE, USERINFO_EMAIL_SCOPE].join(' ')
@@ -21,6 +21,7 @@ export const DEFAULT_TOKEN_BUFFER_MS = 60000
 // localStorage keys
 const STORAGE_KEY_TOKEN = 'jihanzi_auth_token'
 const STORAGE_KEY_EXPIRY = 'jihanzi_auth_expiry'
+const STORAGE_KEY_SCOPES = 'jihanzi_auth_scopes'
 const STORAGE_KEY_USER = 'jihanzi_auth_user'
 
 let tokenClient: google.accounts.oauth2.TokenClient | null = null
@@ -34,6 +35,7 @@ export function saveTokenToStorage(token: string, expiry: number): void {
   try {
     localStorage.setItem(STORAGE_KEY_TOKEN, token)
     localStorage.setItem(STORAGE_KEY_EXPIRY, String(expiry))
+    localStorage.setItem(STORAGE_KEY_SCOPES, OAUTH_SCOPE)
   } catch {
     // localStorage may be unavailable in some environments
   }
@@ -43,12 +45,13 @@ export function saveTokenToStorage(token: string, expiry: number): void {
  * Load token and expiry from localStorage.
  * Returns null if no valid stored data exists.
  */
-export function loadTokenFromStorage(): { token: string; expiry: number } | null {
+export function loadTokenFromStorage(): { token: string; expiry: number; scopes: string } | null {
   try {
     const token = localStorage.getItem(STORAGE_KEY_TOKEN)
     const expiry = localStorage.getItem(STORAGE_KEY_EXPIRY)
+    const scopes = localStorage.getItem(STORAGE_KEY_SCOPES) || ''
     if (token && expiry) {
-      return { token, expiry: parseInt(expiry, 10) }
+      return { token, expiry: parseInt(expiry, 10), scopes }
     }
   } catch {
     // localStorage may be unavailable
@@ -63,6 +66,7 @@ export function clearTokenStorage(): void {
   try {
     localStorage.removeItem(STORAGE_KEY_TOKEN)
     localStorage.removeItem(STORAGE_KEY_EXPIRY)
+    localStorage.removeItem(STORAGE_KEY_SCOPES)
   } catch {
     // localStorage may be unavailable
   }
@@ -110,7 +114,18 @@ export function clearUserStorage(): void {
  */
 export function restoreToken(bufferMs: number = DEFAULT_TOKEN_BUFFER_MS): boolean {
   const stored = loadTokenFromStorage()
-  if (stored && Date.now() < stored.expiry - bufferMs) {
+  if (!stored) return false
+
+  // Detect scope upgrades — if the stored token was issued with old (narrower)
+  // scopes, clear it so the user is forced to re-authorize with the current scopes.
+  // Without this check, a token issued with only userinfo scopes would be
+  // restored and Drive API calls would fail with 403/insufficient scopes.
+  if (stored.scopes !== OAUTH_SCOPE) {
+    clearTokenStorage()
+    return false
+  }
+
+  if (Date.now() < stored.expiry - bufferMs) {
     accessToken = stored.token
     tokenExpiry = stored.expiry
     return true

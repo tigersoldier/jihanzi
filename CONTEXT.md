@@ -200,29 +200,49 @@ Drive 文件只增不删——本地裁剪不从 Drive 删除对应文件。
 
 ## 同步
 
+### 同步协议 (Sync Protocol)
+
+采用 **pull → diff → push** 协议：
+
+1. **拉取 (Pull)**：`listFiles(modifiedTime > lastKnownRemoteTime)` 只读变更文件
+2. **对比 (Diff)**：`(timestamp, type, entityId)` 三元组内容去重，找出
+   `remoteOnly`（远程独有）和 `localOnly`（本地独有）
+3. **合并 (Merge)**：`remoteOnly` 追加到本地 IndexedDB
+4. **推送 (Push)**：`localOnly` 按 UTC 区间路由到 Drive
+5. **更新水位 (Update)**：`lastKnownRemoteTime = max(Drive modifiedTime)`
+
+### 同步水位线 (lastKnownRemoteTime)
+
+记录 Google Drive 上已知文件的最新 `modifiedTime`（Google 服务端时间）。
+全程依赖 Drive 返回的时间戳，不碰本地时钟。用于增量拉取时筛选变更文件。
+
 ### 即时同步 (Immediate Sync)
 
-每次复习评分或生字本编辑后立即将快照和增量日志推送到 Google Drive。
-推送时按日志 timestamp 路由到对应的区间文件，采用"下载现有内容 →
-追加新行 → 上传覆盖"的分片写入策略。
+每次复习评分或生字本编辑后，经 2 秒防抖触发 `syncOnce()`，先拉取远程变更、
+做 diff、再推送本地差异。
+
+### 启动时区间文件完整性检查 (Startup Interval File Check)
+
+App 启动时，`initialPull` 完成后额外调用 `ensureIntervalFilesOnDrive()`，
+确保 Drive 上不缺少本地存在的日志区间文件。通过对比本地日志的区间范围与
+Drive 上已有文件列表，找出缺失的区间并推送。仅启动时执行一次。
 
 ### 定时兜底 (Periodic Sync)
 
-每 5 分钟后台执行一次全量推拉，防止断网期间未推送的数据残留。
+每 5 分钟后台执行一次 `syncOnce()`，防止断网期间未推送的数据残留。
 
 ### 远程拉取与合并 (Remote Pull & Merge)
 
-拉取远程日志时，按 `modifiedTime > lastSyncTime` 筛选变更的日志文件，
-逐个下载处理。若拉取到早于最新快照时间戳的旧日志，找出 ≤ 最旧日志
-时间戳的最近历史快照作为重放起点，逐区间文件重放日志并重新生成所有
-受影响的历史快照，上传 Drive。
+拉取远程日志时，按 `modifiedTime > lastKnownRemoteTime` 筛选变更的日志文件，
+逐个下载处理。若拉取到早于最新快照时间戳的旧日志，找出 ≤ 最旧日志时间戳的
+最近历史快照作为重放起点，逐区间文件重放日志并重新生成所有受影响的历史快照，
+上传 Drive。
 
 ### 冲突处理 (Conflict Resolution)
 
 追加日志天然无冲突：条目不可变，多设备产生的日志条目取并集。
-Push 时通过下载 + 拼接 + 上传方式写入分片文件，顺序写入（非并发）
-安全。若远程日志早于全部历史快照（离线超过约 50 天），做硬截断——
-早于最老历史快照的远程日志丢弃，但保留在源设备上。
+同步协议通过内容去重（三元组）而非时间戳过滤来识别差异，避免时钟偏斜丢数据。
+Push 时通过下载 + 拼接 + 上传方式写入分片文件，顺序写入安全。
 
 ---
 

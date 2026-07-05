@@ -181,6 +181,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     if (changed) {
       setState(newState)
+      // Trigger debounced push to Google Drive
+      notifyDataChanged()
       // Prune logs if over threshold (500k), fire-and-forget
       getLogCount().then(count => {
         if (count > 500_000) pruneOldestLogs(1000)

@@ -10,12 +10,22 @@
  *   │   └── log.jsonl
  */
 
-import { getAccessToken, setGapiToken } from './gapi'
+import { getAccessToken, setGapiToken, clearTokenStorage } from './gapi'
 
 const ROOT_FOLDER_NAME = '记汉字'
 const META_FILE_NAME = 'app_meta.json'
-const SNAPSHOT_FILE_NAME = 'snapshot.json'
-const LOG_FILE_NAME = 'log.jsonl'
+const SNAPSHOT_CURRENT_FILE_NAME = 'snapshot_current.json'
+const SNAPSHOT_LEGACY_FILE_NAME = 'snapshot.json'
+
+/** Build a log file name for a given UTC interval key: log_{key}.jsonl */
+export function logFileName(intervalKey: string): string {
+  return `log_${intervalKey}.jsonl`
+}
+
+/** Build a historical snapshot file name: snapshot_{key}.json */
+export function snapshotFileName(intervalKey: string): string {
+  return `snapshot_${intervalKey}.json`
+}
 
 // MIME types with explicit UTF-8 charset for Google Drive uploads.
 // Including charset=utf-8 tells Drive to serve the file with charset metadata,
@@ -27,6 +37,28 @@ const LOG_FILE_NAME = 'log.jsonl'
 const JSON_MIME = 'application/json; charset=utf-8'
 const NDJSON_MIME = 'text/plain; charset=utf-8'
 
+/**
+ * Check whether a Drive API error is caused by insufficient OAuth scopes
+ * (e.g., a token issued before the scope was upgraded from drive.file to drive).
+ * If so, clear the stale token so the next auth cycle forces re-consent.
+ */
+function handleDriveError(err: unknown): never {
+  if (err instanceof Error) {
+    const msg = err.message || ''
+    if (msg.includes('403') || msg.includes('insufficient') || msg.includes('scope')) {
+      clearTokenStorage()
+    }
+  }
+  // Check the body for scope-related errors (gapi wraps Drive errors in the message)
+  if (typeof err === 'object' && err !== null) {
+    const body = String((err as any).body || '')
+    if (body.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT')) {
+      clearTokenStorage()
+    }
+  }
+  throw err
+}
+
 // ============================================================
 // Folder Operations
 // ============================================================
@@ -35,31 +67,35 @@ const NDJSON_MIME = 'text/plain; charset=utf-8'
  * Find or create the root "记汉字" folder.
  */
 export async function findOrCreateRootFolder(): Promise<string> {
-  const token = await getAccessToken()
-  setGapiToken(token)
+  try {
+    const token = await getAccessToken()
+    setGapiToken(token)
 
-  // Search for existing folder
-  const searchResponse = await gapi.client.drive.files.list({
-    q: `name = '${ROOT_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
-    fields: 'files(id, name)',
-    spaces: 'drive',
-  })
+    // Search for existing folder
+    const searchResponse = await gapi.client.drive.files.list({
+      q: `name = '${ROOT_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+      fields: 'files(id, name)',
+      spaces: 'drive',
+    })
 
-  const files = searchResponse.result.files || []
-  if (files.length > 0) {
-    return files[0].id!
+    const files = searchResponse.result.files || []
+    if (files.length > 0) {
+      return files[0].id!
+    }
+
+    // Create new folder
+    const createResponse = await gapi.client.drive.files.create({
+      resource: {
+        name: ROOT_FOLDER_NAME,
+        mimeType: 'application/vnd.google-apps.folder',
+      },
+      fields: 'id',
+    })
+
+    return createResponse.result.id!
+  } catch (err) {
+    handleDriveError(err)
   }
-
-  // Create new folder
-  const createResponse = await gapi.client.drive.files.create({
-    resource: {
-      name: ROOT_FOLDER_NAME,
-      mimeType: 'application/vnd.google-apps.folder',
-    },
-    fields: 'id',
-  })
-
-  return createResponse.result.id!
 }
 
 /**
@@ -120,6 +156,27 @@ export async function findFile(
     return { id: files[0].id!, modifiedTime: files[0].modifiedTime! }
   }
   return null
+}
+
+/**
+ * List all non-trashed files in a folder.
+ * Returns file metadata: id, name, modifiedTime.
+ */
+export async function listFiles(
+  folderId: string,
+): Promise<Array<{ id: string; name: string; modifiedTime: string }>> {
+  const token = await getAccessToken()
+  setGapiToken(token)
+
+  const response = await gapi.client.drive.files.list({
+    q: `'${folderId}' in parents and trashed = false`,
+    fields: 'files(id, name, modifiedTime)',
+    spaces: 'drive',
+    pageSize: 1000,
+  })
+
+  const files = response.result.files || []
+  return files.map(f => ({ id: f.id!, name: f.name!, modifiedTime: f.modifiedTime! }))
 }
 
 /**
@@ -203,28 +260,6 @@ export async function writeFile(
   }
 }
 
-/**
- * Append a line to a log file on Drive.
- * For .jsonl files, we append a line with the log entry.
- */
-export async function appendToLogFile(
-  folderId: string,
-  entry: string,
-  existingFileId?: string | null,
-): Promise<string> {
-  const token = await getAccessToken()
-  setGapiToken(token)
-
-  if (existingFileId) {
-    // For Drive, we need to read-modify-write since there's no real append
-    const current = await readFile(existingFileId)
-    const updated = current + entry + '\n'
-    return writeFile(folderId, LOG_FILE_NAME, updated, NDJSON_MIME, existingFileId)
-  } else {
-    return writeFile(folderId, LOG_FILE_NAME, entry + '\n', NDJSON_MIME)
-  }
-}
-
 // ============================================================
 // High-Level Sync Operations
 // ============================================================
@@ -235,66 +270,102 @@ export async function appendToLogFile(
  */
 export async function pullAllData(): Promise<{
   meta: Record<string, unknown> | null
-  childData: Record<string, { snapshot: string | null; logs: string[] }>
+  childData: Record<string, {
+    snapshot: string | null
+    historicalSnapshots: Array<{ key: string; data: string }>
+    logs: string[]
+  }>
 }> {
-  const rootId = await findOrCreateRootFolder()
+  try {
+    const rootId = await findOrCreateRootFolder()
 
-  // Read app_meta.json
-  let meta: Record<string, unknown> | null = null
-  const metaFile = await findFile(rootId, META_FILE_NAME)
-  if (metaFile) {
-    try {
-      const content = await readFile(metaFile.id)
-      meta = JSON.parse(content)
-    } catch {
-      console.warn('Failed to parse app_meta.json')
-    }
-  }
-
-  // List child folders
-  const token = await getAccessToken()
-  setGapiToken(token)
-
-  const childrenResponse = await gapi.client.drive.files.list({
-    q: `'${rootId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
-    fields: 'files(id, name)',
-    spaces: 'drive',
-  })
-
-  const folders = childrenResponse.result.files || []
-  const childData: Record<string, { snapshot: string | null; logs: string[] }> = {}
-
-  for (const folder of folders) {
-    const folderName = folder.name!
-    const folderId = folder.id!
-
-    // Read snapshot
-    let snapshot: string | null = null
-    const snapshotFile = await findFile(folderId, SNAPSHOT_FILE_NAME)
-    if (snapshotFile) {
+    // Read app_meta.json
+    let meta: Record<string, unknown> | null = null
+    const metaFile = await findFile(rootId, META_FILE_NAME)
+    if (metaFile) {
       try {
-        snapshot = await readFile(snapshotFile.id)
+        const content = await readFile(metaFile.id)
+        meta = JSON.parse(content)
       } catch {
-        console.warn(`Failed to read snapshot for ${folderName}`)
+        console.warn('Failed to parse app_meta.json')
       }
     }
 
-    // Read log
-    const logs: string[] = []
-    const logFile = await findFile(folderId, LOG_FILE_NAME)
-    if (logFile) {
-      try {
-        const content = await readFile(logFile.id)
-        logs.push(...content.split('\n').filter(l => l.trim()))
-      } catch {
-        console.warn(`Failed to read log for ${folderName}`)
+    // List child folders
+    const token = await getAccessToken()
+    setGapiToken(token)
+
+    const childrenResponse = await gapi.client.drive.files.list({
+      q: `'${rootId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+      fields: 'files(id, name)',
+      spaces: 'drive',
+    })
+
+    const folders = childrenResponse.result.files || []
+    const childData: Record<string, {
+      snapshot: string | null
+      historicalSnapshots: Array<{ key: string; data: string }>
+      logs: string[]
+    }> = {}
+
+    for (const folder of folders) {
+      const folderName = folder.name!
+      const folderId = folder.id!
+
+      // List all files in this child folder
+      const allFiles = await listFiles(folderId)
+
+      // ---- Read current snapshot ----
+      // Primary: snapshot_current.json (new format)
+      // Fallback: snapshot.json (legacy format from older app versions)
+      let snapshot: string | null = null
+      const currentFile = allFiles.find(f => f.name === SNAPSHOT_CURRENT_FILE_NAME)
+      const legacyFile = allFiles.find(f => f.name === SNAPSHOT_LEGACY_FILE_NAME)
+      const snapshotFile = currentFile || legacyFile
+      if (snapshotFile) {
+        try {
+          snapshot = await readFile(snapshotFile.id)
+        } catch {
+          console.warn(`Failed to read snapshot for ${folderName}`)
+        }
       }
+
+      // ---- Read historical snapshots ----
+      const historicalSnapshots: Array<{ key: string; data: string }> = []
+      const snapshotPattern = /^snapshot_(\d{4}-\d{2}-\d{2})\.json$/
+      for (const f of allFiles) {
+        const match = f.name.match(snapshotPattern)
+        if (match) {
+          try {
+            const data = await readFile(f.id)
+            historicalSnapshots.push({ key: match[1], data })
+          } catch {
+            console.warn(`Failed to read historical snapshot ${f.name} for ${folderName}`)
+          }
+        }
+      }
+
+      // ---- Read all interval-based log files ----
+      const logs: string[] = []
+      const logPattern = /^log_(\d{4}-\d{2}-\d{2})\.jsonl$/
+      for (const f of allFiles) {
+        if (logPattern.test(f.name)) {
+          try {
+            const content = await readFile(f.id)
+            logs.push(...content.split('\n').filter(l => l.trim()))
+          } catch {
+            console.warn(`Failed to read log file ${f.name} for ${folderName}`)
+          }
+        }
+      }
+
+      childData[folderName] = { snapshot, historicalSnapshots, logs }
     }
 
-    childData[folderName] = { snapshot, logs }
+    return { meta, childData }
+  } catch (err) {
+    handleDriveError(err)
   }
-
-  return { meta, childData }
 }
 
 // ============================================================
@@ -314,42 +385,46 @@ export async function pushMeta(
 
 /**
  * Push a snapshot for a child folder.
+ * @param snapshotData — JSON string of the snapshot
+ * @param existingFileId — update this file instead of creating a new one
+ * @param fileName — override the file name (default: snapshot_current.json)
  */
 export async function pushSnapshot(
   childFolderId: string,
   snapshotData: string,
   existingFileId?: string | null,
+  fileName?: string,
 ): Promise<string> {
-  return writeFile(childFolderId, SNAPSHOT_FILE_NAME, snapshotData, JSON_MIME, existingFileId)
+  return writeFile(childFolderId, fileName || SNAPSHOT_CURRENT_FILE_NAME, snapshotData, JSON_MIME, existingFileId)
 }
 
 /**
  * Push log entries for a child folder (appends to existing log).
+ * @param logEntries — array of serialized JSON log entry strings
+ * @param existingFileId — update this file instead of creating a new one
+ * @param fileName — override the file name (e.g., log_2026-07-01.jsonl)
  */
 export async function pushLogs(
   childFolderId: string,
   logEntries: string[],
   existingFileId?: string | null,
+  fileName?: string,
 ): Promise<string> {
-  // Nothing to push — skip read-modify-write to avoid appending spurious
-  // trailing newlines to the Drive file on every sync cycle.
   if (logEntries.length === 0) {
     return existingFileId || ''
   }
 
+  const name = fileName || 'log.jsonl'
   const token = await getAccessToken()
   setGapiToken(token)
 
   if (existingFileId) {
     // Read existing content once, append all new entries in batch, write once.
-    // This avoids the O(n²) read-modify-write loop where each entry triggered
-    // a full download + upload of the growing log file.
     const current = await readFile(existingFileId)
-    // Normalize: ensure newline-terminated before appending new entries
     const normalized = current && !current.endsWith('\n') ? current + '\n' : current
     const updated = normalized + logEntries.join('\n') + '\n'
-    return writeFile(childFolderId, LOG_FILE_NAME, updated, NDJSON_MIME, existingFileId)
+    return writeFile(childFolderId, name, updated, NDJSON_MIME, existingFileId)
   } else {
-    return writeFile(childFolderId, LOG_FILE_NAME, logEntries.join('\n') + '\n', NDJSON_MIME)
+    return writeFile(childFolderId, name, logEntries.join('\n') + '\n', NDJSON_MIME)
   }
 }

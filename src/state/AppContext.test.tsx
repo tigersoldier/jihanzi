@@ -18,14 +18,18 @@ const { mockNotifyDataChanged } = vi.hoisted(() => ({
 }))
 
 vi.mock('../data/sync', () => ({
-  pushChanges: vi.fn(),
   notifyDataChanged: () => mockNotifyDataChanged(),
   getSyncStatus: () => 'online',
   onSyncStatusChange: vi.fn().mockReturnValue(() => {}),
   startBackgroundSync: vi.fn(),
   stopBackgroundSync: vi.fn(),
   checkOnlineStatus: vi.fn(),
-  initialPull: vi.fn().mockResolvedValue(undefined),
+  initialPull: vi.fn().mockResolvedValue({
+    didMerge: false,
+    driveIsEmpty: true,
+    remoteSnapshot: null,
+    remoteLogEntries: [],
+  }),
   SyncStatus: {},
 }))
 
@@ -80,8 +84,8 @@ vi.mock('../data/db', () => ({
   pruneOldSnapshots: vi.fn().mockResolvedValue(undefined),
   getLogCount: vi.fn().mockResolvedValue(0),
   pruneOldestLogs: vi.fn().mockResolvedValue(0),
-  getLastSyncTime: vi.fn().mockResolvedValue(null),
-  setLastSyncTime: vi.fn(),
+  getLastKnownRemoteTime: vi.fn().mockResolvedValue(0),
+  setLastKnownRemoteTime: vi.fn(),
 }))
 
 function wrapper({ children }: { children: ReactNode }) {

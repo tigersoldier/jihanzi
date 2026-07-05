@@ -150,14 +150,44 @@ export async function getLogsAfter(timestamp: number): Promise<AnyLogEntry[]> {
   return db.logs.where('timestamp').above(timestamp).toArray()
 }
 
+/**
+ * Get up to `limit` log entries at or after a timestamp, ordered by timestamp ascending.
+ * Pass `afterId` (the last-seen entry's auto-increment id) to resume without
+ * skipping entries that share the same timestamp as the batch boundary.
+ */
+export async function getLogsAfterPaginated(
+  timestamp: number,
+  limit: number,
+  afterId?: number,
+): Promise<AnyLogEntry[]> {
+  const results = await db.logs
+    .where('timestamp')
+    .aboveOrEqual(timestamp)
+    .limit(afterId !== undefined ? limit + 10 : limit)
+    .toArray()
+
+  if (afterId !== undefined) {
+    return results.filter(e => (e as any).id > afterId).slice(0, limit)
+  }
+  return results.slice(0, limit)
+}
+
+/** Get the earliest and latest log timestamps in IndexedDB */
+export async function getLogTimestampRange(): Promise<{ earliest: number | null; latest: number | null }> {
+  const count = await db.logs.count()
+  if (count === 0) return { earliest: null, latest: null }
+
+  const first = await db.logs.orderBy('timestamp').first()
+  const last = await db.logs.orderBy('timestamp').last()
+  return {
+    earliest: first?.timestamp ?? null,
+    latest: last?.timestamp ?? null,
+  }
+}
+
 /** Get log count */
 export async function getLogCount(): Promise<number> {
   return db.logs.count()
-}
-
-/** Delete logs older than a timestamp */
-export async function deleteLogsBefore(timestamp: number): Promise<number> {
-  return db.logs.where('timestamp').belowOrEqual(timestamp).delete()
 }
 
 /**
@@ -236,16 +266,6 @@ export async function getHistoricalSnapshots(): Promise<Snapshot[]> {
  * Searches both current and historical snapshots.
  * Used for remote merge: find the base snapshot to replay from.
  */
-export async function findBaseSnapshot(beforeTimestamp: number): Promise<Snapshot | null> {
-  const row = await db.snapshot
-    .where('timestamp')
-    .belowOrEqual(beforeTimestamp)
-    .reverse()
-    .first()
-  if (!row) return null
-  return { timestamp: row.timestamp, state: row.state }
-}
-
 /** Save/replace the current snapshot */
 export async function saveCurrentSnapshot(snapshot: Snapshot): Promise<void> {
   const row = { ...snapshot, type: SNAPSHOT_TYPE_CURRENT }
@@ -275,16 +295,6 @@ export async function pruneOldSnapshots(keepCount: number): Promise<void> {
   }
 }
 
-/** Get the count of snapshots (for debugging / diagnostics) */
-export async function getSnapshotCount(): Promise<number> {
-  return db.snapshot.count()
-}
-
-/** Save a snapshot (backward-compatible wrapper — saves as current) */
-export async function saveSnapshot(snapshot: Snapshot): Promise<void> {
-  return saveCurrentSnapshot(snapshot)
-}
-
 // ============================================================
 // Metadata Operations
 // ============================================================
@@ -300,14 +310,14 @@ export async function setMeta(key: string, value: unknown): Promise<void> {
   await db.meta.put({ key, value })
 }
 
-/** Get the last sync timestamp */
-export async function getLastSyncTime(): Promise<number> {
-  return (await getMeta<number>('lastSyncTime')) || 0
+/** Get the last known remote timestamp (Drive modifiedTime) */
+export async function getLastKnownRemoteTime(): Promise<number> {
+  return (await getMeta<number>('lastKnownRemoteTime')) || 0
 }
 
-/** Set the last sync timestamp */
-export async function setLastSyncTime(timestamp: number): Promise<void> {
-  await setMeta('lastSyncTime', timestamp)
+/** Set the last known remote timestamp (Drive modifiedTime) */
+export async function setLastKnownRemoteTime(timestamp: number): Promise<void> {
+  await setMeta('lastKnownRemoteTime', timestamp)
 }
 
 export default db

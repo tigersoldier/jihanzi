@@ -37,7 +37,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-import { writeFile, pushLogs, readFile } from './drive'
+import { writeFile, pushLogs, readFile, logFileName, snapshotFileName, listFiles, pushSnapshot } from './drive'
 
 describe('writeFile', () => {
   it('sends multipart body as a string (not FormData) so gapi can handle it', async () => {
@@ -288,5 +288,111 @@ describe('pushLogs', () => {
 
     // Must NOT create an empty file with just a newline
     expect(mockGapiRequest).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// Interval-based file naming
+// ============================================================
+
+describe('logFileName', () => {
+  it('returns log_{intervalKey}.jsonl', () => {
+    expect(logFileName('2026-07-01')).toBe('log_2026-07-01.jsonl')
+    expect(logFileName('2026-07-11')).toBe('log_2026-07-11.jsonl')
+    expect(logFileName('2026-07-21')).toBe('log_2026-07-21.jsonl')
+  })
+})
+
+describe('snapshotFileName', () => {
+  it('returns snapshot_{intervalKey}.json for historical snapshots', () => {
+    expect(snapshotFileName('2026-07-01')).toBe('snapshot_2026-07-01.json')
+    expect(snapshotFileName('2026-06-21')).toBe('snapshot_2026-06-21.json')
+  })
+})
+
+// ============================================================
+// listFiles
+// ============================================================
+
+describe('listFiles', () => {
+  it('lists all non-trashed files in a folder', async () => {
+    const mockList = vi.fn().mockResolvedValue({
+      result: {
+        files: [
+          { id: 'f1', name: 'snapshot_current.json', modifiedTime: '2026-07-01T00:00:00Z' },
+          { id: 'f2', name: 'log_2026-07-01.jsonl', modifiedTime: '2026-07-01T00:00:00Z' },
+          { id: 'f3', name: 'log_2026-07-11.jsonl', modifiedTime: '2026-07-11T00:00:00Z' },
+        ],
+      },
+    })
+    vi.stubGlobal('gapi', {
+      client: {
+        request: vi.fn(),
+        drive: { files: { list: mockList } },
+      },
+    })
+
+    const files = await listFiles('folder-id')
+    expect(files).toHaveLength(3)
+    expect(files[0].name).toBe('snapshot_current.json')
+    expect(files[2].name).toBe('log_2026-07-11.jsonl')
+  })
+})
+
+// ============================================================
+// pushSnapshot with custom filename
+// ============================================================
+
+describe('pushSnapshot', () => {
+  const mockGapiRequest = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGapiRequest.mockReset()
+    mockGapiRequest.mockResolvedValue({ result: { id: 'snap-id' } })
+    vi.stubGlobal('gapi', {
+      client: {
+        request: mockGapiRequest,
+        drive: { files: { list: vi.fn().mockResolvedValue({ result: { files: [] } }) } },
+      },
+    })
+  })
+
+  it('writes to snapshot_current.json by default', async () => {
+    await pushSnapshot('folder-id', '{"state":{}}')
+    const reqConfig = mockGapiRequest.mock.calls[0][0]
+    expect(reqConfig.body).toContain('"name":"snapshot_current.json"')
+  })
+
+  it('writes to custom filename when provided', async () => {
+    await pushSnapshot('folder-id', '{"state":{}}', null, 'snapshot_2026-07-01.json')
+    const reqConfig = mockGapiRequest.mock.calls[0][0]
+    expect(reqConfig.body).toContain('"name":"snapshot_2026-07-01.json"')
+  })
+})
+
+// ============================================================
+// pushLogs with custom filename
+// ============================================================
+
+describe('pushLogs with interval filename', () => {
+  const mockGapiRequest = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGapiRequest.mockReset()
+    mockGapiRequest.mockResolvedValue({ result: { id: 'log-id' } })
+    vi.stubGlobal('gapi', {
+      client: {
+        request: mockGapiRequest,
+        drive: { files: { list: vi.fn().mockResolvedValue({ result: { files: [] } }) } },
+      },
+    })
+  })
+
+  it('writes to custom filename when provided (interval-based)', async () => {
+    await pushLogs('folder-id', ['{"entry":1}'], null, 'log_2026-07-01.jsonl')
+    const reqConfig = mockGapiRequest.mock.calls[0][0]
+    expect(reqConfig.body).toContain('"name":"log_2026-07-01.jsonl"')
   })
 })

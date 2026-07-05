@@ -6,10 +6,11 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { mockGetLogsAfter, mockGetLatestSnapshot, mockGetLastSyncTime } = vi.hoisted(() => ({
+const { mockGetLogsAfter, mockGetLatestSnapshot, mockLastKnownRemoteTime, mockSetLastKnownRemoteTime } = vi.hoisted(() => ({
   mockGetLogsAfter: vi.fn(),
   mockGetLatestSnapshot: vi.fn(),
-  mockGetLastSyncTime: vi.fn().mockResolvedValue(0),
+  mockLastKnownRemoteTime: vi.fn().mockResolvedValue(0),
+  mockSetLastKnownRemoteTime: vi.fn(),
 }))
 
 // ---- Mock drive operations ----
@@ -33,10 +34,11 @@ const { mockHasValidToken } = vi.hoisted(() => ({
   mockHasValidToken: vi.fn().mockReturnValue(true),
 }))
 
-const { mockPullAllData, mockSaveCurrentSnapshot, mockAppendLogs } = vi.hoisted(() => ({
+const { mockPullAllData, mockSaveCurrentSnapshot, mockAppendLogs, mockGetHistoricalSnapshots } = vi.hoisted(() => ({
   mockPullAllData: vi.fn(),
   mockSaveCurrentSnapshot: vi.fn(),
   mockAppendLogs: vi.fn(),
+  mockGetHistoricalSnapshots: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('./drive', () => ({
@@ -47,6 +49,8 @@ vi.mock('./drive', () => ({
   pushMeta: (...args: any[]) => mockPushMeta(...args),
   pushSnapshot: (...args: any[]) => mockPushSnapshot(...args),
   pushLogs: (...args: any[]) => mockPushLogs(...args),
+  logFileName: (key: string) => `log_${key}.jsonl`,
+  snapshotFileName: (key: string) => `snapshot_${key}.json`,
 }))
 
 vi.mock('./gapi', () => ({
@@ -58,9 +62,10 @@ vi.mock('./gapi', () => ({
 vi.mock('./db', () => ({
   getLogsAfter: (...args: any[]) => mockGetLogsAfter(...args),
   getLatestSnapshot: () => mockGetLatestSnapshot(),
-  getLastSyncTime: () => mockGetLastSyncTime(),
-  setLastSyncTime: vi.fn(),
+  getLastKnownRemoteTime: () => mockLastKnownRemoteTime(),
+  setLastKnownRemoteTime: (...args: any[]) => mockSetLastKnownRemoteTime(...args),
   saveCurrentSnapshot: (...args: any[]) => mockSaveCurrentSnapshot(...args),
+  getHistoricalSnapshots: () => mockGetHistoricalSnapshots(),
   appendLog: vi.fn(),
   appendLogs: (...args: any[]) => mockAppendLogs(...args),
 }))
@@ -82,14 +87,73 @@ const MOCK_SNAPSHOT = {
   },
 }
 
-import { pushChanges, initialPull } from './sync'
+import { pushChanges, initialPull, syncOnce, diffEntries } from './sync'
+
+// ============================================================
+// diffEntries — content-based log dedup
+// ============================================================
+
+describe('diffEntries', () => {
+  const entryA = { timestamp: 1001, type: 'review', childId: 'c1', character: '花', grade: 'a', round: 1, dayKey: '2026-01-01' }
+  const entryB = { timestamp: 1002, type: 'review', childId: 'c1', character: '山', grade: 'b', round: 1, dayKey: '2026-01-01' }
+  const entryC = { timestamp: 1003, type: 'create_child', childId: 'c2', name: '大明', wordBookId: 'wb_1' }
+  const entryD = { timestamp: 1004, type: 'create_wordbook', wordBookId: 'wb_2', name: '新字本', characters: ['一', '二'] }
+
+  it('finds entries only in remote (remoteOnly)', () => {
+    const { remoteOnly, localOnly } = diffEntries(
+      [entryA],           // local
+      [entryA, entryB],   // remote
+    )
+    expect(remoteOnly).toEqual([entryB])
+    expect(localOnly).toEqual([])
+  })
+
+  it('finds entries only in local (localOnly)', () => {
+    const { remoteOnly, localOnly } = diffEntries(
+      [entryA, entryB],   // local
+      [entryA],           // remote
+    )
+    expect(remoteOnly).toEqual([])
+    expect(localOnly).toEqual([entryB])
+  })
+
+  it('finds both directions when partial overlap', () => {
+    const { remoteOnly, localOnly } = diffEntries(
+      [entryA, entryB],           // local
+      [entryA, entryC, entryD],   // remote
+    )
+    expect(remoteOnly).toEqual([entryC, entryD])
+    expect(localOnly).toEqual([entryB])
+  })
+
+  it('returns empty when collections are identical', () => {
+    const { remoteOnly, localOnly } = diffEntries(
+      [entryA, entryB],
+      [entryA, entryB],
+    )
+    expect(remoteOnly).toEqual([])
+    expect(localOnly).toEqual([])
+  })
+
+  it('returns empty when both are empty', () => {
+    const { remoteOnly, localOnly } = diffEntries([], [])
+    expect(remoteOnly).toEqual([])
+    expect(localOnly).toEqual([])
+  })
+
+  it('all local entries are localOnly when remote is empty', () => {
+    const { remoteOnly, localOnly } = diffEntries(
+      [entryA, entryB, entryC],
+      [],
+    )
+    expect(remoteOnly).toEqual([])
+    expect(localOnly).toEqual([entryA, entryB, entryC])
+  })
+})
 
 describe('pushChanges', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockHasValidToken.mockReturnValue(true)
-    mockGetLogsAfter.mockResolvedValue(MOCK_LOG_ENTRIES)
-    mockGetLatestSnapshot.mockResolvedValue(MOCK_SNAPSHOT)
     mockFindOrCreateRootFolder.mockResolvedValue('root-folder-id')
     mockFindFile.mockResolvedValue(null)
     mockPushMeta.mockResolvedValue('meta-file-id')
@@ -101,56 +165,81 @@ describe('pushChanges', () => {
   })
 
   it('pushes app_meta.json to the root folder', async () => {
-    await pushChanges()
+    await pushChanges(MOCK_LOG_ENTRIES, MOCK_SNAPSHOT as any)
 
     expect(mockFindOrCreateRootFolder).toHaveBeenCalled()
     expect(mockPushMeta).toHaveBeenCalledWith(
       'root-folder-id',
-      expect.objectContaining({ version: '0.1.0', lastSyncTime: expect.any(Number) }),
-      undefined, // no existing file → undefined (from metaFile?.id)
+      expect.objectContaining({ version: '0.1.0', lastKnownRemoteTime: expect.any(Number) }),
+      undefined,
     )
   })
 
   it('creates a subfolder and pushes snapshot + logs for each child', async () => {
-    await pushChanges()
+    await pushChanges(MOCK_LOG_ENTRIES, MOCK_SNAPSHOT as any)
 
-    // Two children → two subfolders
     expect(mockFindOrCreateFolder).toHaveBeenCalledTimes(2)
     expect(mockFindOrCreateFolder).toHaveBeenCalledWith('root-folder-id', '小明')
     expect(mockFindOrCreateFolder).toHaveBeenCalledWith('root-folder-id', '小红')
 
-    // Snapshot pushed to each child folder (full state)
     expect(mockPushSnapshot).toHaveBeenCalledTimes(2)
-
-    // Logs pushed to each child folder
     expect(mockPushLogs).toHaveBeenCalledTimes(2)
   })
 
-  it('skips Drive push when token is invalid', async () => {
-    mockHasValidToken.mockReturnValue(false)
+  it('does nothing when log entries are empty', async () => {
+    await pushChanges([], MOCK_SNAPSHOT as any)
 
-    await pushChanges()
+    // Still pushes meta and snapshot
+    expect(mockPushMeta).toHaveBeenCalled()
+    expect(mockPushSnapshot).toHaveBeenCalledTimes(2)
 
-    expect(mockFindOrCreateRootFolder).not.toHaveBeenCalled()
+    // But no logs
+    expect(mockPushLogs).not.toHaveBeenCalled()
   })
 
-  it('only pushes new log entries (since last sync)', async () => {
-    // After first sync, lastSyncTime is set
-    mockGetLastSyncTime.mockResolvedValue(1000)
+  it('pushes snapshot to snapshot_current.json', async () => {
+    await pushChanges(MOCK_LOG_ENTRIES, MOCK_SNAPSHOT as any)
 
-    // getLogsAfter returns only entries after last sync
-    const newEntries = MOCK_LOG_ENTRIES.slice(0, 1) // Just one new entry
-    mockGetLogsAfter.mockResolvedValue(newEntries)
+    const findFileCalls = mockFindFile.mock.calls
+      .filter((c: any[]) => c[1] === 'snapshot_current.json')
+    expect(findFileCalls.length).toBeGreaterThanOrEqual(2)
+  })
 
-    await pushChanges()
+  it('groups log entries by interval key and pushes to separate files', async () => {
+    const entry1 = { ...MOCK_LOG_ENTRIES[0], timestamp: new Date('2026-07-03T00:00:00Z').getTime() }
+    const entry2 = { ...MOCK_LOG_ENTRIES[1], timestamp: new Date('2026-07-12T00:00:00Z').getTime() }
 
-    // Should have called getLogsAfter with the last sync timestamp
-    expect(mockGetLogsAfter).toHaveBeenCalledWith(1000)
+    await pushChanges([entry1, entry2] as any, MOCK_SNAPSHOT as any)
 
-    // Should push only the new entries
-    const pushedEntries = mockPushLogs.mock.calls[0][1] as string[]
-    expect(pushedEntries.length).toBe(1)
-    expect(pushedEntries[0]).toContain('child_a')
+    const logFileNames = mockPushLogs.mock.calls.map((c: any[]) => c[3])
+    const uniqueFiles = new Set(logFileNames)
+    expect(uniqueFiles.size).toBe(2) // 2 distinct interval filenames
+  })
+
+  it('pushes historical snapshots that do not exist on Drive yet', async () => {
+    mockGetHistoricalSnapshots.mockResolvedValue([
+      { timestamp: new Date('2026-06-21T00:00:00Z').getTime(), state: MOCK_SNAPSHOT.state },
+    ])
+    mockFindFile.mockResolvedValue(null)
+
+    await pushChanges(MOCK_LOG_ENTRIES, MOCK_SNAPSHOT as any)
+
+    const histPushCalls = mockPushSnapshot.mock.calls
+      .filter((c: any[]) => c[3] === 'snapshot_2026-06-21.json')
+    expect(histPushCalls.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('skips historical snapshots that already exist on Drive', async () => {
+    mockGetHistoricalSnapshots.mockResolvedValue([
+      { timestamp: new Date('2026-06-21T00:00:00Z').getTime(), state: MOCK_SNAPSHOT.state },
+    ])
+    mockFindFile.mockResolvedValue({ id: 'existing-hist-id', modifiedTime: '2026-06-21T00:00:00Z' })
+
+    await pushChanges(MOCK_LOG_ENTRIES, MOCK_SNAPSHOT as any)
+
+    const histPushCalls = mockPushSnapshot.mock.calls
+      .filter((c: any[]) => c[3] === 'snapshot_2026-06-21.json')
+    expect(histPushCalls.length).toBe(0)
   })
 })
 
@@ -184,8 +273,9 @@ describe('initialPull', () => {
     vi.clearAllMocks()
     mockHasValidToken.mockReturnValue(true)
     mockGetLatestSnapshot.mockResolvedValue(null)
+    mockGetLogsAfter.mockResolvedValue([])
     mockPullAllData.mockResolvedValue({
-      meta: { lastSyncTime: Date.now(), version: '0.1.0' },
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
       childData: MOCK_REMOTE_CHILD_DATA,
     })
   })
