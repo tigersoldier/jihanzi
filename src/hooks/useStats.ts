@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import type { Grade, SM2State } from '../core/types'
 import { useApp } from '../state/AppContext'
-import { getReviewsForChildChar, getReviewsForChildInRange, getFirstReviewDays } from '../data/db'
+import { getReviewsForChildChar, getReviewsForChildInRange } from '../data/db'
 import { getDayType } from '../utils/date'
 
 export { type Proficiency, getProficiency, PROFICIENCY_COLORS, PROFICIENCY_DOT } from '../core/proficiency'
@@ -114,7 +114,7 @@ function currentYearMonth(): string {
 }
 
 export function useHistory(childId: string, yearMonth: string): MonthHistory {
-  const { dataVersion } = useApp()
+  const { state, dataVersion } = useApp()
   const [days, setDays] = useState<DaySummary[]>([])
 
   // Past months are immutable — skip the full historical scan on
@@ -143,11 +143,11 @@ export function useHistory(childId: string, yearMonth: string): MonthHistory {
       const fromDay = toDayKey(yearMonth, 1)
       const toDay = toDayKey(yearMonth, totalDays)
 
-      const [entries, firstDays] = await Promise.all([
-        getReviewsForChildInRange(childId, fromDay, toDay),
-        getFirstReviewDays(childId),
-      ])
+      const entries = await getReviewsForChildInRange(childId, fromDay, toDay)
       if (cancelled) return
+
+      // Resolve child from snapshot state for firstReviewDay lookups
+      const child = state.children.find(c => c.id === childId)
 
       // Group reviews by dayKey
       const dayMap = new Map<string, typeof entries>()
@@ -175,14 +175,14 @@ export function useHistory(childId: string, yearMonth: string): MonthHistory {
         for (const entry of dayEntries) {
           if (entry.round === 1) {
             charRound1.set(entry.character, entry.grade)
-            stats[entry.grade]++
+            stats[entry.grade as keyof typeof stats]++
           }
         }
 
-        // Classify new vs review using all-time first-review days
+        // Classify new vs review using firstReviewDay from snapshot
         for (const [character, grade] of charRound1) {
-          const firstDay = firstDays.get(character)
-          if (firstDay === dayKey) {
+          const sm2 = child?.progress[character]
+          if (sm2?.firstReviewDay === dayKey) {
             newChars.push({ character, grade })
           } else {
             reviewChars.push({ character, grade })

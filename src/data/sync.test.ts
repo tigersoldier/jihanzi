@@ -6,8 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { mockGetAllLogs, mockGetLogsAfter, mockGetLatestSnapshot, mockGetLastSyncTime } = vi.hoisted(() => ({
-  mockGetAllLogs: vi.fn(),
+const { mockGetLogsAfter, mockGetLatestSnapshot, mockGetLastSyncTime } = vi.hoisted(() => ({
   mockGetLogsAfter: vi.fn(),
   mockGetLatestSnapshot: vi.fn(),
   mockGetLastSyncTime: vi.fn().mockResolvedValue(0),
@@ -34,9 +33,9 @@ const { mockHasValidToken } = vi.hoisted(() => ({
   mockHasValidToken: vi.fn().mockReturnValue(true),
 }))
 
-const { mockPullAllData, mockSaveSnapshot, mockAppendLogs } = vi.hoisted(() => ({
+const { mockPullAllData, mockSaveCurrentSnapshot, mockAppendLogs } = vi.hoisted(() => ({
   mockPullAllData: vi.fn(),
-  mockSaveSnapshot: vi.fn(),
+  mockSaveCurrentSnapshot: vi.fn(),
   mockAppendLogs: vi.fn(),
 }))
 
@@ -57,12 +56,11 @@ vi.mock('./gapi', () => ({
 }))
 
 vi.mock('./db', () => ({
-  getAllLogs: () => mockGetAllLogs(),
   getLogsAfter: (...args: any[]) => mockGetLogsAfter(...args),
   getLatestSnapshot: () => mockGetLatestSnapshot(),
   getLastSyncTime: () => mockGetLastSyncTime(),
   setLastSyncTime: vi.fn(),
-  saveSnapshot: (...args: any[]) => mockSaveSnapshot(...args),
+  saveCurrentSnapshot: (...args: any[]) => mockSaveCurrentSnapshot(...args),
   appendLog: vi.fn(),
   appendLogs: (...args: any[]) => mockAppendLogs(...args),
 }))
@@ -90,7 +88,7 @@ describe('pushChanges', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockHasValidToken.mockReturnValue(true)
-    mockGetAllLogs.mockResolvedValue(MOCK_LOG_ENTRIES)
+    mockGetLogsAfter.mockResolvedValue(MOCK_LOG_ENTRIES)
     mockGetLatestSnapshot.mockResolvedValue(MOCK_SNAPSHOT)
     mockFindOrCreateRootFolder.mockResolvedValue('root-folder-id')
     mockFindFile.mockResolvedValue(null)
@@ -136,24 +134,20 @@ describe('pushChanges', () => {
     expect(mockFindOrCreateRootFolder).not.toHaveBeenCalled()
   })
 
-  it('only pushes new log entries (since last sync), not all logs', async () => {
+  it('only pushes new log entries (since last sync)', async () => {
     // After first sync, lastSyncTime is set
     mockGetLastSyncTime.mockResolvedValue(1000)
 
-    // getAllLogs would return all 100 entries, but getLogsAfter should only
-    // return the 5 entries created after timestamp 1000
+    // getLogsAfter returns only entries after last sync
     const newEntries = MOCK_LOG_ENTRIES.slice(0, 1) // Just one new entry
     mockGetLogsAfter.mockResolvedValue(newEntries)
 
     await pushChanges()
 
-    // Should NOT have called getAllLogs (which returns everything)
-    expect(mockGetAllLogs).not.toHaveBeenCalled()
-
     // Should have called getLogsAfter with the last sync timestamp
     expect(mockGetLogsAfter).toHaveBeenCalledWith(1000)
 
-    // Should push only the new entries, not all of them
+    // Should push only the new entries
     const pushedEntries = mockPushLogs.mock.calls[0][1] as string[]
     expect(pushedEntries.length).toBe(1)
     expect(pushedEntries[0]).toContain('child_a')
@@ -189,7 +183,6 @@ describe('initialPull', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockHasValidToken.mockReturnValue(true)
-    mockGetAllLogs.mockResolvedValue([])
     mockGetLatestSnapshot.mockResolvedValue(null)
     mockPullAllData.mockResolvedValue({
       meta: { lastSyncTime: Date.now(), version: '0.1.0' },
@@ -203,8 +196,8 @@ describe('initialPull', () => {
     await initialPull()
 
     // Snapshot saved
-    expect(mockSaveSnapshot).toHaveBeenCalledTimes(1)
-    expect(mockSaveSnapshot).toHaveBeenCalledWith(
+    expect(mockSaveCurrentSnapshot).toHaveBeenCalledTimes(1)
+    expect(mockSaveCurrentSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
         timestamp: MOCK_REMOTE_SNAPSHOT.timestamp,
         state: expect.objectContaining({
@@ -233,7 +226,7 @@ describe('initialPull', () => {
 
     await initialPull()
 
-    expect(mockSaveSnapshot).not.toHaveBeenCalled()
+    expect(mockSaveCurrentSnapshot).not.toHaveBeenCalled()
     expect(mockAppendLogs).not.toHaveBeenCalled()
   })
 
@@ -247,20 +240,21 @@ describe('initialPull', () => {
     expect(mockPullAllData).not.toHaveBeenCalled()
   })
 
-  // ---- Merge: does not duplicate log entries already present locally ----
+  // ---- Merge: filters by snapshot timestamp ----
 
-  it('only appends new log entries not already in local IndexedDB', async () => {
-    // Local already has the first log entry
-    mockGetAllLogs.mockResolvedValue([
-      { timestamp: 2001, type: 'create_child', childId: 'child_x', name: '小明', wordBookId: 'wb_1' },
-    ])
+  it('only appends log entries with timestamp > local snapshot timestamp', async () => {
+    // Local snapshot at timestamp 2000 — remote entries before this are skipped
+    mockGetLatestSnapshot.mockResolvedValue({
+      timestamp: 2000,
+      state: { children: [], wordBooks: [], settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 } },
+    })
 
     await initialPull()
 
+    // Both remote entries have timestamp 2001,2002 > 2000 → both appended
     expect(mockAppendLogs).toHaveBeenCalledTimes(1)
     const appendedLogs = mockAppendLogs.mock.calls[0][0] as any[]
-    expect(appendedLogs.length).toBe(1)
-    expect(appendedLogs[0]).toMatchObject({ timestamp: 2002, type: 'create_wordbook' })
+    expect(appendedLogs.length).toBe(2)
   })
 
   // ---- Data integrity: remote id fields must be stripped before insert ----
@@ -295,7 +289,7 @@ describe('initialPull', () => {
     await initialPull()
 
     // Should NOT overwrite the newer local snapshot with the older remote one
-    const saveCalls = mockSaveSnapshot.mock.calls
+    const saveCalls = mockSaveCurrentSnapshot.mock.calls
     const overwriteCall = saveCalls.find(
       (call: any[]) => call[0]?.timestamp === MOCK_REMOTE_SNAPSHOT.timestamp,
     )

@@ -11,12 +11,11 @@ import type { AnyLogEntry, Snapshot } from '../core/types'
 import {
   appendLog,
   appendLogs,
-  getAllLogs,
   getLogsAfter,
   getLatestSnapshot,
   getLastSyncTime,
   setLastSyncTime,
-  saveSnapshot,
+  saveCurrentSnapshot,
 } from './db'
 import {
   findOrCreateRootFolder,
@@ -138,7 +137,6 @@ export async function initialPull(): Promise<boolean> {
 
     // Read local data for merge
     const localSnapshot = await getLatestSnapshot()
-    const localLogs = await getAllLogs()
 
     // Pick the newer snapshot
     const bestSnapshot =
@@ -147,19 +145,13 @@ export async function initialPull(): Promise<boolean> {
         : localSnapshot
 
     if (bestSnapshot && bestSnapshot !== localSnapshot) {
-      await saveSnapshot(bestSnapshot)
+      await saveCurrentSnapshot({ timestamp: bestSnapshot.timestamp, state: bestSnapshot.state })
     }
 
-    // Union log entries — use (timestamp, type, entityId) as dedup key.
-    // Entity id varies by entry type: childId for child/review entries,
-    // wordBookId for wordbook/char entries.
-    const makeKey = (e: AnyLogEntry): string => {
-      const entityId =
-        (e as any).childId || (e as any).wordBookId || ''
-      return `${e.timestamp}:${e.type}:${entityId}`
-    }
-    const localKeys = new Set(localLogs.map(makeKey))
-    const newEntries = remoteLogEntries.filter(e => !localKeys.has(makeKey(e)))
+    // Filter: only keep remote log entries with timestamp > local snapshot timestamp.
+    // Entries already materialised in the snapshot are redundant.
+    const cutoff = bestSnapshot ? bestSnapshot.timestamp : 0
+    const newEntries = remoteLogEntries.filter(e => e.timestamp > cutoff)
 
     if (newEntries.length > 0) {
       // Sort by timestamp so log replay is chronological
@@ -190,10 +182,8 @@ export async function pushChanges(): Promise<void> {
 
   try {
     // Only push log entries created since the last successful sync.
-    // This avoids re-uploading the entire log history on every push,
-    // which grew unboundedly and caused O(n²) allocation pressure.
     const lastSync = await getLastSyncTime()
-    const logs = lastSync > 0 ? await getLogsAfter(lastSync) : await getAllLogs()
+    const logs = await getLogsAfter(lastSync)
     const snapshot = await getLatestSnapshot()
 
     // Ensure Drive folder structure exists
@@ -208,16 +198,16 @@ export async function pushChanges(): Promise<void> {
 
     // Push per-child snapshot + logs
     const snapshotData = JSON.stringify(snapshot)
-    const logEntries = logs.map(l => JSON.stringify(l))
 
-    if (snapshot) {
+    if (snapshot && logs.length > 0) {
       for (const child of snapshot.state.children) {
         const childFolderId = await findOrCreateFolder(rootId, child.name)
         const snapshotFile = await findFile(childFolderId, 'snapshot.json')
         const logFile = await findFile(childFolderId, 'log.jsonl')
 
         await pushSnapshot(childFolderId, snapshotData, snapshotFile?.id)
-        await pushLogs(childFolderId, logEntries, logFile?.id)
+        const logLines = logs.map((l: any) => JSON.stringify(l))
+        await pushLogs(childFolderId, logLines, logFile?.id)
       }
     }
 
