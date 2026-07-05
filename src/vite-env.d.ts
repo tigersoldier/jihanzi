@@ -54,6 +54,10 @@ declare namespace gapi {
               name: string
               mimeType: string
               modifiedTime: string
+              shortcutDetails?: {
+                targetId: string
+                targetMimeType: string
+              }
             }>
             nextPageToken?: string
           }
