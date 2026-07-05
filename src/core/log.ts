@@ -17,12 +17,10 @@ import type {
   CreateChildEntry,
   CreateWordBookEntry,
   AddCharEntry,
-  Grade,
-  SM2State,
   Snapshot,
 } from './types'
 import { DEFAULT_SETTINGS } from './types'
-import { updateSM2, createInitialSM2State } from './sm2'
+import { updateSM2 } from './sm2'
 
 /**
  * Generate a unique log ID from timestamp + random suffix.
@@ -57,42 +55,36 @@ export function replayLog(snapshot: Snapshot | null, logs: AnyLogEntry[]): AppSt
 
 /**
  * Apply a single log entry to mutate state in place.
+ * Returns true if the state was actually changed, false if the entry was a no-op
+ * (e.g. consolidation rounds, idempotent updates).
  */
-function applyEntry(state: AppState, entry: AnyLogEntry): void {
+export function applyEntry(state: AppState, entry: AnyLogEntry): boolean {
   switch (entry.type) {
     case 'create_child':
       applyCreateChild(state, entry)
-      break
+      return true
     case 'update_child':
-      applyUpdateChild(state, entry)
-      break
+      return applyUpdateChild(state, entry)
     case 'delete_child':
-      applyDeleteChild(state, entry)
-      break
+      return applyDeleteChild(state, entry)
     case 'create_wordbook':
       applyCreateWordBook(state, entry)
-      break
+      return true
     case 'update_wordbook':
-      applyUpdateWordBook(state, entry)
-      break
+      return applyUpdateWordBook(state, entry)
     case 'delete_wordbook':
-      applyDeleteWordBook(state, entry)
-      break
+      return applyDeleteWordBook(state, entry)
     case 'add_char':
       applyAddChar(state, entry)
-      break
+      return true
     case 'remove_char':
-      applyRemoveChar(state, entry)
-      break
+      return applyRemoveChar(state, entry)
     case 'reorder_chars':
-      applyReorderChars(state, entry)
-      break
+      return applyReorderChars(state, entry)
     case 'review':
-      applyReview(state, entry)
-      break
+      return applyReview(state, entry)
     case 'update_settings':
-      applyUpdateSettings(state, entry)
-      break
+      return applyUpdateSettings(state, entry)
   }
 }
 
@@ -112,15 +104,26 @@ function applyUpdateChild(state: AppState, entry: {
   childId: string
   name?: string
   wordBookId?: string
-}): void {
+}): boolean {
   const child = state.children.find(c => c.id === entry.childId)
-  if (!child) return
-  if (entry.name !== undefined) child.name = entry.name
-  if (entry.wordBookId !== undefined) child.wordBookId = entry.wordBookId
+  if (!child) return false
+  if (entry.name === undefined && entry.wordBookId === undefined) return false
+  let changed = false
+  if (entry.name !== undefined && child.name !== entry.name) {
+    child.name = entry.name
+    changed = true
+  }
+  if (entry.wordBookId !== undefined && child.wordBookId !== entry.wordBookId) {
+    child.wordBookId = entry.wordBookId
+    changed = true
+  }
+  return changed
 }
 
-function applyDeleteChild(state: AppState, entry: { type: 'delete_child'; childId: string }): void {
+function applyDeleteChild(state: AppState, entry: { type: 'delete_child'; childId: string }): boolean {
+  const before = state.children.length
   state.children = state.children.filter(c => c.id !== entry.childId)
+  return state.children.length !== before
 }
 
 function applyCreateWordBook(state: AppState, entry: CreateWordBookEntry): void {
@@ -136,17 +139,22 @@ function applyUpdateWordBook(state: AppState, entry: {
   type: 'update_wordbook'
   wordBookId: string
   name?: string
-}): void {
+}): boolean {
   const wb = state.wordBooks.find(w => w.id === entry.wordBookId)
-  if (!wb) return
-  if (entry.name !== undefined) wb.name = entry.name
+  if (!wb) return false
+  if (entry.name === undefined) return false
+  if (wb.name === entry.name) return false
+  wb.name = entry.name
+  return true
 }
 
 function applyDeleteWordBook(state: AppState, entry: {
   type: 'delete_wordbook'
   wordBookId: string
-}): void {
+}): boolean {
+  const before = state.wordBooks.length
   state.wordBooks = state.wordBooks.filter(w => w.id !== entry.wordBookId)
+  return state.wordBooks.length !== before
 }
 
 function applyAddChar(state: AppState, entry: AddCharEntry): void {
@@ -161,31 +169,33 @@ function applyRemoveChar(state: AppState, entry: {
   wordBookId: string
   character: string
   index: number
-}): void {
+}): boolean {
   const wb = state.wordBooks.find(w => w.id === entry.wordBookId)
-  if (!wb) return
-  // Verify the character at index matches
-  if (wb.characters[entry.index] === entry.character) {
-    wb.characters.splice(entry.index, 1)
-  }
+  if (!wb) return false
+  if (wb.characters[entry.index] !== entry.character) return false
+  wb.characters.splice(entry.index, 1)
+  return true
 }
 
 function applyReorderChars(state: AppState, entry: {
   type: 'reorder_chars'
   wordBookId: string
   characters: string[]
-}): void {
+}): boolean {
   const wb = state.wordBooks.find(w => w.id === entry.wordBookId)
-  if (!wb) return
+  if (!wb) return false
+  // Check if the order actually changed
+  if (arraysEqual(wb.characters, entry.characters)) return false
   wb.characters = entry.characters
+  return true
 }
 
-function applyReview(state: AppState, entry: ReviewEntry): void {
-  // Only round 1 reviews feed into SM-2
-  if (entry.round !== 1) return
+function applyReview(state: AppState, entry: ReviewEntry): boolean {
+  // Only round 1 reviews feed into SM-2; consolidation rounds are log-only
+  if (entry.round !== 1) return false
 
   const child = state.children.find(c => c.id === entry.childId)
-  if (!child) return
+  if (!child) return false
 
   const current = child.progress[entry.character]
   const updated = updateSM2(current, entry.grade, entry.dayKey)
@@ -201,13 +211,22 @@ function applyReview(state: AppState, entry: ReviewEntry): void {
       }
     }
   }
+
+  return true
 }
 
 function applyUpdateSettings(state: AppState, entry: {
   type: 'update_settings'
   settings: Partial<Settings>
-}): void {
-  Object.assign(state.settings, entry.settings)
+}): boolean {
+  let changed = false
+  for (const [key, value] of Object.entries(entry.settings)) {
+    if (value !== undefined && (state.settings as any)[key] !== value) {
+      (state.settings as any)[key] = value
+      changed = true
+    }
+  }
+  return changed
 }
 
 /**
@@ -227,14 +246,11 @@ function deepCloneState(state: AppState): AppState {
   return JSON.parse(JSON.stringify(state))
 }
 
-/**
- * Filter logs to only those after a given timestamp (exclusive).
- */
-export function logsAfter(logs: AnyLogEntry[], timestamp: number): AnyLogEntry[] {
-  return logs.filter(l => l.timestamp > timestamp)
+/** Shallow array equality check for reorder detection */
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
 }
-
-/**
- * Log threshold — when accumulated logs exceed this count, generate a new snapshot.
- */
-export const LOG_SNAPSHOT_THRESHOLD = 500

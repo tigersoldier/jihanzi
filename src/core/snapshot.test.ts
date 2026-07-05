@@ -1,11 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { compactLogs, rebuildState } from './snapshot'
-import { replayLog } from './log'
-import type { AppState, Snapshot, AnyLogEntry } from './types'
-
-function makeSnapshot(state: AppState): Snapshot {
-  return { timestamp: 0, state }
-}
+import { applyEntry, replayLog, createSnapshot } from './log'
+import type { AppState, Snapshot, AnyLogEntry, ReviewEntry } from './types'
 
 function makeState(overrides?: Partial<AppState>): AppState {
   return {
@@ -16,124 +11,203 @@ function makeState(overrides?: Partial<AppState>): AppState {
   }
 }
 
-describe('compactLogs', () => {
-  it('压缩后的快照与完整日志重放产生相同状态', () => {
-    // Given: a snapshot with one child, and several log entries after it
-    const before = makeState({
+describe('applyEntry — return value', () => {
+  it('returns false for consolidation rounds (round !== 1)', () => {
+    const state = makeState({
       children: [
         {
-          id: 'child_1',
-          name: '小明',
-          wordBookId: 'wb_1',
-          nextCharIndex: 0,
-          progress: {},
+          id: 'child_1', name: '小明', wordBookId: 'wb_1',
+          nextCharIndex: 0, progress: {},
         },
       ],
       wordBooks: [
+        { id: 'wb_1', name: '测试', characters: ['花'] },
+      ],
+    })
+
+    const round2: ReviewEntry = {
+      timestamp: 1, type: 'review', childId: 'child_1',
+      character: '花', grade: 'c', round: 2, dayKey: '2026-07-01',
+    }
+    const changed = applyEntry(state, round2)
+    expect(changed).toBe(false)
+  })
+
+  it('returns true for round 1 review (new character)', () => {
+    const state = makeState({
+      children: [
         {
-          id: 'wb_1',
-          name: '人教版一年级上册',
-          characters: ['花', '一', '二'],
+          id: 'child_1', name: '小明', wordBookId: 'wb_1',
+          nextCharIndex: 0, progress: {},
+        },
+      ],
+      wordBooks: [
+        { id: 'wb_1', name: '测试', characters: ['花'] },
+      ],
+    })
+
+    const round1: ReviewEntry = {
+      timestamp: 1, type: 'review', childId: 'child_1',
+      character: '花', grade: 'a', round: 1, dayKey: '2026-07-01',
+    }
+    const changed = applyEntry(state, round1)
+    expect(changed).toBe(true)
+    expect(state.children[0].progress['花']).toBeDefined()
+    // firstReviewDay materialised for new characters
+    expect(state.children[0].progress['花'].firstReviewDay).toBe('2026-07-01')
+  })
+
+  it('returns false when update_child has no real changes', () => {
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1', name: '小明', wordBookId: 'wb_1',
+          nextCharIndex: 0, progress: {},
         },
       ],
     })
 
-    const logs: AnyLogEntry[] = [
-      {
-        timestamp: 1,
-        type: 'review',
-        childId: 'child_1',
-        character: '花',
-        grade: 'a',
-        round: 1,
-        dayKey: '2026-06-28',
-      },
-      {
-        timestamp: 2,
-        type: 'review',
-        childId: 'child_1',
-        character: '一',
-        grade: 'b',
-        round: 1,
-        dayKey: '2026-06-29',
-      },
-    ]
+    const noop = {
+      timestamp: 1, type: 'update_child' as const,
+      childId: 'child_1', name: undefined, wordBookId: undefined,
+    }
+    expect(applyEntry(state, noop)).toBe(false)
 
-    // When: compacting
-    const { snapshot: compacted } = compactLogs(makeSnapshot(before), logs)
-
-    // Then: replaying just the new snapshot gives the same state
-    // as replaying old snapshot + all logs
-    const fromCompacted = replayLog(compacted, [])
-    const fromOriginal = replayLog(makeSnapshot(before), logs)
-
-    expect(fromCompacted).toEqual(fromOriginal)
-    // Verify the reviews were applied correctly
-    const child = fromCompacted.children[0]
-    expect(child.progress['花']).toBeDefined()
-    expect(child.progress['一']).toBeDefined()
-    // 「二」 hasn't been reviewed yet
-    expect(child.progress['二']).toBeUndefined()
+    const sameName = {
+      timestamp: 2, type: 'update_child' as const,
+      childId: 'child_1', name: '小明',
+    }
+    expect(applyEntry(state, sameName)).toBe(false)
   })
 
-  it('压缩后返回的日志列表为空——所有日志已被快照覆盖', () => {
-    const before = makeState({
+  it('returns true when update_child actually changes', () => {
+    const state = makeState({
       children: [
         {
-          id: 'child_1',
-          name: '小明',
-          wordBookId: 'wb_1',
-          nextCharIndex: 0,
-          progress: {},
+          id: 'child_1', name: '小明', wordBookId: 'wb_1',
+          nextCharIndex: 0, progress: {},
         },
-      ],
-      wordBooks: [
-        { id: 'wb_1', name: '测试生字本', characters: ['花'] },
       ],
     })
 
-    const logs: AnyLogEntry[] = Array.from({ length: 100 }, (_, i) => ({
-      timestamp: i + 1,
-      type: 'review' as const,
-      childId: 'child_1',
-      character: '花',
-      grade: 'a' as const,
-      round: 1,
-      dayKey: '2026-06-28',
-    }))
-
-    const { logs: remaining } = compactLogs(makeSnapshot(before), logs)
-
-    // After compaction, no logs remain — they're all covered by the snapshot
-    expect(remaining).toHaveLength(0)
+    const change = {
+      timestamp: 1, type: 'update_child' as const,
+      childId: 'child_1', name: '大明',
+    }
+    expect(applyEntry(state, change)).toBe(true)
+    expect(state.children[0].name).toBe('大明')
   })
 
-  it('resbuildState 与直接调用 replayLog 结果一致', () => {
+  it('returns false when reorder_chars has same order', () => {
+    const state = makeState({
+      wordBooks: [
+        { id: 'wb_1', name: '测试', characters: ['花', '一', '二'] },
+      ],
+    })
+
+    const noop = {
+      timestamp: 1, type: 'reorder_chars' as const,
+      wordBookId: 'wb_1', characters: ['花', '一', '二'],
+    }
+    expect(applyEntry(state, noop)).toBe(false)
+  })
+
+  it('returns true when reorder_chars actually changes', () => {
+    const state = makeState({
+      wordBooks: [
+        { id: 'wb_1', name: '测试', characters: ['花', '一', '二'] },
+      ],
+    })
+
+    const change = {
+      timestamp: 1, type: 'reorder_chars' as const,
+      wordBookId: 'wb_1', characters: ['二', '一', '花'],
+    }
+    expect(applyEntry(state, change)).toBe(true)
+    expect(state.wordBooks[0].characters).toEqual(['二', '一', '花'])
+  })
+
+  it('returns false when update_settings has no real changes', () => {
     const state = makeState()
+
+    const noop = {
+      timestamp: 1, type: 'update_settings' as const,
+      settings: { dailyReviewLimit: 30 },
+    }
+    expect(applyEntry(state, noop)).toBe(false)
+  })
+
+  it('returns true when update_settings actually changes', () => {
+    const state = makeState()
+
+    const change = {
+      timestamp: 1, type: 'update_settings' as const,
+      settings: { dailyReviewLimit: 50 },
+    }
+    expect(applyEntry(state, change)).toBe(true)
+    expect(state.settings.dailyReviewLimit).toBe(50)
+  })
+})
+
+describe('createSnapshot', () => {
+  it('creates a snapshot with a timestamp that captures current state', () => {
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1', name: '小明', wordBookId: 'wb_1',
+          nextCharIndex: 3, progress: {},
+        },
+      ],
+    })
+
+    const snap = createSnapshot(state)
+    expect(snap.timestamp).toBeGreaterThan(0)
+    expect(snap.state.children[0].name).toBe('小明')
+    // Snapshot is a deep clone — mutating original doesn't affect it
+    state.children[0].name = '改变后的名字'
+    expect(snap.state.children[0].name).toBe('小明')
+  })
+})
+
+describe('replayLog', () => {
+  it('replays log against snapshot to reconstruct full state', () => {
+    const snapshot: Snapshot = {
+      timestamp: 0,
+      state: makeState({
+        children: [
+          {
+            id: 'child_1', name: '小明', wordBookId: 'wb_1',
+            nextCharIndex: 0, progress: {},
+          },
+        ],
+        wordBooks: [
+          { id: 'wb_1', name: '测试', characters: ['花'] },
+        ],
+      }),
+    }
+
     const logs: AnyLogEntry[] = [
       {
-        timestamp: 1,
-        type: 'create_child' as const,
-        childId: 'child_x',
-        name: '大明',
-        wordBookId: 'wb_x',
-      },
-      {
-        timestamp: 2,
-        type: 'create_wordbook' as const,
-        wordBookId: 'wb_x',
-        name: '自定义生字本',
-        characters: ['天', '地'],
+        timestamp: 1, type: 'review', childId: 'child_1',
+        character: '花', grade: 'a', round: 1, dayKey: '2026-07-01',
       },
     ]
 
-    const fromRebuild = rebuildState(null, logs)
-    const fromReplay = replayLog(null, logs)
+    const state = replayLog(snapshot, logs)
+    expect(state.children[0].progress['花']).toBeDefined()
+    expect(state.children[0].progress['花'].firstReviewDay).toBe('2026-07-01')
+  })
 
-    expect(fromRebuild).toEqual(fromReplay)
-    expect(fromRebuild.children).toHaveLength(1)
-    expect(fromRebuild.children[0].name).toBe('大明')
-    expect(fromRebuild.wordBooks).toHaveLength(1)
-    expect(fromRebuild.wordBooks[0].name).toBe('自定义生字本')
+  it('handles null snapshot (fresh start)', () => {
+    const logs: AnyLogEntry[] = [
+      {
+        timestamp: 1, type: 'create_child',
+        childId: 'child_x', name: '大明', wordBookId: 'wb_x',
+      },
+    ]
+
+    const state = replayLog(null, logs)
+    expect(state.children).toHaveLength(1)
+    expect(state.children[0].name).toBe('大明')
   })
 })

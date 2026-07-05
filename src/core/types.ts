@@ -12,6 +12,7 @@ export interface SM2State {
   repetitions: number // Number of successful repetitions
   nextReview: string  // ISO date string for next review
   lastGrade: Grade    // The most recent review grade
+  firstReviewDay: string  // DayKey of the first review — materialised in snapshot
 }
 
 /** A word book — ordered list of characters to learn */

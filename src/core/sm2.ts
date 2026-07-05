@@ -12,8 +12,8 @@ import { GRADE_TO_Q, SM2_INITIAL_EASE, SM2_INITIAL_INTERVAL, SM2_MIN_EASE } from
  * Create initial SM-2 state for a new character.
  * Initial interval is 1 day (fixed).
  */
-export function createInitialSM2State(): SM2State {
-  const tomorrow = new Date()
+export function createInitialSM2State(dayKey: string): SM2State {
+  const tomorrow = new Date(dayKey + 'T00:00:00')
   tomorrow.setDate(tomorrow.getDate() + SM2_INITIAL_INTERVAL)
   return {
     ease: SM2_INITIAL_EASE,
@@ -21,6 +21,7 @@ export function createInitialSM2State(): SM2State {
     repetitions: 0,
     nextReview: toDateKey(tomorrow),
     lastGrade: 'a', // initial state defaults to 'a' (no grade yet)
+    firstReviewDay: dayKey,
   }
 }
 
@@ -49,7 +50,7 @@ export function updateSM2(
 ): SM2State {
   // First review — create initial state
   if (!current) {
-    current = createInitialSM2State()
+    current = createInitialSM2State(reviewDate)
   }
 
   // Grade d: complete forget — reset
@@ -62,6 +63,7 @@ export function updateSM2(
       repetitions: 0,
       nextReview: toDateKey(nextDate),
       lastGrade: grade,
+      firstReviewDay: current.firstReviewDay,
     }
   }
 
@@ -85,6 +87,7 @@ export function updateSM2(
     repetitions: current.repetitions + 1,
     nextReview: toDateKey(nextDate),
     lastGrade: grade,
+    firstReviewDay: current.firstReviewDay,
   }
 }
 
