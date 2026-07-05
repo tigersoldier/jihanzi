@@ -10,11 +10,9 @@ import {
 import type {
   AppState,
   AnyLogEntry,
-  Snapshot,
   Child,
   WordBook,
   Settings,
-  ReviewEntry,
   CreateChildEntry,
   CreateWordBookEntry,
   AddCharEntry,
@@ -25,20 +23,22 @@ import type {
   DeleteWordBookEntry,
   UpdateChildEntry,
   UpdateWordBookEntry,
+  ReviewEntry,
 } from '../core/types'
 import { DEFAULT_SETTINGS } from '../core/types'
-import { replayLog } from '../core/log'
+import { applyEntry } from '../core/log'
 import { generateTimestamp } from '../core/log'
-import {
+import db, {
   appendLog,
   appendLogs,
-  getAllLogs,
   getLatestSnapshot,
-  saveSnapshot,
-  deleteLogsBefore,
+  saveCurrentSnapshot,
+  saveHistoricalSnapshot,
+  pruneOldSnapshots,
+  getLogCount,
+  pruneOldestLogs,
 } from '../data/db'
-import { compactLogs } from '../core/snapshot'
-import { LOG_SNAPSHOT_THRESHOLD } from '../core/log'
+import { getIntervalKey } from '../utils/date'
 import { validateAddChar } from '../utils/chars'
 import { useAuth } from './AuthContext'
 import { notifyDataChanged } from '../data/sync'
@@ -86,7 +86,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const { isLoggedIn } = useAuth()
   const [state, setState] = useState<AppState>(EMPTY_STATE)
   const [loading, setLoading] = useState(true)
-  const [logCount, setLogCount] = useState(0)
   const [dataVersion, setDataVersion] = useState(0)
   const [selectedChildId, setSelectedChildId] = useState<string>('')
 
@@ -117,10 +116,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLoading(true)
       try {
         const snapshot = await getLatestSnapshot()
-        const logs = await getAllLogs()
-        const reconstructed = replayLog(snapshot, logs)
-        setState(reconstructed)
-        setLogCount(logs.length)
+        if (snapshot) {
+          setState(snapshot.state)
+        } else {
+          setState(EMPTY_STATE)
+        }
         setDataVersion(v => v + 1)
       } catch (err) {
         console.error('Failed to load state:', err)
@@ -132,65 +132,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadState()
   }, [isLoggedIn, reloadKey])
 
-  // Helper: append a log entry.
-  // Uses functional setState so the callback never goes stale — even callbacks
-  // that captured this on the first render correctly increment the latest count.
-  const appendEntry = useCallback(async (entry: AnyLogEntry): Promise<void> => {
-    await appendLog(entry)
-    setLogCount(prev => prev + 1)
-  }, [])
-
-  // Compaction: when the log grows past the threshold, generate a fresh
-  // snapshot and prune old log entries. Separated from appendEntry so that
-  // appendEntry stays stable (no stale logCount dependency).
+  // Helper: persist a mutation atomically.
   //
-  // Uses a debounce timer so rapid bursts of appends don't repeatedly
-  // cancel and restart the expensive getAllLogs + compactLogs work.
-  const compacting = useRef(false)
-  const compactTimer = useRef<ReturnType<typeof setTimeout>>()
-  useEffect(() => {
-    if (logCount < LOG_SNAPSHOT_THRESHOLD) return
-    if (compacting.current) return
+  // 1. Clones the current snapshot state
+  // 2. Applies the entry via applyEntry (canonical mutation path)
+  // 3. In a Dexie transaction: writes log + optionally updates snapshot
+  // 4. Updates React state if applyEntry returned true
+  // 5. Checks log pruning threshold
+  //
+  // Consolidation rounds (round != 1) write the log entry for sync but
+  // don't update the snapshot.
+  const applyAndPersist = useCallback(async (
+    entry: AnyLogEntry,
+  ): Promise<boolean> => {
+    const currentSnapshot = await getLatestSnapshot()
+    const prevState = currentSnapshot?.state || EMPTY_STATE
+    const newState = JSON.parse(JSON.stringify(prevState)) as AppState
+    const changed = applyEntry(newState, entry)
 
-    // Debounce: wait for a quiet period before starting compaction
-    clearTimeout(compactTimer.current)
-    compactTimer.current = setTimeout(() => {
-      compacting.current = true
-      let cancelled = false
+    const now = Date.now()
+    await db.transaction('rw', db.logs, db.snapshot, async () => {
+      await appendLog(entry)
 
-      async function compact() {
-        try {
-          const oldSnapshot = await getLatestSnapshot()
-          if (cancelled) return
-          const logs = await getAllLogs()
-          if (cancelled) return
-          const { snapshot: newSnapshot, logs: remaining } = compactLogs(oldSnapshot, logs)
-          await saveSnapshot(newSnapshot)
-          if (!cancelled) {
-            // Delete logs covered by the new snapshot.  Use
-            // newSnapshot.timestamp so that only logs already
-            // incorporated into the snapshot are pruned.
-            await deleteLogsBefore(newSnapshot.timestamp)
-          }
-          if (!cancelled) {
-            // Count surviving logs (those appended after the snapshot)
-            setLogCount(remaining.length)
-          }
-        } catch (err) {
-          console.error('Compaction failed:', err)
-        } finally {
-          compacting.current = false
+      if (changed) {
+        // Check if we've crossed a UTC date anchor
+        const snapshotInterval = currentSnapshot
+          ? getIntervalKey(currentSnapshot.timestamp)
+          : getIntervalKey(now)
+        const currentInterval = getIntervalKey(now)
+
+        if (snapshotInterval !== currentInterval && currentSnapshot) {
+          await saveHistoricalSnapshot({
+            timestamp: currentSnapshot.timestamp,
+            state: currentSnapshot.state,
+          })
+          await pruneOldSnapshots(5)
         }
+
+        await saveCurrentSnapshot({ timestamp: now, state: newState })
       }
-      compact()
+    })
 
-      // Return a no-op cleanup — the cancellation flag is scoped inside
-      // the setTimeout so it only applies to this compaction attempt.
-      return () => { cancelled = true }
-    }, 1000) // 1s quiet period before compacting
+    if (changed) {
+      setState(newState)
+      // Prune logs if over threshold (500k), fire-and-forget
+      getLogCount().then(count => {
+        if (count > 500_000) pruneOldestLogs(1000)
+      })
+    }
 
-    return () => { clearTimeout(compactTimer.current) }
-  }, [logCount])
+    return changed
+  }, [])
 
   // ---- Child Operations ----
 
@@ -203,14 +195,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       name,
       wordBookId,
     }
-    await appendEntry(entry)
-    // Optimistic update
-    setState(prev => ({
-      ...prev,
-      children: [...prev.children, { id: childId, name, wordBookId, nextCharIndex: 0, progress: {} }],
-    }))
+    await applyAndPersist(entry)
     return childId
-  }, [])
+  }, [applyAndPersist])
 
   const updateChild = useCallback(async (childId: string, updates: { name?: string; wordBookId?: string }) => {
     const entry: UpdateChildEntry = {
@@ -219,14 +206,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       childId,
       ...updates,
     }
-    await appendEntry(entry)
-    setState(prev => ({
-      ...prev,
-      children: prev.children.map(c =>
-        c.id === childId ? { ...c, ...updates } : c
-      ),
-    }))
-  }, [])
+    await applyAndPersist(entry)
+  }, [applyAndPersist])
 
   const deleteChild = useCallback(async (childId: string) => {
     const entry: DeleteChildEntry = {
@@ -234,12 +215,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       type: 'delete_child',
       childId,
     }
-    await appendEntry(entry)
-    setState(prev => ({
-      ...prev,
-      children: prev.children.filter(c => c.id !== childId),
-    }))
-  }, [])
+    await applyAndPersist(entry)
+  }, [applyAndPersist])
 
   // ---- Word Book Operations ----
 
@@ -252,13 +229,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       name,
       characters,
     }
-    await appendEntry(entry)
-    setState(prev => ({
-      ...prev,
-      wordBooks: [...prev.wordBooks, { id: wordBookId, name, characters }],
-    }))
+    await applyAndPersist(entry)
     return wordBookId
-  }, [])
+  }, [applyAndPersist])
 
   const updateWordBook = useCallback(async (wordBookId: string, name: string) => {
     const entry: UpdateWordBookEntry = {
@@ -267,14 +240,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       wordBookId,
       name,
     }
-    await appendEntry(entry)
-    setState(prev => ({
-      ...prev,
-      wordBooks: prev.wordBooks.map(w =>
-        w.id === wordBookId ? { ...w, name } : w
-      ),
-    }))
-  }, [])
+    await applyAndPersist(entry)
+  }, [applyAndPersist])
 
   const deleteWordBook = useCallback(async (wordBookId: string) => {
     const entry: DeleteWordBookEntry = {
@@ -282,17 +249,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       type: 'delete_wordbook',
       wordBookId,
     }
-    await appendEntry(entry)
-    setState(prev => ({
-      ...prev,
-      wordBooks: prev.wordBooks.filter(w => w.id !== wordBookId),
-    }))
-  }, [])
+    await applyAndPersist(entry)
+  }, [applyAndPersist])
 
   const addCharacter = useCallback(async (wordBookId: string, character: string) => {
-    // Validate BEFORE setState so errors propagate to the caller.
-    // Reading from a ref avoids adding state.wordBooks as a dependency,
-    // keeping the callback stable across renders.
+    // Validate BEFORE persisting so errors propagate to the caller.
     const wb = wordBooksRef.current.find(w => w.id === wordBookId)
     if (!wb) return
     validateAddChar(character, wb)
@@ -314,18 +275,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         : w
     )
 
-    // Persist first, then optimistic update — consistent with all
-    // other mutation operations.
-    await appendEntry(entry)
-    setState(prev => ({
-      ...prev,
-      wordBooks: prev.wordBooks.map(w =>
-        w.id === wordBookId
-          ? { ...w, characters: [...w.characters, character] }
-          : w
-      ),
-    }))
-  }, [])
+    await applyAndPersist(entry)
+  }, [applyAndPersist])
 
   const removeCharacter = useCallback(async (wordBookId: string, character: string, index: number) => {
     const entry: RemoveCharEntry = {
@@ -335,16 +286,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       character,
       index,
     }
-    await appendEntry(entry)
-    setState(prev => ({
-      ...prev,
-      wordBooks: prev.wordBooks.map(w =>
-        w.id === wordBookId
-          ? { ...w, characters: w.characters.filter((_, i) => i !== index) }
-          : w
-      ),
-    }))
-  }, [])
+    await applyAndPersist(entry)
+  }, [applyAndPersist])
 
   const reorderCharacters = useCallback(async (wordBookId: string, characters: string[]) => {
     const entry: ReorderCharsEntry = {
@@ -353,14 +296,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       wordBookId,
       characters,
     }
-    await appendEntry(entry)
-    setState(prev => ({
-      ...prev,
-      wordBooks: prev.wordBooks.map(w =>
-        w.id === wordBookId ? { ...w, characters } : w
-      ),
-    }))
-  }, [])
+    await applyAndPersist(entry)
+  }, [applyAndPersist])
 
   // ---- Review Operations ----
 
@@ -380,26 +317,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       round,
       dayKey,
     }
-
-    // Optimistic state update — always apply immediately regardless of
-    // IndexedDB persistence outcome.  This guarantees the UI reflects
-    // the latest review data even when IndexedDB is slow or fails.
-    if (round === 1) {
-      setState(prev => {
-        // Replay the review entry against the current state so existing
-        // children, wordBooks, and settings are preserved.
-        const newState = replayLog({ timestamp: 0, state: prev }, [entry])
-        return newState
-      })
-    }
-
-    // Persist to IndexedDB in the background.
-    try {
-      await appendEntry(entry)
-    } catch (err) {
-      console.error('Failed to persist review:', err)
-    }
-  }, [])
+    // applyAndPersist handles snapshot update (round 1 only) + React state
+    await applyAndPersist(entry)
+  }, [applyAndPersist])
 
   // ---- Settings Operations ----
 
@@ -409,35 +329,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
       type: 'update_settings',
       settings,
     }
-    await appendEntry(entry)
-    setState(prev => ({
-      ...prev,
-      settings: { ...prev.settings, ...settings },
-    }))
-  }, [])
+    await applyAndPersist(entry)
+  }, [applyAndPersist])
 
   // ---- Data Management ----
 
   const getLogEntries = useCallback(async (): Promise<AnyLogEntry[]> => {
-    return getAllLogs()
+    // Stream all logs without loading them into memory at once
+    const result: AnyLogEntry[] = []
+    await db.logs.orderBy('timestamp').each(entry => {
+      result.push(entry)
+    })
+    return result
   }, [])
 
   const bulkImport = useCallback(async (
     snapshot: { timestamp: number; state: AppState },
     logs: AnyLogEntry[],
   ): Promise<void> => {
-    // 1. Save the snapshot to IndexedDB
-    await saveSnapshot(snapshot)
-    // 2. Append all log entries
+    // 1. Apply all log entries to the snapshot state for the canonical view
+    const newState = JSON.parse(JSON.stringify(snapshot.state)) as AppState
+    for (const entry of logs) {
+      applyEntry(newState, entry)
+    }
+
+    // 2. Save the merged snapshot as current
+    await saveCurrentSnapshot({ timestamp: Date.now(), state: newState })
+
+    // 3. Append all log entries
     if (logs.length > 0) {
       await appendLogs(logs)
     }
-    // 3. Replay to rebuild state
-    const reconstructed = replayLog(snapshot, logs)
-    setState(reconstructed)
-    setLogCount(logs.length)
 
-    // 4. Trigger sync to push imported data to Drive
+    // 4. Update React state
+    setState(newState)
+
+    // 5. Trigger sync to push imported data to Drive
     notifyDataChanged()
   }, [])
 

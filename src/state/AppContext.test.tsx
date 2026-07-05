@@ -49,16 +49,39 @@ vi.mock('../data/gapi', () => ({
   clearTokenStorage: vi.fn(),
 }))
 
-// Mock db
+// Mock db with state accumulation so applyAndPersist can read the latest snapshot
+const { mockTransaction, mockGetLatestSnapshot, mockSaveCurrentSnapshot } = vi.hoisted(() => {
+  let savedSnapshot: { timestamp: number; state: any } | null = null
+
+  return {
+    mockTransaction: vi.fn((...args: unknown[]) => {
+      const fn = args[args.length - 1] as () => Promise<void>
+      return fn()
+    }),
+    mockGetLatestSnapshot: vi.fn(async () => savedSnapshot),
+    mockSaveCurrentSnapshot: vi.fn(async (snap: { timestamp: number; state: any }) => {
+      savedSnapshot = snap
+    }),
+  }
+})
+
 vi.mock('../data/db', () => ({
+  default: {
+    transaction: mockTransaction,
+    logs: {},
+    snapshot: {},
+    meta: {},
+  },
   appendLog: vi.fn().mockResolvedValue(undefined),
   appendLogs: vi.fn().mockResolvedValue(undefined),
-  getAllLogs: vi.fn().mockResolvedValue([]),
-  getLatestSnapshot: vi.fn().mockResolvedValue(null),
-  saveSnapshot: vi.fn().mockResolvedValue(undefined),
+  getLatestSnapshot: mockGetLatestSnapshot,
+  saveCurrentSnapshot: mockSaveCurrentSnapshot,
+  saveHistoricalSnapshot: vi.fn().mockResolvedValue(undefined),
+  pruneOldSnapshots: vi.fn().mockResolvedValue(undefined),
+  getLogCount: vi.fn().mockResolvedValue(0),
+  pruneOldestLogs: vi.fn().mockResolvedValue(0),
   getLastSyncTime: vi.fn().mockResolvedValue(null),
   setLastSyncTime: vi.fn(),
-  deleteLogsBefore: vi.fn(),
 }))
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -168,7 +191,7 @@ describe('AppContext — sync triggers', () => {
     }
   })
 
-  it('IndexedDB 写入失败时 submitReview 仍然乐观更新 state', async () => {
+  it('IndexedDB 写入失败时 submitReview 传播错误且不更新 state', async () => {
     function useCombined() {
       const auth = useAuth()
       const app = useApp()
@@ -184,7 +207,7 @@ describe('AppContext — sync triggers', () => {
       expect(result.current.app.loading).toBe(false)
     }, { timeout: 2000 })
 
-    // Setup: create wordbook + child (these use appendLog successfully)
+    // Setup: create wordbook + child
     let wbId = ''
     let childId = ''
     await act(async () => {
@@ -192,25 +215,20 @@ describe('AppContext — sync triggers', () => {
       childId = await result.current.app.createChild('小明', wbId)
     })
 
-    // Now make appendLog throw — only affects the next submitReview call
+    // Make appendLog throw — the Dexie transaction will fail and error propagates
     const { appendLog } = await import('../data/db')
     const mockAppendLog = appendLog as ReturnType<typeof vi.fn>
     mockAppendLog.mockRejectedValueOnce(new Error('IndexedDB write failed'))
 
-    // Submit a review — appendLog will reject, but state should still be
-    // updated optimistically because the try/catch in submitReview prevents
-    // the error from propagating
-    await act(async () => {
-      await result.current.app.submitReview(childId, '一', 'a', 1, '2026-07-01')
-    })
+    // submitReview should reject because the transaction failed
+    await expect(
+      result.current.app.submitReview(childId, '一', 'a', 1, '2026-07-01')
+    ).rejects.toThrow('IndexedDB write failed')
 
-    // State should still reflect the review even though IndexedDB failed
+    // State should NOT have the failed review
     {
       const child = result.current.app.state.children.find(c => c.id === childId)!
-      expect(child.progress['一']).toBeDefined()
-      expect(child.progress['一'].lastGrade).toBe('a')
-      const statsAfter = getChildStats(child)
-      expect(statsAfter.total).toBe(1)
+      expect(child.progress['一']).toBeUndefined()
     }
   })
 })
