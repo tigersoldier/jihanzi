@@ -71,16 +71,31 @@ export async function findOrCreateRootFolder(): Promise<string> {
     const token = await getAccessToken()
     setGapiToken(token)
 
-    // Search for existing folder
+    // Search for existing folder or shortcut (shared folders appear as shortcuts
+    // in the recipient's Drive — they can only "Add shortcut to Drive").
     const searchResponse = await gapi.client.drive.files.list({
-      q: `name = '${ROOT_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
-      fields: 'files(id, name)',
+      q: `name = '${ROOT_FOLDER_NAME}' and (mimeType = 'application/vnd.google-apps.folder' or mimeType = 'application/vnd.google-apps.shortcut') and trashed = false`,
+      fields: 'files(id, name, mimeType, shortcutDetails)',
       spaces: 'drive',
     })
 
     const files = searchResponse.result.files || []
     if (files.length > 0) {
-      return files[0].id!
+      const file = files[0]
+      if (file.mimeType === 'application/vnd.google-apps.shortcut') {
+        const targetId = file.shortcutDetails?.targetId
+        console.log('[drive] root folder resolved via shortcut:', {
+          shortcutId: file.id,
+          shortcutName: file.name,
+          targetId,
+        })
+        if (targetId) return targetId
+        // Fall through: shortcut without targetId — treat as not found.
+        console.warn('[drive] shortcut missing targetId, falling back to folder creation')
+      } else {
+        console.log('[drive] root folder found directly:', { id: file.id, name: file.name })
+        return file.id!
+      }
     }
 
     // Create new folder

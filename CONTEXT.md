@@ -196,6 +196,14 @@ Drive 文件只增不删——本地裁剪不从 Drive 删除对应文件。
 通过 Drive 原生共享机制可实现多家长协作——将顶层文件夹共享给配偶，
 双方各自用自己的 Google 账号登录，读写同一份数据。
 
+### 共享快捷方式 (Shared Shortcut)
+
+当用户将顶层文件夹共享给另一个账号时，接收方 Drive 中的
+`记汉字/` 表现为**快捷方式**（`mimeType = application/vnd.google-apps.shortcut`），
+而非真实文件夹。`findOrCreateRootFolder()` 同时搜索 folder 和 shortcut
+两种类型，命中 shortcut 时通过 `shortcutDetails.targetId` 解析出
+目标文件夹 ID，后续操作均使用该目标 ID。详见 ADR 0005。
+
 ---
 
 ## 同步
