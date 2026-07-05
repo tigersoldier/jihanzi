@@ -26,7 +26,7 @@ import type {
   ReviewEntry,
 } from '../core/types'
 import { DEFAULT_SETTINGS } from '../core/types'
-import { applyEntry } from '../core/log'
+import { applyEntry, deepCloneState } from '../core/log'
 import { generateTimestamp } from '../core/log'
 import db, {
   appendLog,
@@ -145,13 +145,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const applyAndPersist = useCallback(async (
     entry: AnyLogEntry,
   ): Promise<boolean> => {
-    const currentSnapshot = await getLatestSnapshot()
-    const prevState = currentSnapshot?.state || EMPTY_STATE
-    const newState = JSON.parse(JSON.stringify(prevState)) as AppState
-    const changed = applyEntry(newState, entry)
-
     const now = Date.now()
+    let changed = false
+    let newState: AppState = EMPTY_STATE
+
     await db.transaction('rw', db.logs, db.snapshot, async () => {
+      // Read snapshot INSIDE the transaction to avoid TOCTOU races
+      // with other tabs or sync-driven snapshot writes.
+      const currentSnapshot = await getLatestSnapshot()
+      const prevState = currentSnapshot?.state || EMPTY_STATE
+      const cloned = deepCloneState(prevState)
+      changed = applyEntry(cloned, entry)
+      newState = cloned
+
       await appendLog(entry)
 
       if (changed) {
@@ -178,6 +184,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Prune logs if over threshold (500k), fire-and-forget
       getLogCount().then(count => {
         if (count > 500_000) pruneOldestLogs(1000)
+      }).catch(err => {
+        console.error('Log pruning failed:', err)
       })
     }
 
@@ -335,7 +343,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ---- Data Management ----
 
   const getLogEntries = useCallback(async (): Promise<AnyLogEntry[]> => {
-    // Stream all logs without loading them into memory at once
+    // Collect all log entries using Dexie cursor.
+    // Note: this still loads all entries into memory — prefer sharded
+    // reads for large datasets. Used for user-initiated export.
     const result: AnyLogEntry[] = []
     await db.logs.orderBy('timestamp').each(entry => {
       result.push(entry)
@@ -348,7 +358,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     logs: AnyLogEntry[],
   ): Promise<void> => {
     // 1. Apply all log entries to the snapshot state for the canonical view
-    const newState = JSON.parse(JSON.stringify(snapshot.state)) as AppState
+    const newState = deepCloneState(snapshot.state)
     for (const entry of logs) {
       applyEntry(newState, entry)
     }

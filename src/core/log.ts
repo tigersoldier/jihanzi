@@ -242,7 +242,7 @@ export function createSnapshot(state: AppState): Snapshot {
 /**
  * Deep clone app state (simple JSON round-trip is sufficient for our data).
  */
-function deepCloneState(state: AppState): AppState {
+export function deepCloneState(state: AppState): AppState {
   return JSON.parse(JSON.stringify(state))
 }
 

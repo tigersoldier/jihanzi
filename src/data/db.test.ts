@@ -186,3 +186,69 @@ describe('repairCorruptedLogs', () => {
     expect(await db.logs.count()).toBe(2)
   })
 })
+
+// ============================================================
+// v2→v3 snapshot migration
+// ============================================================
+
+import Dexie from 'dexie'
+import type { Snapshot } from '../core/types'
+
+describe('v2→v3 snapshot migration', () => {
+  it('stamps type=current on existing v2 snapshot rows after upgrade', async () => {
+    // Simulate a v2 database with a snapshot row that has no 'type' field.
+    // We open a fresh v2 DB outside the app's regular schema to avoid
+    // interfering with the main db instance.
+    const v2db = new Dexie('jihanzi_v2_migration_test')
+    v2db.version(2).stores({
+      logs: '++id, timestamp',
+      snapshot: '++id, timestamp',
+      meta: 'key',
+    })
+
+    const snapshotState = {
+      children: [{ id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} }],
+      wordBooks: [{ id: 'wb_1', name: '测试', characters: ['花'] }],
+      settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+    }
+
+    // Insert a snapshot row WITHOUT the 'type' field (v2 format)
+    await v2db.table('snapshot').add({
+      timestamp: 1000,
+      state: snapshotState,
+    })
+    expect(await v2db.table('snapshot').count()).toBe(1)
+    v2db.close()
+
+    // Now open at v3 with the upgrade — this simulates the real migration
+    const v3db = new Dexie('jihanzi_v2_migration_test')
+    v3db.version(2).stores({
+      logs: '++id, timestamp',
+      snapshot: '++id, timestamp',
+      meta: 'key',
+    })
+    v3db.version(3).stores({
+      logs: '++id, timestamp',
+      snapshot: '++id, timestamp, type',
+      meta: 'key',
+    }).upgrade(async tx => {
+      // The upgrade callback: stamp existing rows
+      const snapshots = tx.table('snapshot')
+      await snapshots.toCollection().modify(row => {
+        row.type = 'current'
+      })
+    })
+
+    await v3db.open()
+
+    // Query using the 'type' index — should find the row now
+    const rows = await v3db.table('snapshot').where('type').equals('current').toArray()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].timestamp).toBe(1000)
+    expect(rows[0].state.children[0].name).toBe('小明')
+    v3db.close()
+
+    // Clean up the test database
+    await Dexie.delete('jihanzi_v2_migration_test')
+  })
+})

@@ -204,7 +204,7 @@ export function useHistory(childId: string, yearMonth: string): MonthHistory {
 
     load()
     return () => { cancelled = true }
-  }, [childId, yearMonth, dataVersion])
+  }, [childId, yearMonth, dataVersion, state])
 
   return { yearMonth, days }
 }

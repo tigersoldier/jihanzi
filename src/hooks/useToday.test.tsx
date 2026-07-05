@@ -436,7 +436,7 @@ describe('useToday', () => {
           wordBookId: 'wb_2',
           nextCharIndex: 1,
           progress: {
-            '花': { ease: 2.6, interval: 1, repetitions: 1, nextReview: '2026-01-02', lastGrade: 'a' },
+            '花': { ease: 2.6, interval: 1, repetitions: 1, nextReview: '2026-01-02', lastGrade: 'a', firstReviewDay: '2026-01-01' },
           },
         },
       ],

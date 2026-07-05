@@ -38,6 +38,18 @@ class JihanziDB extends Dexie {
       logs: '++id, timestamp, type, childId, wordBookId, character, dayKey, [childId+dayKey], [childId+character]',
       snapshot: '++id, timestamp, type',
       meta: 'key',
+    }).upgrade(async tx => {
+      // Stamp the 'type' field on existing v2 snapshot rows so that
+      // getLatestSnapshot() can find them via the new type index.
+      const count = await tx.table('snapshot').count()
+      if (count > 0) {
+        await tx.table('snapshot').toCollection().modify(row => {
+          row.type = 'current'
+        })
+      }
+      // Repair any UTF-8 corrupted log entries from the historical
+      // Drive encoding bug — iterate oldest-first, stop at first clean.
+      await repairCorruptedLogs()
     })
   }
 }
@@ -154,12 +166,7 @@ export async function deleteLogsBefore(timestamp: number): Promise<number> {
  * Deletes entries ordered by timestamp ascending.
  */
 export async function pruneOldestLogs(count: number): Promise<number> {
-  const oldest = await db.logs.orderBy('timestamp').limit(count).toArray()
-  const ids = oldest.map(e => (e as any).id).filter((id): id is number => typeof id === 'number')
-  if (ids.length > 0) {
-    await db.logs.bulkDelete(ids)
-  }
-  return ids.length
+  return db.logs.orderBy('timestamp').limit(count).delete()
 }
 
 /** Get reviews for a specific child */
@@ -219,7 +226,6 @@ export async function getHistoricalSnapshots(): Promise<Snapshot[]> {
   const rows = await db.snapshot
     .where('type')
     .equals(SNAPSHOT_TYPE_HISTORICAL)
-    .reverse()
     .sortBy('timestamp')
   // Most recent first
   return rows.reverse().map(r => ({ timestamp: r.timestamp, state: r.state }))
@@ -231,17 +237,13 @@ export async function getHistoricalSnapshots(): Promise<Snapshot[]> {
  * Used for remote merge: find the base snapshot to replay from.
  */
 export async function findBaseSnapshot(beforeTimestamp: number): Promise<Snapshot | null> {
-  // Walk backwards through snapshots to find the one right before the target
-  const all = await db.snapshot
-    .orderBy('timestamp')
+  const row = await db.snapshot
+    .where('timestamp')
+    .belowOrEqual(beforeTimestamp)
     .reverse()
-    .toArray()
-  for (const row of all) {
-    if (row.timestamp <= beforeTimestamp) {
-      return { timestamp: row.timestamp, state: row.state }
-    }
-  }
-  return null
+    .first()
+  if (!row) return null
+  return { timestamp: row.timestamp, state: row.state }
 }
 
 /** Save/replace the current snapshot */
@@ -267,10 +269,9 @@ export async function pruneOldSnapshots(keepCount: number): Promise<void> {
   // Sort newest first, delete everything after keepCount
   historical.reverse()
   const toDelete = historical.slice(keepCount)
-  for (const row of toDelete) {
-    if (row.id !== undefined) {
-      await db.snapshot.delete(row.id)
-    }
+  const ids = toDelete.map(r => r.id).filter((id): id is number => id !== undefined)
+  if (ids.length > 0) {
+    await db.snapshot.bulkDelete(ids)
   }
 }
 
