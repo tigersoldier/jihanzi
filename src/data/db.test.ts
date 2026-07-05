@@ -13,8 +13,6 @@ import type { AnyLogEntry } from '../core/types'
 // isUTF8Corrupted — pure function tests
 // ============================================================
 
-// Import the function under test (we'll create it next)
-// For now, define the expected behavior as tests
 import { isUTF8Corrupted } from './db'
 
 describe('isUTF8Corrupted', () => {
@@ -52,13 +50,11 @@ describe('isUTF8Corrupted', () => {
   // ---- Invalid: lone surrogates ----
 
   it('lone high surrogate returns true', () => {
-    // U+D800 is a high surrogate — must be followed by a low surrogate
     const corrupted = String.fromCharCode(0xD800)
     expect(isUTF8Corrupted(corrupted)).toBe(true)
   })
 
   it('lone low surrogate returns true', () => {
-    // U+DC00 is a low surrogate — must be preceded by a high surrogate
     const corrupted = String.fromCharCode(0xDC00)
     expect(isUTF8Corrupted(corrupted)).toBe(true)
   })
@@ -76,24 +72,22 @@ describe('isUTF8Corrupted', () => {
   // ---- Invalid: C1 control characters (mojibake from UTF-8 → Latin-1) ----
 
   it('C1 control character returns true', () => {
-    // U+0080–U+009F are C1 control codes — never appear in valid text
-    expect(isUTF8Corrupted('')).toBe(true)
-    expect(isUTF8Corrupted('')).toBe(true)
-    expect(isUTF8Corrupted('')).toBe(true)
+    expect(isUTF8Corrupted('\x80')).toBe(true)
+    expect(isUTF8Corrupted('\x8F')).toBe(true)
+    expect(isUTF8Corrupted('\x9F')).toBe(true)
   })
 
   it('string with embedded C1 control char returns true', () => {
-    // This simulates mojibake: 花 (UTF-8: E8 8A B1) → è±
     const mojibake = 'è±'
     expect(isUTF8Corrupted(mojibake)).toBe(true)
   })
 })
 
 // ============================================================
-// getAllLogs — repair integration tests
+// repairCorruptedLogs — migration repair tests
 // ============================================================
 
-import db, { getAllLogs, appendLog } from './db'
+import db, { appendLog, repairCorruptedLogs } from './db'
 
 function makeReviewEntry(overrides: Partial<AnyLogEntry> = {}): AnyLogEntry {
   return {
@@ -108,66 +102,68 @@ function makeReviewEntry(overrides: Partial<AnyLogEntry> = {}): AnyLogEntry {
   } as AnyLogEntry
 }
 
-describe('getAllLogs — UTF-8 repair', () => {
+describe('repairCorruptedLogs', () => {
   beforeEach(async () => {
-    // Clean the database before each test
     await db.logs.clear()
   })
 
-  it('returns entries unchanged when no corruption is present', async () => {
+  it('returns 0 when no corruption is present', async () => {
     const entry = makeReviewEntry({ character: '花', timestamp: 1 })
     await appendLog(entry)
 
-    const logs = await getAllLogs()
-    expect(logs).toHaveLength(1)
-    expect((logs[0] as any).character).toBe('花')
+    const deleted = await repairCorruptedLogs()
+    expect(deleted).toBe(0)
+
+    const count = await db.logs.count()
+    expect(count).toBe(1)
   })
 
-  it('detects corruption from first character entry and removes all corrupted entries', async () => {
-    // Insert a corrupted entry first (will trigger detection)
-    // Use C1 control character to simulate mojibake
-    const corrupted = makeReviewEntry({
-      character: 'è±', // mojibake for 花
+  it('deletes corrupted entries and stops at first clean entry', async () => {
+    // Put corrupted entries first (oldest)
+    const corrupted1 = makeReviewEntry({ character: '\x80', timestamp: 1 })
+    const corrupted2 = makeReviewEntry({ character: '\x90', timestamp: 2 })
+    await db.logs.bulkAdd([corrupted1, corrupted2])
+
+    // Then a clean entry — repair should stop here
+    const clean = makeReviewEntry({ character: '山', timestamp: 3 })
+    await appendLog(clean)
+
+    // Then more entries (not touched by repair)
+    const later = makeReviewEntry({ character: '水', timestamp: 4 })
+    await appendLog(later)
+
+    const deleted = await repairCorruptedLogs()
+    expect(deleted).toBe(2)
+
+    // Clean entries survive
+    const count = await db.logs.count()
+    expect(count).toBe(2)
+  })
+
+  it('stops at first clean character entry, skips non-character entries', async () => {
+    // Non-character entry is not used for corruption detection
+    const nonChar = {
       timestamp: 1,
-    })
-    await appendLog(corrupted)
-
-    // Insert another corrupted entry
-    const corrupted2 = makeReviewEntry({
-      character: 'å­', // mojibake for 字
-      timestamp: 2,
-    })
-    await appendLog(corrupted2)
-
-    // Insert a valid entry — should survive
-    const valid = makeReviewEntry({ character: '山', timestamp: 3 })
-    await appendLog(valid)
-
-    // Insert an entry without a character field — should survive
-    const nonCharEntry = {
-      timestamp: 4,
       type: 'create_child',
       childId: 'child_1',
       name: '小明',
       wordBookId: 'wb_1',
     } as AnyLogEntry
-    await appendLog(nonCharEntry)
+    await appendLog(nonChar)
 
-    const logs = await getAllLogs()
+    // Corrupted entry after non-char entry
+    const corrupted = makeReviewEntry({ character: '\x80', timestamp: 2 })
+    await appendLog(corrupted)
 
-    // Only valid entries survive
-    expect(logs).toHaveLength(2)
-    const characters = logs
-      .filter((e: any) => e.character)
-      .map((e: any) => e.character)
-    expect(characters).toEqual(['山'])
+    // Clean entry — should stop iteration
+    const clean = makeReviewEntry({ character: '花', timestamp: 3 })
+    await appendLog(clean)
 
-    // Non-character entries survive
-    const nonChars = logs.filter((e: any) => !('character' in e))
-    expect(nonChars).toHaveLength(1)
+    const deleted = await repairCorruptedLogs()
+    expect(deleted).toBe(1)
   })
 
-  it('does nothing when no entry has a character field', async () => {
+  it('handles no character entries at all', async () => {
     const entry1 = {
       timestamp: 1,
       type: 'create_child',
@@ -185,56 +181,8 @@ describe('getAllLogs — UTF-8 repair', () => {
 
     await db.logs.bulkAdd([entry1, entry2])
 
-    const logs = await getAllLogs()
-    expect(logs).toHaveLength(2)
-  })
-
-  it('handles large number of entries without corruption', async () => {
-    // Simulate a realistic scenario with many valid entries
-    const entries: AnyLogEntry[] = []
-    for (let i = 0; i < 50; i++) {
-      entries.push(makeReviewEntry({ character: '花', timestamp: i + 1 }))
-    }
-    await db.logs.bulkAdd(entries)
-
-    const logs = await getAllLogs()
-    expect(logs).toHaveLength(50)
-  })
-
-  it('removes only corrupted entries, keeps clean ones in large mixed dataset', async () => {
-    // Mix of corrupted and valid entries
-    const corrupted = makeReviewEntry({
-      character: '', // C1 control char — definitely corrupted
-      timestamp: 1,
-    })
-    await appendLog(corrupted)
-
-    const validEntries: AnyLogEntry[] = []
-    for (let i = 0; i < 20; i++) {
-      validEntries.push(makeReviewEntry({ character: '山', timestamp: i + 100 }))
-    }
-    await db.logs.bulkAdd(validEntries)
-
-    const logs = await getAllLogs()
-    expect(logs).toHaveLength(20)
-  })
-
-  it('only triggers repair when the FIRST entry with character is corrupted', async () => {
-    // Valid entry comes first
-    const validFirst = makeReviewEntry({ character: '花', timestamp: 1 })
-    await appendLog(validFirst)
-
-    // Corrupted entry comes later — should NOT trigger repair
-    // (detection only checks the first entry with a character field)
-    const corrupted = makeReviewEntry({
-      character: '',
-      timestamp: 2,
-    })
-    await appendLog(corrupted)
-
-    const logs = await getAllLogs()
-    // Both entries are returned because the first character entry is valid
-    // (repair is not triggered)
-    expect(logs).toHaveLength(2)
+    const deleted = await repairCorruptedLogs()
+    expect(deleted).toBe(0)
+    expect(await db.logs.count()).toBe(2)
   })
 })

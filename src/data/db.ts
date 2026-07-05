@@ -13,7 +13,7 @@ import type { AnyLogEntry, ReviewEntry, Snapshot } from '../core/types'
 /** Database schema version and definition */
 class JihanziDB extends Dexie {
   logs!: Table<AnyLogEntry, number>     // Auto-incrementing primary key
-  snapshot!: Table<Snapshot, number>     // Single-row snapshot table
+  snapshot!: Table<Snapshot & { type: string; id?: number }, number>  // Snapshot table; type: 'current' | 'historical'
   meta!: Table<{ key: string; value: unknown }, string>  // Key-value metadata
 
   constructor() {
@@ -31,6 +31,14 @@ class JihanziDB extends Dexie {
       snapshot: '++id, timestamp',
       meta: 'key',
     })
+
+    // v3: add [childId+character] index + snapshot type field for
+    // incremental-materialization architecture
+    this.version(3).stores({
+      logs: '++id, timestamp, type, childId, wordBookId, character, dayKey, [childId+dayKey], [childId+character]',
+      snapshot: '++id, timestamp, type',
+      meta: 'key',
+    })
   }
 }
 
@@ -42,7 +50,7 @@ function filterReviews(entries: AnyLogEntry[]): ReviewEntry[] {
 }
 
 // ============================================================
-// UTF-8 Corruption Detection
+// UTF-8 Corruption Detection & Repair
 // ============================================================
 
 /**
@@ -54,25 +62,18 @@ function filterReviews(entries: AnyLogEntry[]): ReviewEntry[] {
  * 2. C1 control characters (U+0080–U+009F) — these almost never appear
  *    in valid text and are a strong signal of UTF-8 bytes being
  *    misinterpreted as Latin-1 (mojibake).
- *
- * This function is used by getAllLogs to auto-repair corrupted data
- * caused by the historical Drive sync encoding bug where UTF-8 bytes
- * were decoded as Latin-1.
  */
 export function isUTF8Corrupted(str: string): boolean {
   for (let i = 0; i < str.length; i++) {
     const code = str.charCodeAt(i)
     if (code >= 0xD800 && code <= 0xDFFF) {
-      // High surrogate must be followed by a low surrogate
       if (code >= 0xDC00) return true // Lone low surrogate
       if (i + 1 >= str.length || str.charCodeAt(i + 1) < 0xDC00 || str.charCodeAt(i + 1) > 0xDFFF) {
         return true // Lone high surrogate
       }
-      i++ // Skip the paired low surrogate
+      i++
       continue
     }
-    // C1 control characters (U+0080–U+009F): almost certainly mojibake
-    // from UTF-8 bytes misinterpreted as Latin-1
     if (code >= 0x0080 && code <= 0x009F) return true
   }
   return false
@@ -81,6 +82,41 @@ export function isUTF8Corrupted(str: string): boolean {
 /** Check if a log entry has a character field */
 function hasCharacter(entry: AnyLogEntry): entry is AnyLogEntry & { character: string } {
   return 'character' in entry && typeof (entry as any).character === 'string'
+}
+
+/**
+ * Repair UTF-8 corrupted log entries during v2→v3 migration.
+ *
+ * Iterates log entries one-by-one from the oldest. If an entry contains
+ * corrupted character data it is collected for deletion. Once a clean
+ * entry is found, iteration stops — all subsequent entries are assumed
+ * clean because the encoding bug has been fixed in current code.
+ *
+ * Returns the count of deleted entries.
+ */
+export async function repairCorruptedLogs(): Promise<number> {
+  const toDelete: number[] = []
+  let foundClean = false
+
+  await db.logs
+    .orderBy('timestamp')
+    .until(() => foundClean)
+    .each(entry => {
+      if (hasCharacter(entry) && isUTF8Corrupted(entry.character)) {
+        const id = (entry as any).id
+        if (typeof id === 'number') {
+          toDelete.push(id)
+        }
+      } else if (hasCharacter(entry)) {
+        // First clean entry with a character field — stop iterating
+        foundClean = true
+      }
+    })
+
+  if (toDelete.length > 0) {
+    await db.logs.bulkDelete(toDelete)
+  }
+  return toDelete.length
 }
 
 // ============================================================
@@ -97,27 +133,6 @@ export async function appendLogs(entries: AnyLogEntry[]): Promise<number> {
   return db.logs.bulkAdd(entries)
 }
 
-/** Get all log entries, sorted by timestamp */
-export async function getAllLogs(): Promise<AnyLogEntry[]> {
-  const result = await db.logs.orderBy('timestamp').toArray()
-
-  // ---- UTF-8 corruption auto-repair ----
-  // If entries were synced from Drive during the encoding-bug period,
-  // Chinese characters may have been corrupted (UTF-8 bytes → Latin-1).
-  // Detect by checking the first entry with a character field.
-  const firstWithChar = result.find(hasCharacter)
-  if (firstWithChar && isUTF8Corrupted(firstWithChar.character)) {
-    const corrupted = result.filter(e => hasCharacter(e) && isUTF8Corrupted(e.character))
-    const corruptedIds = corrupted.map(e => (e as any).id).filter((id): id is number => typeof id === 'number')
-    if (corruptedIds.length > 0) {
-      await db.logs.bulkDelete(corruptedIds)
-    }
-    return result.filter(e => !hasCharacter(e) || !isUTF8Corrupted(e.character))
-  }
-
-  return result
-}
-
 /** Get log entries after a specific timestamp */
 export async function getLogsAfter(timestamp: number): Promise<AnyLogEntry[]> {
   return db.logs.where('timestamp').above(timestamp).toArray()
@@ -128,9 +143,23 @@ export async function getLogCount(): Promise<number> {
   return db.logs.count()
 }
 
-/** Delete logs older than a timestamp (after snapshot compaction) */
+/** Delete logs older than a timestamp */
 export async function deleteLogsBefore(timestamp: number): Promise<number> {
   return db.logs.where('timestamp').belowOrEqual(timestamp).delete()
+}
+
+/**
+ * Prune the oldest N log entries.
+ * Used when the total log count exceeds the threshold (500k).
+ * Deletes entries ordered by timestamp ascending.
+ */
+export async function pruneOldestLogs(count: number): Promise<number> {
+  const oldest = await db.logs.orderBy('timestamp').limit(count).toArray()
+  const ids = oldest.map(e => (e as any).id).filter((id): id is number => typeof id === 'number')
+  if (ids.length > 0) {
+    await db.logs.bulkDelete(ids)
+  }
+  return ids.length
 }
 
 /** Get reviews for a specific child */
@@ -141,44 +170,15 @@ export async function getReviewsForChild(childId: string): Promise<ReviewEntry[]
     .then(filterReviews)
 }
 
-/** Get reviews for a specific day */
-export async function getReviewsForDay(dayKey: string): Promise<ReviewEntry[]> {
-  return db.logs
-    .where({ type: 'review', dayKey })
-    .toArray()
-    .then(filterReviews)
-}
-
-/** Get all reviews for a specific child and character */
+/** Get all reviews for a specific child and character — uses [childId+character] index */
 export async function getReviewsForChildChar(
   childId: string,
   character: string,
 ): Promise<ReviewEntry[]> {
   return db.logs
-    .where({ type: 'review', childId })
+    .where({ type: 'review', childId, character })
     .toArray()
     .then(filterReviews)
-    .then(entries => entries.filter(r => r.character === character))
-}
-
-/**
- * Get the first review dayKey for each character for a child.
- * Used to classify characters as "new" vs "review" on a given day.
- */
-export async function getFirstReviewDays(
-  childId: string,
-): Promise<Map<string, string>> {
-  const firstDays = new Map<string, string>()
-  await db.logs
-    .where({ type: 'review', childId })
-    .each(r => {
-      if (r.type !== 'review') return
-      const current = firstDays.get(r.character)
-      if (!current || r.dayKey < current) {
-        firstDays.set(r.character, r.dayKey)
-      }
-    })
-  return firstDays
 }
 
 /** Get reviews for a child within a dayKey range (inclusive) */
@@ -200,17 +200,88 @@ export async function getReviewsForChildInRange(
 // Snapshot Operations
 // ============================================================
 
-/** Get the latest snapshot */
+const SNAPSHOT_TYPE_CURRENT = 'current'
+const SNAPSHOT_TYPE_HISTORICAL = 'historical'
+
+/** Get the current (latest) snapshot — the source of truth for app state */
 export async function getLatestSnapshot(): Promise<Snapshot | null> {
-  const snapshots = await db.snapshot.orderBy('timestamp').reverse().limit(1).toArray()
-  return snapshots[0] || null
+  const result = await db.snapshot
+    .where('type')
+    .equals(SNAPSHOT_TYPE_CURRENT)
+    .first()
+  if (!result) return null
+  // Strip the extra 'type' field before returning as Snapshot
+  return { timestamp: result.timestamp, state: result.state }
 }
 
-/** Save a new snapshot (replaces old ones) */
+/** Get all historical snapshots, newest first */
+export async function getHistoricalSnapshots(): Promise<Snapshot[]> {
+  const rows = await db.snapshot
+    .where('type')
+    .equals(SNAPSHOT_TYPE_HISTORICAL)
+    .reverse()
+    .sortBy('timestamp')
+  // Most recent first
+  return rows.reverse().map(r => ({ timestamp: r.timestamp, state: r.state }))
+}
+
+/**
+ * Find the nearest snapshot whose timestamp is ≤ beforeTimestamp.
+ * Searches both current and historical snapshots.
+ * Used for remote merge: find the base snapshot to replay from.
+ */
+export async function findBaseSnapshot(beforeTimestamp: number): Promise<Snapshot | null> {
+  // Walk backwards through snapshots to find the one right before the target
+  const all = await db.snapshot
+    .orderBy('timestamp')
+    .reverse()
+    .toArray()
+  for (const row of all) {
+    if (row.timestamp <= beforeTimestamp) {
+      return { timestamp: row.timestamp, state: row.state }
+    }
+  }
+  return null
+}
+
+/** Save/replace the current snapshot */
+export async function saveCurrentSnapshot(snapshot: Snapshot): Promise<void> {
+  const row = { ...snapshot, type: SNAPSHOT_TYPE_CURRENT }
+  // Delete old current snapshot (there should be at most one)
+  await db.snapshot.where('type').equals(SNAPSHOT_TYPE_CURRENT).delete()
+  await db.snapshot.add(row)
+}
+
+/** Save a historical snapshot at an interval boundary */
+export async function saveHistoricalSnapshot(snapshot: Snapshot): Promise<void> {
+  const row = { ...snapshot, type: SNAPSHOT_TYPE_HISTORICAL }
+  await db.snapshot.add(row)
+}
+
+/** Keep only the most recent `keepCount` historical snapshots, delete the rest */
+export async function pruneOldSnapshots(keepCount: number): Promise<void> {
+  const historical = await db.snapshot
+    .where('type')
+    .equals(SNAPSHOT_TYPE_HISTORICAL)
+    .sortBy('timestamp')
+  // Sort newest first, delete everything after keepCount
+  historical.reverse()
+  const toDelete = historical.slice(keepCount)
+  for (const row of toDelete) {
+    if (row.id !== undefined) {
+      await db.snapshot.delete(row.id)
+    }
+  }
+}
+
+/** Get the count of snapshots (for debugging / diagnostics) */
+export async function getSnapshotCount(): Promise<number> {
+  return db.snapshot.count()
+}
+
+/** Save a snapshot (backward-compatible wrapper — saves as current) */
 export async function saveSnapshot(snapshot: Snapshot): Promise<void> {
-  // Clear old snapshots and save new one
-  await db.snapshot.clear()
-  await db.snapshot.add(snapshot)
+  return saveCurrentSnapshot(snapshot)
 }
 
 // ============================================================
