@@ -199,21 +199,22 @@ export async function pruneOldestLogs(count: number): Promise<number> {
   return db.logs.orderBy('timestamp').limit(count).delete()
 }
 
-/** Get reviews for a specific child */
+/** Get reviews for a specific child — uses childId index, filterReviews 处理 type */
 export async function getReviewsForChild(childId: string): Promise<ReviewEntry[]> {
   return db.logs
-    .where({ type: 'review', childId })
+    .where('childId')
+    .equals(childId)
     .toArray()
     .then(filterReviews)
 }
 
-/** Get all reviews for a specific child and character — uses [childId+character] index */
+/** Get all reviews for a specific child and character — uses [childId+character] index, filterReviews 处理 type */
 export async function getReviewsForChildChar(
   childId: string,
   character: string,
 ): Promise<ReviewEntry[]> {
   return db.logs
-    .where({ type: 'review', childId, character })
+    .where({ childId, character })
     .toArray()
     .then(filterReviews)
 }

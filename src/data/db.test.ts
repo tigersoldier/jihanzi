@@ -87,7 +87,7 @@ describe('isUTF8Corrupted', () => {
 // repairCorruptedLogs — migration repair tests
 // ============================================================
 
-import db, { appendLog, repairCorruptedLogs } from './db'
+import db, { appendLog, repairCorruptedLogs, getReviewsForChild, getReviewsForChildChar } from './db'
 
 function makeReviewEntry(overrides: Partial<AnyLogEntry> = {}): AnyLogEntry {
   return {
@@ -250,5 +250,74 @@ describe('v2→v3 snapshot migration', () => {
 
     // Clean up the test database
     await Dexie.delete('jihanzi_v2_migration_test')
+  })
+})
+
+// ============================================================
+// getReviewsForChild / getReviewsForChildChar
+// ============================================================
+
+describe('getReviewsForChild', () => {
+  beforeEach(async () => {
+    await db.logs.clear()
+  })
+
+  it('returns review entries for a specific child', async () => {
+    const r1 = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1, grade: 'a' })
+    const r2 = makeReviewEntry({ childId: 'child_a', character: '山', timestamp: 2, grade: 'b' })
+    const r3 = makeReviewEntry({ childId: 'child_b', character: '水', timestamp: 3, grade: 'c' })
+    await db.logs.bulkAdd([r1, r2, r3])
+
+    const result = await getReviewsForChild('child_a')
+    expect(result).toHaveLength(2)
+    expect(result.map(r => r.character).sort()).toEqual(['山', '花'])
+  })
+
+  it('returns empty array when no reviews exist for child', async () => {
+    const r1 = makeReviewEntry({ childId: 'child_b', character: '水', timestamp: 1 })
+    await db.logs.bulkAdd([r1])
+
+    const result = await getReviewsForChild('child_a')
+    expect(result).toHaveLength(0)
+  })
+})
+
+describe('getReviewsForChildChar', () => {
+  beforeEach(async () => {
+    await db.logs.clear()
+  })
+
+  it('returns review entries for a specific child and character', async () => {
+    const r1 = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1, grade: 'a', dayKey: '2026-07-01' })
+    const r2 = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 2, grade: 'b', dayKey: '2026-07-02' })
+    const r3 = makeReviewEntry({ childId: 'child_a', character: '山', timestamp: 3, grade: 'c', dayKey: '2026-07-01' })
+    await db.logs.bulkAdd([r1, r2, r3])
+
+    const result = await getReviewsForChildChar('child_a', '花')
+    expect(result).toHaveLength(2)
+    expect(result[0].grade).toBe('a')
+    expect(result[1].grade).toBe('b')
+  })
+
+  it('returns empty array when character has no reviews', async () => {
+    const r1 = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1 })
+    await db.logs.bulkAdd([r1])
+
+    const result = await getReviewsForChildChar('child_a', '水')
+    expect(result).toHaveLength(0)
+  })
+
+  it('filters out non-review entries with same child and character', async () => {
+    const reviewEntry = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1, grade: 'a' })
+    // 非 review 条目不应被返回
+    const nonReview = {
+      timestamp: 2, type: 'create_child',
+      childId: 'child_a', name: '小明', wordBookId: 'wb_1',
+    } as AnyLogEntry
+    await db.logs.bulkAdd([reviewEntry, nonReview])
+
+    const result = await getReviewsForChildChar('child_a', '花')
+    expect(result).toHaveLength(1)
+    expect(result[0].type).toBe('review')
   })
 })
