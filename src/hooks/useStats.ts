@@ -19,6 +19,8 @@ export interface CharacterStats {
     dayKey: string
     rounds: { round: number; grade: Grade }[]
   }[]
+  /** 正在从 IndexedDB 加载数据 */
+  loading: boolean
 }
 
 export function useCharacterStats(childId: string, character: string): CharacterStats {
@@ -26,6 +28,7 @@ export function useCharacterStats(childId: string, character: string): Character
   const [gradeCounts, setGradeCounts] = useState({ a: 0, b: 0, c: 0, d: 0 })
   const [totalReviews, setTotalReviews] = useState(0)
   const [timeline, setTimeline] = useState<CharacterStats['timeline']>([])
+  const [loading, setLoading] = useState(false)
 
   const sm2State = useMemo(() => {
     const child = state.children.find(c => c.id === childId)
@@ -42,6 +45,7 @@ export function useCharacterStats(childId: string, character: string): Character
     lastSM2.current = sm2Key
 
     let cancelled = false
+    setLoading(true)
 
     async function load() {
       const entries = await getReviewsForChildChar(childId, character)
@@ -71,13 +75,14 @@ export function useCharacterStats(childId: string, character: string): Character
       setGradeCounts(counts)
       setTotalReviews(entries.length)
       setTimeline(sortedTimeline)
+      setLoading(false)
     }
 
     load()
     return () => { cancelled = true }
   }, [childId, character, sm2State, dataVersion])
 
-  return { sm2State, totalReviews, gradeCounts, timeline }
+  return { sm2State, totalReviews, gradeCounts, timeline, loading }
 }
 
 // ============================================================

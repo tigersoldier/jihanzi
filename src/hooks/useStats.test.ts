@@ -157,4 +157,48 @@ describe('useCharacterStats', () => {
     await act(async () => { setState(updated); await new Promise(r => setTimeout(r, 50)) })
     expect(db.getReviewsForChildChar).toHaveBeenCalledTimes(2)
   })
+
+  it('loading is true while query is in flight, false after', async () => {
+    // 让 mock 延迟以测试 loading 状态切换
+    let resolveQuery: (value: any[]) => void
+    vi.mocked(db.getReviewsForChildChar).mockReturnValue(
+      new Promise(resolve => { resolveQuery = resolve })
+    )
+
+    let captured: { loading: boolean }[] = []
+    function W({ children }: { children: ReactNode }) {
+      const ctx: AppContextState = {
+        state: makeState(), loading: false, dataVersion: 0,
+        selectedChildId: 'child_1', setSelectedChildId: vi.fn(), reloadState: vi.fn(),
+        createChild: vi.fn() as any, updateChild: vi.fn() as any, deleteChild: vi.fn() as any,
+        createWordBook: vi.fn() as any, updateWordBook: vi.fn() as any, deleteWordBook: vi.fn() as any,
+        addCharacter: vi.fn() as any, removeCharacter: vi.fn() as any, reorderCharacters: vi.fn() as any,
+        submitReview: vi.fn() as any, updateSettings: vi.fn() as any,
+        getLogEntries: vi.fn() as any, bulkImport: vi.fn() as any,
+      }
+      return React.createElement(AppContext.Provider, { value: ctx }, children)
+    }
+
+    const { result } = renderHook(() => {
+      const stats = useCharacterStats('child_1', '雨')
+      captured.push({ loading: stats.loading })
+      return stats
+    }, { wrapper: W })
+
+    // 初始渲染后 useEffect 执行 → setLoading(true) → 查询飞行中
+    await act(async () => { await new Promise(r => setTimeout(r, 0)) })
+    expect(result.current.loading).toBe(true)
+
+    // 解析查询
+    await act(async () => { resolveQuery!([]); await new Promise(r => setTimeout(r, 10)) })
+
+    // 查询完成后 loading 为 false
+    expect(result.current.loading).toBe(false)
+
+    // 验证 loading 状态变化序列：false (初始) → true (查询中) → false (完成)
+    expect(captured.length).toBeGreaterThanOrEqual(3)
+    expect(captured[0].loading).toBe(false)
+    expect(captured[1].loading).toBe(true)
+    expect(captured[captured.length - 1].loading).toBe(false)
+  })
 })
