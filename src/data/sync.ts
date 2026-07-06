@@ -360,16 +360,16 @@ export async function pushChanges(
  */
 let syncInProgress = false
 
-export async function syncOnce(): Promise<void> {
+export async function syncOnce(): Promise<boolean> {
   if (!hasValidToken()) {
     setSyncStatus('offline')
-    return
+    return false
   }
 
   // Prevent concurrent sync cycles from interleaving — multiple triggers
   // (notifyDataChanged debounce, background timer, online event) can fire
   // syncOnce simultaneously, which would cause duplicate log entries.
-  if (syncInProgress) return
+  if (syncInProgress) return false
   syncInProgress = true
 
   setSyncStatus('syncing')
@@ -389,14 +389,14 @@ export async function syncOnce(): Promise<void> {
       // Update lastKnownRemoteTime from Drive
       await refreshLastKnownRemoteTime()
       setSyncStatus('online')
-      return
+      return false
     }
 
     // 3. Diff: find local-only entries
     const snapshot = await getLatestSnapshot()
     if (!snapshot) {
       setSyncStatus('online')
-      return
+      return false
     }
 
     // 使用远程批次中最早条目的 timestamp 作为候选窗口下限
@@ -432,9 +432,11 @@ export async function syncOnce(): Promise<void> {
     await refreshLastKnownRemoteTime()
 
     setSyncStatus('online')
+    return pullResult.didMerge
   } catch (err) {
     console.error('Sync failed:', err)
     setSyncStatus('error')
+    return false
   } finally {
     syncInProgress = false
   }
@@ -560,12 +562,14 @@ export async function ensureIntervalFilesOnDrive(): Promise<void> {
 
 /**
  * Start periodic background sync (every 5 minutes).
+ * @param onMerged — called after a sync cycle that merged remote data
  */
-export function startBackgroundSync(): void {
+export function startBackgroundSync(onMerged?: () => void): void {
   if (syncInterval) return
   syncInterval = setInterval(async () => {
     if (navigator.onLine && hasValidToken()) {
-      await syncOnce()
+      const didMerge = await syncOnce()
+      if (didMerge) onMerged?.()
     }
   }, 5 * 60 * 1000)
 }

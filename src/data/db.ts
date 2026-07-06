@@ -276,6 +276,18 @@ export async function getReviewsForChildInRange(
   return result
 }
 
+/** Get round 1 reviews for a specific child on a specific day — uses [childId+dayKey] index */
+export async function getReviewsForChildOnDay(
+  childId: string,
+  dayKey: string,
+): Promise<ReviewEntry[]> {
+  return db.logs
+    .where({ childId, dayKey })
+    .filter(e => e.type === 'review' && (e as ReviewEntry).round === 1)
+    .toArray()
+    .then(filterReviews)
+}
+
 // ============================================================
 // Snapshot Operations
 // ============================================================

@@ -1,8 +1,9 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
-import type { TaskItem, Grade, ReviewEntry } from '../core/types'
+import type { TaskItem, Grade, ReviewEntry, AppState } from '../core/types'
 import { useApp } from '../state/AppContext'
 import { generateTodayTasks } from '../core/scheduler'
 import { todayKey as getTodayKey, getDayType, getDayTypeLabel, formatDateLabel } from '../utils/date'
+import { getReviewsForChildOnDay } from '../data/db'
 
 export type SessionPhase = 'idle' | 'reviewing' | 'roundComplete' | 'celebration'
 
@@ -95,7 +96,7 @@ interface UseTodayReturn {
 }
 
 export function useToday(): UseTodayReturn {
-  const { state, submitReview, selectedChildId, setSelectedChildId } = useApp()
+  const { state, submitReview, selectedChildId, setSelectedChildId, dataVersion } = useApp()
   const todayKey = getTodayKey()
   const dayType = getDayType(todayKey)
   const dayTypeLabel = getDayTypeLabel(dayType)
@@ -180,6 +181,58 @@ export function useToday(): UseTodayReturn {
       sessionStats,
     })
   }, [phase, taskIndex, round, sessionTasks, sessionReviews, sessionStats, selectedChildId, todayKey, state.children])
+
+  // ---- Sync-driven doneToday check ----
+
+  /**
+   * 同步拉取到远程复习日志后，检查当日复习是否达标。
+   * 达标条件：去重复习字（firstReviewDay !== todayKey）数 >= min(限额, 到期数)。
+   * 仅在 idle 态执行，不打断进行中的学习会话。
+   */
+  async function checkAndMarkDone(childId: string, dayKey: string, currentState: AppState) {
+    try {
+      // 1. 查 IndexedDB 中当日 round 1 复习日志
+      const reviews = await getReviewsForChildOnDay(childId, dayKey)
+
+      // 2. 去重 + 只数复习字（firstReviewDay !== dayKey 的是复习，等于的是新学）
+      const child = currentState.children.find(c => c.id === childId)
+      if (!child) return
+      const reviewedChars = new Set(reviews.map(r => r.character))
+      let reviewCount = 0
+      for (const char of reviewedChars) {
+        const sm2 = child.progress[char]
+        if (sm2 && sm2.firstReviewDay !== dayKey) reviewCount++
+      }
+      if (reviewCount === 0) return
+
+      // 3. 算当日到期复习字数
+      const tasks = generateTodayTasks(currentState, childId, dayKey)
+      const dueReviewCount = tasks.filter(t => t.isReview).length
+
+      // 4. 达标判定
+      const threshold = Math.min(currentState.settings.dailyReviewLimit, dueReviewCount)
+      if (reviewCount >= threshold && threshold > 0) {
+        markDayDone(childId, dayKey)
+        setDoneToday(true)
+      }
+    } catch {
+      // IndexedDB 查询可能失败（如登出期间）——静默忽略
+    }
+  }
+
+  // 每次同步合并数据后（dataVersion 递增）检查当日是否已达标
+  useEffect(() => {
+    if (phase !== 'idle') return
+    if (state.children.length === 0) return
+
+    const childId = selectedChildId || state.children[0]?.id
+    if (!childId) return
+
+    // 已标记完成的跳过，避免重复查 IndexedDB
+    if (isDayDone(childId, todayKey)) return
+
+    checkAndMarkDone(childId, todayKey, state)
+  }, [phase, state, selectedChildId, todayKey, dataVersion])
 
   // Get available children
   const children = useMemo(() => {

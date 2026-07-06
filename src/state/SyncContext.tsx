@@ -57,7 +57,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     })
 
     // Start background sync
-    startBackgroundSync()
+    startBackgroundSync(() => {
+      reloadState()
+      setLastSyncTime(Date.now())
+    })
 
     // Listen for online/offline events
     window.addEventListener('online', checkOnlineStatus)
