@@ -327,6 +327,7 @@ export async function trySilentLogin(): Promise<string | null> {
         if (tokenClient) {
           tokenClient.callback = originalCallback
         }
+        resolve(null)
       }, 3000)
     })
   } catch {

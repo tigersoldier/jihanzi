@@ -4,7 +4,38 @@
  * Uses a mock localStorage since jsdom in vitest 4.x doesn't provide it globally.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+
+// Mock google global + env vars for trySilentLogin tests.
+// vi.hoisted runs before module evaluation, so imports from './gapi'
+// see the mocked globals.
+const { mockRequestAccessToken } = vi.hoisted(() => {
+  vi.stubEnv('VITE_GOOGLE_CLIENT_ID', 'test-client-id')
+  vi.stubEnv('VITE_GOOGLE_API_KEY', 'test-api-key')
+
+  const mockTC = {
+    callback: null as any,
+    requestAccessToken: vi.fn(),
+  }
+
+  vi.stubGlobal('google', {
+    accounts: {
+      oauth2: {
+        initTokenClient: vi.fn(() => mockTC),
+        revoke: vi.fn(),
+      },
+    },
+  })
+
+  return { mockRequestAccessToken: mockTC.requestAccessToken }
+})
+
+// Override isGoogleConfigured so trySilentLogin doesn't bail out early.
+// All other exports are the real implementations via importActual.
+vi.mock('./gapi', async () => {
+  const actual = await vi.importActual<typeof import('./gapi')>('./gapi')
+  return { ...actual, isGoogleConfigured: () => true }
+})
 
 // Create a mock localStorage
 const store = new Map<string, string>()
@@ -26,6 +57,9 @@ import {
   clearUserStorage,
   restoreToken,
   hasValidToken,
+  initTokenClient,
+  trySilentLogin,
+  isGoogleConfigured,
 } from './gapi'
 
 const STORAGE_KEY_TOKEN = 'jihanzi_auth_token'
@@ -213,6 +247,73 @@ describe('gapi localStorage persistence', () => {
       restoreToken(0)
 
       expect(hasValidToken(300000)).toBe(true)
+    })
+  })
+
+  describe('trySilentLogin', () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+      store.clear()
+      mockRequestAccessToken.mockClear()
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('resolves to null after 3s timeout when Google callback never fires', async () => {
+      // Given: token client is initialized
+      initTokenClient()
+
+      // When: trySilentLogin is called (no Google session → callback never fires)
+      const promise = trySilentLogin()
+
+      // Then: after 3s timeout, it should resolve to null (not hang forever)
+      vi.advanceTimersByTime(3500)
+      const result = await promise
+
+      expect(result).toBeNull()
+      // Verify the silent request was made with prompt: ''
+      expect(mockRequestAccessToken).toHaveBeenCalledWith({ prompt: '' })
+    })
+
+    it('resolves to token when Google callback fires with access_token', async () => {
+      initTokenClient()
+
+      // Simulate callback firing synchronously
+      const mockTokenClient = (google.accounts.oauth2.initTokenClient as ReturnType<typeof vi.fn>).mock.results[0].value
+      mockTokenClient.callback = vi.fn()
+
+      // Mock requestAccessToken to invoke the callback with a token
+      mockRequestAccessToken.mockImplementationOnce(() => {
+        mockTokenClient.callback({
+          access_token: 'silent-token-123',
+          expires_in: '3600',
+        })
+      })
+
+      const promise = trySilentLogin()
+      const result = await promise
+
+      expect(result).toBe('silent-token-123')
+    })
+
+    it('resolves to null when Google callback fires with error', async () => {
+      initTokenClient()
+
+      const mockTokenClient = (google.accounts.oauth2.initTokenClient as ReturnType<typeof vi.fn>).mock.results[0].value
+      mockTokenClient.callback = vi.fn()
+
+      mockRequestAccessToken.mockImplementationOnce(() => {
+        mockTokenClient.callback({
+          error: 'popup_closed_by_user',
+        })
+      })
+
+      const promise = trySilentLogin()
+      const result = await promise
+
+      expect(result).toBeNull()
     })
   })
 })
