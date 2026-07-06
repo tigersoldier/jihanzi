@@ -361,6 +361,139 @@ describe('initialPull', () => {
     }
   })
 
+  // ---- Materialize: remote review logs are replayed into snapshot ----
+
+  it('replays remote review entries into snapshot after merge (first import)', async () => {
+    // 模拟首次导入场景：远程 snapshot 的 progress 为空，但远程日志包含复习记录
+    const remoteLogLinesWithReviews = [
+      ...MOCK_REMOTE_LOG_LINES,
+      '{"timestamp":2003,"type":"review","childId":"child_x","character":"一","grade":"a","round":1,"dayKey":"2026-07-01"}',
+      '{"timestamp":2004,"type":"review","childId":"child_x","character":"二","grade":"b","round":1,"dayKey":"2026-07-01"}',
+      '{"timestamp":2005,"type":"review","childId":"child_x","character":"三","grade":"c","round":1,"dayKey":"2026-07-02"}',
+    ]
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
+      childData: {
+        '小明': {
+          snapshot: JSON.stringify(MOCK_REMOTE_SNAPSHOT),
+          logs: remoteLogLinesWithReviews,
+        },
+      },
+    })
+
+    await initialPull()
+
+    // 验证 saveCurrentSnapshot 被调用时，state 包含物化后的 progress
+    expect(mockSaveCurrentSnapshot).toHaveBeenCalled()
+    const savedSnapshot = mockSaveCurrentSnapshot.mock.calls[
+      mockSaveCurrentSnapshot.mock.calls.length - 1
+    ][0]
+    const savedChild = savedSnapshot.state.children[0]
+    expect(savedChild.progress['一']).toBeDefined()
+    expect(savedChild.progress['一'].lastGrade).toBe('a')
+    expect(savedChild.progress['一'].firstReviewDay).toBe('2026-07-01')
+    expect(savedChild.progress['二']).toBeDefined()
+    expect(savedChild.progress['二'].lastGrade).toBe('b')
+    expect(savedChild.progress['三']).toBeDefined()
+    expect(savedChild.progress['三'].lastGrade).toBe('c')
+  })
+
+  it('replays remote review entries into snapshot after merge (incremental)', async () => {
+    // 模拟增量同步场景：本地已有 snapshot（含部分 progress），
+    // 远程拉取到新的复习日志
+    const localSnapshot = {
+      timestamp: 3000,
+      state: {
+        children: [
+          // 本地已学了「一」和「二」；「三」尚未学
+          {
+            id: 'child_x', name: '小明', wordBookId: 'wb_1', nextCharIndex: 2,
+            progress: {
+              '一': { ease: 2.5, interval: 1, repetitions: 1, nextReview: '2026-07-02', lastGrade: 'a', firstReviewDay: '2026-07-01' },
+              '二': { ease: 2.5, interval: 1, repetitions: 1, nextReview: '2026-07-02', lastGrade: 'b', firstReviewDay: '2026-07-01' },
+            },
+          },
+        ],
+        wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '二', '三', '四', '五'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    }
+    mockGetLatestSnapshot.mockResolvedValue(localSnapshot)
+
+    // 远程新日志：设备 B 上学了「三」
+    const remoteLogLinesWithNewReview = [
+      '{"timestamp":2003,"type":"review","childId":"child_x","character":"三","grade":"a","round":1,"dayKey":"2026-07-03"}',
+    ]
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
+      childData: {
+        '小明': {
+          snapshot: null, // 远程 snapshot 可能不存在或更旧
+          logs: remoteLogLinesWithNewReview,
+        },
+      },
+    })
+
+    await initialPull()
+
+    // 验证 saveCurrentSnapshot 被调用来物化远程复习数据
+    expect(mockSaveCurrentSnapshot).toHaveBeenCalled()
+    const savedSnapshot = mockSaveCurrentSnapshot.mock.calls[
+      mockSaveCurrentSnapshot.mock.calls.length - 1
+    ][0]
+    const savedChild = savedSnapshot.state.children[0]
+    // 原有的 progress 保留
+    expect(savedChild.progress['一']).toBeDefined()
+    expect(savedChild.progress['二']).toBeDefined()
+    // 远程复习也被物化
+    expect(savedChild.progress['三']).toBeDefined()
+    expect(savedChild.progress['三'].lastGrade).toBe('a')
+    expect(savedChild.progress['三'].firstReviewDay).toBe('2026-07-03')
+  })
+
+  it('does not overwrite snapshot when remote has no review logs', async () => {
+    // 远程只有 create_child/create_wordbook 类日志，没有复习
+    // snapshot 已由初始保存阶段处理，不应二次重写
+    const localSnapshot = {
+      timestamp: 3000,
+      state: {
+        children: [
+          {
+            id: 'child_y', name: '小红', wordBookId: 'wb_2', nextCharIndex: 3,
+            progress: {
+              '山': { ease: 2.5, interval: 3, repetitions: 3, nextReview: '2026-07-04', lastGrade: 'a', firstReviewDay: '2026-07-01' },
+            },
+          },
+        ],
+        wordBooks: [{ id: 'wb_2', name: '另一个生字本', characters: ['山', '水', '火'] }],
+        settings: { dailyReviewLimit: 20, dailyNewChars: 3, maxRounds: 3 },
+      },
+    }
+    mockGetLatestSnapshot.mockResolvedValue(localSnapshot)
+
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
+      childData: {
+        '小明': {
+          snapshot: JSON.stringify(MOCK_REMOTE_SNAPSHOT),
+          logs: MOCK_REMOTE_LOG_LINES,
+        },
+      },
+    })
+
+    await initialPull()
+
+    // 远程 snapshot 时间戳 2000 < 本地 3000，不应覆盖
+    const saveCalls = mockSaveCurrentSnapshot.mock.calls
+    const overwriteCall = saveCalls.find(
+      (call: any[]) => call[0]?.timestamp === MOCK_REMOTE_SNAPSHOT.timestamp,
+    )
+    expect(overwriteCall).toBeUndefined()
+
+    // appendLogs 可能被调用（远程 log 匹配了新 child），但 snapshot 不应被错误覆盖
+    // 本地 snapshot 的 progress 不应丢失
+  })
+
   // ---- Merge: keeps local snapshot when it is newer than remote ----
 
   it('keeps local snapshot when it is newer than remote', async () => {

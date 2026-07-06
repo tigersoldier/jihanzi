@@ -61,15 +61,13 @@ export function replayLog(snapshot: Snapshot | null, logs: AnyLogEntry[]): AppSt
 export function applyEntry(state: AppState, entry: AnyLogEntry): boolean {
   switch (entry.type) {
     case 'create_child':
-      applyCreateChild(state, entry)
-      return true
+      return applyCreateChild(state, entry)
     case 'update_child':
       return applyUpdateChild(state, entry)
     case 'delete_child':
       return applyDeleteChild(state, entry)
     case 'create_wordbook':
-      applyCreateWordBook(state, entry)
-      return true
+      return applyCreateWordBook(state, entry)
     case 'update_wordbook':
       return applyUpdateWordBook(state, entry)
     case 'delete_wordbook':
@@ -88,7 +86,9 @@ export function applyEntry(state: AppState, entry: AnyLogEntry): boolean {
   }
 }
 
-function applyCreateChild(state: AppState, entry: CreateChildEntry): void {
+function applyCreateChild(state: AppState, entry: CreateChildEntry): boolean {
+  // 幂等：如果 child 已存在则跳过
+  if (state.children.some(c => c.id === entry.childId)) return false
   const child: Child = {
     id: entry.childId,
     name: entry.name,
@@ -97,6 +97,7 @@ function applyCreateChild(state: AppState, entry: CreateChildEntry): void {
     progress: {},
   }
   state.children.push(child)
+  return true
 }
 
 function applyUpdateChild(state: AppState, entry: {
@@ -126,13 +127,16 @@ function applyDeleteChild(state: AppState, entry: { type: 'delete_child'; childI
   return state.children.length !== before
 }
 
-function applyCreateWordBook(state: AppState, entry: CreateWordBookEntry): void {
+function applyCreateWordBook(state: AppState, entry: CreateWordBookEntry): boolean {
+  // 幂等：如果 wordBook 已存在则跳过
+  if (state.wordBooks.some(w => w.id === entry.wordBookId)) return false
   const wb: WordBook = {
     id: entry.wordBookId,
     name: entry.name,
     characters: entry.characters,
   }
   state.wordBooks.push(wb)
+  return true
 }
 
 function applyUpdateWordBook(state: AppState, entry: {

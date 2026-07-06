@@ -9,6 +9,7 @@
  */
 
 import type { AnyLogEntry, Snapshot } from '../core/types'
+import { applyEntry, deepCloneState } from '../core/log'
 import {
   appendLogs,
   getLogsAfter,
@@ -204,6 +205,23 @@ export async function initialPull(): Promise<PullResult> {
     if (remoteOnly.length > 0) {
       remoteOnly.sort((a, b) => a.timestamp - b.timestamp)
       await appendLogs(remoteOnly)
+    }
+
+    // Replay remote-only entries into the snapshot so that in-memory
+    // state (SM-2 progress, nextCharIndex, etc.) reflects the merged
+    // logs. Without this, the snapshot would be stale after a first
+    // import or after pulling reviews produced on another device.
+    const hadBestSnapshot = bestSnapshot !== null
+    if (hadBestSnapshot && remoteOnly.length > 0) {
+      const mergedState = deepCloneState(bestSnapshot!.state)
+      const sortedRemoteOnly = [...remoteOnly].sort((a, b) => a.timestamp - b.timestamp)
+      let changed = false
+      for (const entry of sortedRemoteOnly) {
+        if (applyEntry(mergedState, entry)) changed = true
+      }
+      if (changed) {
+        await saveCurrentSnapshot({ timestamp: Date.now(), state: mergedState })
+      }
     }
 
     setSyncStatus('online')
