@@ -18,6 +18,7 @@ import {
 } from '../data/sync'
 import { useAuth } from './AuthContext'
 import { useApp } from './AppContext'
+import { getLastKnownRemoteTime } from '../data/db'
 
 interface SyncContextState {
   status: SyncStatus
@@ -43,7 +44,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
     // Initial pull from Drive — if remote data was merged into
     // IndexedDB, tell AppContext to reload so the UI picks it up.
-    initialPull().then((pullResult) => {
+    // 先获取 lastKnownRemoteTime 做增量拉取（0 或 undefined → 全量）
+    getLastKnownRemoteTime().then(remoteTime =>
+      initialPull(remoteTime)
+    ).then((pullResult) => {
       setLastSyncTime(Date.now())
       if (pullResult.didMerge) {
         reloadState()

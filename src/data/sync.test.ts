@@ -518,4 +518,84 @@ describe('initialPull', () => {
     )
     expect(overwriteCall).toBeUndefined()
   })
+
+  // ---- Incremental pull: passes lastKnownRemoteTime to pullAllData ----
+
+  it('passes modifiedAfter to pullAllData when lastKnownRemoteTime > 0', async () => {
+    await initialPull(1700000000000)
+
+    // pullAllData 应收到 ISO 字符串参数
+    expect(mockPullAllData).toHaveBeenCalledWith('2023-11-14T22:13:20.000Z')
+  })
+
+  it('does not pass modifiedAfter when lastKnownRemoteTime is 0 (first sync)', async () => {
+    await initialPull(0)
+
+    // pullAllData 不传参数 → 全量拉取
+    expect(mockPullAllData).toHaveBeenCalledWith(undefined)
+  })
+
+  it('does not pass modifiedAfter when lastKnownRemoteTime is undefined', async () => {
+    await initialPull(undefined)
+
+    expect(mockPullAllData).toHaveBeenCalledWith(undefined)
+  })
+
+  // ---- Internal dedup: remoteOnly entries are deduplicated before appendLogs ----
+
+  it('deduplicates remoteOnly by diff key before appending to IndexedDB', async () => {
+    // remote 包含两条 key 完全相同的条目（模拟 Drive 文件已有重复行）
+    const dupLogLines = [
+      '{"timestamp":2001,"type":"create_child","childId":"child_x","name":"小明","wordBookId":"wb_1"}',
+      '{"timestamp":2001,"type":"create_child","childId":"child_x","name":"小明","wordBookId":"wb_1"}',
+    ]
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
+      childData: {
+        '小明': {
+          snapshot: JSON.stringify(MOCK_REMOTE_SNAPSHOT),
+          logs: dupLogLines,
+        },
+      },
+    })
+    // 本地没有对应条目 → 两条都进 remoteOnly → 应该去重
+    mockGetLogsAfter.mockResolvedValue([])
+
+    await initialPull()
+
+    expect(mockAppendLogs).toHaveBeenCalledTimes(1)
+    const appended = mockAppendLogs.mock.calls[0][0] as any[]
+    expect(appended).toHaveLength(1)
+  })
+
+  // ---- Candidate window: uses remoteTMin, not snapshot timestamp ----
+
+  it('computes candidate window from remote batch minimum timestamp', async () => {
+    const wideRangeLogLines = [
+      // 时间跨度很大：最早 1000，最晚 5000
+      '{"timestamp":1000,"type":"review","childId":"child_x","character":"一","grade":"a","round":1,"dayKey":"2026-01-01"}',
+      '{"timestamp":5000,"type":"review","childId":"child_x","character":"二","grade":"b","round":1,"dayKey":"2026-01-02"}',
+    ]
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
+      childData: {
+        '小明': {
+          snapshot: JSON.stringify({ ...MOCK_REMOTE_SNAPSHOT, timestamp: 6000 }),
+          logs: wideRangeLogLines,
+        },
+      },
+    })
+    mockGetLatestSnapshot.mockResolvedValue({
+      timestamp: 6000, // 本地快照时间戳很新
+      state: MOCK_SNAPSHOT.state,
+    })
+
+    await initialPull()
+
+    // getLogsAfter 应以 remoteTMin(1000) - CLOCK_SKEW_BUFFER 为下限，
+    // 而非 snapshot.timestamp(6000) - CLOCK_SKEW_BUFFER
+    const queryStart = mockGetLogsAfter.mock.calls[0][0] as number
+    // CLOCK_SKEW_BUFFER = 1小时 = 3600000ms, 1000 - 3600000 = -3599000 → max(0, ...) = 0
+    expect(queryStart).toBe(0)
+  })
 })

@@ -19,6 +19,7 @@ import {
   getHistoricalSnapshots,
   getLogTimestampRange,
   getLogsAfterPaginated,
+  getLastKnownRemoteTime,
 } from './db'
 import {
   findOrCreateRootFolder,
@@ -135,7 +136,7 @@ interface PullResult {
  * Only reads files with modifiedTime > lastKnownRemoteTime.
  * Returns structured result for the diff/push decision in syncOnce.
  */
-export async function initialPull(): Promise<PullResult> {
+export async function initialPull(lastKnownRemoteTime?: number): Promise<PullResult> {
   if (!hasValidToken()) {
     setSyncStatus('offline')
     return { didMerge: false, driveIsEmpty: true, remoteSnapshot: null, remoteLogEntries: [] }
@@ -144,7 +145,12 @@ export async function initialPull(): Promise<PullResult> {
   setSyncStatus('syncing')
 
   try {
-    const { childData } = await pullAllData()
+    // 增量拉取：只读取 modifiedTime > lastKnownRemoteTime 的文件
+    // lastKnownRemoteTime 为 0 或 undefined 时走全量拉取（首次同步/清除数据）
+    const modifiedAfter = lastKnownRemoteTime && lastKnownRemoteTime > 0
+      ? new Date(lastKnownRemoteTime).toISOString()
+      : undefined
+    const { childData } = await pullAllData(modifiedAfter)
 
     // Parse remote snapshots and log entries from all child folders
     let remoteSnapshot: Snapshot | null = null
@@ -194,17 +200,33 @@ export async function initialPull(): Promise<PullResult> {
     }
 
     // Diff logs by content (not timestamp range) to avoid clock-skew data loss.
-    // Query local logs with a 1-hour buffer before the best snapshot timestamp
-    // to narrow the candidate set for content-based dedup.
-    const cutoff = bestSnapshot ? bestSnapshot.timestamp : 0
-    const localCandidateLogs = await getLogsAfter(Math.max(0, cutoff - CLOCK_SKEW_BUFFER))
+    // 使用远程批次中最早条目的 timestamp 作为候选窗口下限，确保所有远程条目
+    // 都有机会匹配到本地已有条目。clock-skew buffer 防御设备间合理的时间偏差。
+    const remoteTMin = remoteLogEntries.reduce(
+      (min, e) => Math.min(min, e.timestamp),
+      remoteSnapshot?.timestamp ?? Infinity,
+    )
+    const candidateLowerBound = remoteTMin === Infinity
+      ? 0
+      : Math.max(0, remoteTMin - CLOCK_SKEW_BUFFER)
+    const localCandidateLogs = await getLogsAfter(candidateLowerBound)
 
     const { remoteOnly } = diffEntries(localCandidateLogs, remoteLogEntries)
 
+    // 内部去重：如果 remoteLogEntries 本身包含重复（如 Drive 文件已有重复行），
+    // 只保留每个 diff key 的第一条，避免批量写入重复日志到本地 DB
+    const seen = new Set<string>()
+    const dedupedRemoteOnly = remoteOnly.filter(e => {
+      const key = makeDiffKey(e)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+
     // Append remote-only entries to local IndexedDB
-    if (remoteOnly.length > 0) {
-      remoteOnly.sort((a, b) => a.timestamp - b.timestamp)
-      await appendLogs(remoteOnly)
+    if (dedupedRemoteOnly.length > 0) {
+      dedupedRemoteOnly.sort((a, b) => a.timestamp - b.timestamp)
+      await appendLogs(dedupedRemoteOnly)
     }
 
     // Replay remote-only entries into the snapshot so that in-memory
@@ -212,9 +234,9 @@ export async function initialPull(): Promise<PullResult> {
     // logs. Without this, the snapshot would be stale after a first
     // import or after pulling reviews produced on another device.
     const hadBestSnapshot = bestSnapshot !== null
-    if (hadBestSnapshot && remoteOnly.length > 0) {
+    if (hadBestSnapshot && dedupedRemoteOnly.length > 0) {
       const mergedState = deepCloneState(bestSnapshot!.state)
-      const sortedRemoteOnly = [...remoteOnly].sort((a, b) => a.timestamp - b.timestamp)
+      const sortedRemoteOnly = [...dedupedRemoteOnly].sort((a, b) => a.timestamp - b.timestamp)
       let changed = false
       for (const entry of sortedRemoteOnly) {
         if (applyEntry(mergedState, entry)) changed = true
@@ -226,7 +248,7 @@ export async function initialPull(): Promise<PullResult> {
 
     setSyncStatus('online')
     return {
-      didMerge: remoteOnly.length > 0 || (bestSnapshot !== localSnapshot),
+      didMerge: dedupedRemoteOnly.length > 0 || (bestSnapshot !== localSnapshot),
       driveIsEmpty: false,
       remoteSnapshot,
       remoteLogEntries,
@@ -341,8 +363,9 @@ export async function syncOnce(): Promise<void> {
   setSyncStatus('syncing')
 
   try {
-    // 1. Pull remote data
-    const pullResult = await initialPull()
+    // 1. Pull remote data（增量：只读取上次同步后变更过的文件）
+    const remoteTime = await getLastKnownRemoteTime()
+    const pullResult = await initialPull(remoteTime)
 
     // 2. If Drive is empty, push everything local
     if (pullResult.driveIsEmpty) {
@@ -364,10 +387,15 @@ export async function syncOnce(): Promise<void> {
       return
     }
 
-    const cutoff = pullResult.remoteSnapshot
-      ? pullResult.remoteSnapshot.timestamp
-      : snapshot.timestamp
-    const localCandidates = await getLogsAfter(Math.max(0, cutoff - CLOCK_SKEW_BUFFER))
+    // 使用远程批次中最早条目的 timestamp 作为候选窗口下限
+    const localOnlyTMin = pullResult.remoteLogEntries.reduce(
+      (min, e) => Math.min(min, e.timestamp),
+      pullResult.remoteSnapshot?.timestamp ?? Infinity,
+    )
+    const localOnlyLowerBound = localOnlyTMin === Infinity
+      ? 0
+      : Math.max(0, localOnlyTMin - CLOCK_SKEW_BUFFER)
+    const localCandidates = await getLogsAfter(localOnlyLowerBound)
 
     const { localOnly } = diffEntries(localCandidates, pullResult.remoteLogEntries)
 

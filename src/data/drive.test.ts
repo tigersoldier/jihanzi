@@ -337,6 +337,42 @@ describe('listFiles', () => {
     expect(files[0].name).toBe('snapshot_current.json')
     expect(files[2].name).toBe('log_2026-07-11.jsonl')
   })
+
+  it('filters by modifiedTime when modifiedAfter is provided', async () => {
+    const mockList = vi.fn().mockResolvedValue({
+      result: {
+        files: [
+          { id: 'f1', name: 'snapshot_current.json', modifiedTime: '2026-07-05T12:00:00Z' },
+        ],
+      },
+    })
+    vi.stubGlobal('gapi', {
+      client: {
+        request: vi.fn(),
+        drive: { files: { list: mockList } },
+      },
+    })
+
+    await listFiles('folder-id', '2026-07-04T00:00:00Z')
+    const query = mockList.mock.calls[0][0].q
+    expect(query).toContain("modifiedTime > '2026-07-04T00:00:00Z'")
+  })
+
+  it('does not filter by modifiedTime when modifiedAfter is not provided', async () => {
+    const mockList = vi.fn().mockResolvedValue({
+      result: { files: [] },
+    })
+    vi.stubGlobal('gapi', {
+      client: {
+        request: vi.fn(),
+        drive: { files: { list: mockList } },
+      },
+    })
+
+    await listFiles('folder-id')
+    const query = mockList.mock.calls[0][0].q
+    expect(query).not.toContain('modifiedTime')
+  })
 })
 
 // ============================================================

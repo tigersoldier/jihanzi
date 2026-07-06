@@ -179,12 +179,18 @@ export async function findFile(
  */
 export async function listFiles(
   folderId: string,
+  modifiedAfter?: string,
 ): Promise<Array<{ id: string; name: string; modifiedTime: string }>> {
   const token = await getAccessToken()
   setGapiToken(token)
 
+  let q = `'${folderId}' in parents and trashed = false`
+  if (modifiedAfter) {
+    q += ` and modifiedTime > '${modifiedAfter}'`
+  }
+
   const response = await gapi.client.drive.files.list({
-    q: `'${folderId}' in parents and trashed = false`,
+    q,
     fields: 'files(id, name, modifiedTime)',
     spaces: 'drive',
     pageSize: 1000,
@@ -283,7 +289,7 @@ export async function writeFile(
  * Pull all data from Google Drive.
  * Returns the app metadata, and per-child snapshots + logs.
  */
-export async function pullAllData(): Promise<{
+export async function pullAllData(modifiedAfter?: string): Promise<{
   meta: Record<string, unknown> | null
   childData: Record<string, {
     snapshot: string | null
@@ -328,7 +334,7 @@ export async function pullAllData(): Promise<{
       const folderId = folder.id!
 
       // List all files in this child folder
-      const allFiles = await listFiles(folderId)
+      const allFiles = await listFiles(folderId, modifiedAfter)
 
       // ---- Read current snapshot ----
       // Primary: snapshot_current.json (new format)
