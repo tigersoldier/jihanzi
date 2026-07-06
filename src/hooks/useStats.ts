@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
-import type { Grade, SM2State } from '../core/types'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import type { Grade, SM2State, ReviewEntry } from '../core/types'
 import { useApp } from '../state/AppContext'
-import { getReviewsForChildChar, getReviewsForChildInRange } from '../data/db'
+import { getReviewsForChildChar, getReviewsForChildCharPaginated, getReviewsForChildInRange } from '../data/db'
 import { getDayType } from '../utils/date'
 
 export { type Proficiency, getProficiency, PROFICIENCY_COLORS, PROFICIENCY_DOT } from '../core/proficiency'
@@ -10,17 +10,55 @@ export { type Proficiency, getProficiency, PROFICIENCY_COLORS, PROFICIENCY_DOT }
 // Character stats
 // ============================================================
 
+/** 时间线每页条数（多取 1 条用于判断 hasMore） */
+const TIMELINE_PAGE_SIZE = 51
+
 export interface CharacterStats {
   sm2State: SM2State | undefined
   totalReviews: number
   gradeCounts: { a: number; b: number; c: number; d: number }
-  /** Review timeline grouped by day, most recent first */
+  /** Review timeline grouped by day, most recent first — 分批加载 */
   timeline: {
     dayKey: string
     rounds: { round: number; grade: Grade }[]
   }[]
-  /** 正在从 IndexedDB 加载数据 */
+  /** 正在从 IndexedDB 加载首页数据 */
   loading: boolean
+  /** 还有更早的历史可以加载 */
+  hasMore: boolean
+  /** 正在加载更早的页面 */
+  loadingMore: boolean
+  /** 触发加载更早的页面 */
+  loadMore: () => void
+}
+
+/** 将 review entries 按 dayKey 分组、排序为 timeline */
+function entriesToTimeline(entries: ReviewEntry[]): CharacterStats['timeline'] {
+  const dayMap = new Map<string, { round: number; grade: Grade }[]>()
+  for (const entry of entries) {
+    if (entry.type !== 'review') continue
+    const day = dayMap.get(entry.dayKey) || []
+    day.push({ round: entry.round, grade: entry.grade })
+    dayMap.set(entry.dayKey, day)
+  }
+  // Sort rounds within each day
+  for (const rounds of dayMap.values()) {
+    rounds.sort((a, b) => a.round - b.round)
+  }
+  // Most recent days first
+  return Array.from(dayMap.entries())
+    .sort(([a], [b]) => b.localeCompare(a))
+    .map(([dayKey, rounds]) => ({ dayKey, rounds }))
+}
+
+/** 将新页的 timeline 合并到已有 timeline 末尾（新页是更早的数据） */
+function mergeTimeline(
+  existing: CharacterStats['timeline'],
+  more: CharacterStats['timeline'],
+): CharacterStats['timeline'] {
+  const existingKeys = new Set(existing.map(d => d.dayKey))
+  const newDays = more.filter(d => !existingKeys.has(d.dayKey))
+  return [...existing, ...newDays]
 }
 
 export function useCharacterStats(childId: string, character: string): CharacterStats {
@@ -29,6 +67,10 @@ export function useCharacterStats(childId: string, character: string): Character
   const [totalReviews, setTotalReviews] = useState(0)
   const [timeline, setTimeline] = useState<CharacterStats['timeline']>([])
   const [loading, setLoading] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const cursorRef = useRef<number | undefined>(undefined)
+  const loadingMoreRef = useRef(false)
 
   const sm2State = useMemo(() => {
     const child = state.children.find(c => c.id === childId)
@@ -39,6 +81,7 @@ export function useCharacterStats(childId: string, character: string): Character
   // bumped but this character's data didn't change.
   const lastSM2 = useRef('')
 
+  // 首次加载：counts（全量）+ timeline 首页（分页）
   useEffect(() => {
     const sm2Key = sm2State ? JSON.stringify(sm2State) : ''
     if (lastSM2.current === sm2Key) return
@@ -46,35 +89,28 @@ export function useCharacterStats(childId: string, character: string): Character
 
     let cancelled = false
     setLoading(true)
+    cursorRef.current = undefined
 
     async function load() {
-      const entries = await getReviewsForChildChar(childId, character)
+      // counts 用全量查询（单字最多几百条，即时返回）
+      const allEntries = await getReviewsForChildChar(childId, character)
       if (cancelled) return
 
       const counts = { a: 0, b: 0, c: 0, d: 0 }
-      const dayMap = new Map<string, { round: number; grade: Grade }[]>()
-
-      for (const entry of entries) {
+      for (const entry of allEntries) {
         if (entry.type !== 'review') continue
         counts[entry.grade as Grade]++
-        const day = dayMap.get(entry.dayKey) || []
-        day.push({ round: entry.round, grade: entry.grade })
-        dayMap.set(entry.dayKey, day)
       }
-
-      // Sort rounds within each day
-      for (const rounds of dayMap.values()) {
-        rounds.sort((a, b) => a.round - b.round)
-      }
-
-      // Most recent days first
-      const sortedTimeline = Array.from(dayMap.entries())
-        .sort(([a], [b]) => b.localeCompare(a))
-        .map(([dayKey, rounds]) => ({ dayKey, rounds }))
-
       setGradeCounts(counts)
-      setTotalReviews(entries.length)
-      setTimeline(sortedTimeline)
+      setTotalReviews(allEntries.length)
+
+      // timeline 首页用分页查询
+      const page = await getReviewsForChildCharPaginated(childId, character, TIMELINE_PAGE_SIZE)
+      if (cancelled) return
+
+      setTimeline(entriesToTimeline(page.entries))
+      setHasMore(page.hasMore)
+      cursorRef.current = page.cursor ?? undefined
       setLoading(false)
     }
 
@@ -82,7 +118,27 @@ export function useCharacterStats(childId: string, character: string): Character
     return () => { cancelled = true }
   }, [childId, character, sm2State, dataVersion])
 
-  return { sm2State, totalReviews, gradeCounts, timeline, loading }
+  // 加载更早的页面
+  const loadMore = useCallback(() => {
+    if (loadingMoreRef.current || !hasMore) return
+    loadingMoreRef.current = true
+    setLoadingMore(true)
+
+    getReviewsForChildCharPaginated(childId, character, TIMELINE_PAGE_SIZE, cursorRef.current)
+      .then(page => {
+        setTimeline(prev => mergeTimeline(prev, entriesToTimeline(page.entries)))
+        setHasMore(page.hasMore)
+        cursorRef.current = page.cursor ?? undefined
+        loadingMoreRef.current = false
+        setLoadingMore(false)
+      })
+      .catch(() => {
+        loadingMoreRef.current = false
+        setLoadingMore(false)
+      })
+  }, [childId, character, hasMore])
+
+  return { sm2State, totalReviews, gradeCounts, timeline, loading, hasMore, loadingMore, loadMore }
 }
 
 // ============================================================

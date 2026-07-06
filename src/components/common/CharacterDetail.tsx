@@ -2,6 +2,7 @@ import { useCharacterStats } from '../../hooks/useStats'
 import { getCharInfo } from '../../utils/chars'
 import { formatDateLabel, getDayTypeLabel, getDayType } from '../../utils/date'
 import { GRADE_LABELS, GRADE_COLORS } from '../../core/types'
+import { useEffect, useRef } from 'react'
 
 interface CharacterDetailProps {
   childId: string
@@ -10,8 +11,26 @@ interface CharacterDetailProps {
 }
 
 export default function CharacterDetail({ childId, character, onBack }: CharacterDetailProps) {
-  const { sm2State, totalReviews, gradeCounts, timeline, loading } = useCharacterStats(childId, character)
+  const { sm2State, totalReviews, gradeCounts, timeline, loading, hasMore, loadingMore, loadMore } = useCharacterStats(childId, character)
   const { pinyin, words } = getCharInfo(character)
+
+  // 滚动到底时触发 loadMore
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    if (!sentinel || !hasMore) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loadingMore) {
+          loadMore()
+        }
+      },
+      { threshold: 0.1 },
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMore, loadingMore, loadMore])
 
   return (
     <div className="space-y-4">
@@ -128,6 +147,17 @@ export default function CharacterDetail({ childId, character, onBack }: Characte
                 </div>
               </div>
             ))}
+
+            {/* 底部 sentinel + 加载更多提示 */}
+            <div ref={sentinelRef} />
+            {hasMore && !loadingMore && (
+              <p className="text-xs text-gray-400 text-center py-2">向下滚动加载更多…</p>
+            )}
+            {loadingMore && (
+              <div className="flex justify-center py-3">
+                <div className="h-4 w-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+              </div>
+            )}
           </div>
         )}
       </div>

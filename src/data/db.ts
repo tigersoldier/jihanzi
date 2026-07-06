@@ -219,6 +219,45 @@ export async function getReviewsForChildChar(
     .then(filterReviews)
 }
 
+/**
+ * 分页获取指定孩子和字的复习记录 — cursor-based 分页。
+ *
+ * 每次多取 1 条以判断 hasMore：load 51 条，返回 50 条 + cursor。
+ * 下一轮传入 cursor 作为 afterId 获取后续条目。
+ */
+export async function getReviewsForChildCharPaginated(
+  childId: string,
+  character: string,
+  limit: number = 51,
+  afterId?: number,
+): Promise<{ entries: ReviewEntry[]; hasMore: boolean; cursor: number | null }> {
+  const all = await db.logs
+    .where({ childId, character })
+    .toArray()
+
+  // 按 auto-increment id 排序
+  const reviews = all
+    .filter((e): e is ReviewEntry & { id: number } => e.type === 'review' && typeof (e as any).id === 'number')
+    .sort((a, b) => (a as any).id - (b as any).id)
+
+  // 跳过 cursor 之前的条目
+  let startIdx = 0
+  if (afterId !== undefined) {
+    startIdx = reviews.findIndex(e => (e as any).id > afterId)
+    if (startIdx === -1) return { entries: [], hasMore: false, cursor: null }
+  }
+
+  const slice = reviews.slice(startIdx, startIdx + limit)
+  const hasMore = slice.length === limit
+  const entries = slice.slice(0, limit - 1)   // 返回 limit-1 条
+
+  return {
+    entries,
+    hasMore,
+    cursor: entries.length > 0 ? (entries[entries.length - 1] as any).id : null,
+  }
+}
+
 /** Get reviews for a child within a dayKey range (inclusive) */
 export async function getReviewsForChildInRange(
   childId: string,

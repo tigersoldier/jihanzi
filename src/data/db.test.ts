@@ -87,7 +87,7 @@ describe('isUTF8Corrupted', () => {
 // repairCorruptedLogs — migration repair tests
 // ============================================================
 
-import db, { appendLog, repairCorruptedLogs, getReviewsForChild, getReviewsForChildChar } from './db'
+import db, { appendLog, repairCorruptedLogs, getReviewsForChild, getReviewsForChildChar, getReviewsForChildCharPaginated } from './db'
 
 function makeReviewEntry(overrides: Partial<AnyLogEntry> = {}): AnyLogEntry {
   return {
@@ -319,5 +319,103 @@ describe('getReviewsForChildChar', () => {
     const result = await getReviewsForChildChar('child_a', '花')
     expect(result).toHaveLength(1)
     expect(result[0].type).toBe('review')
+  })
+})
+
+// ============================================================
+// getReviewsForChildCharPaginated — cursor-based 分页
+// ============================================================
+
+describe('getReviewsForChildCharPaginated', () => {
+  beforeEach(async () => {
+    await db.logs.clear()
+  })
+
+  it('returns first page and hasMore flag', async () => {
+    // 创建 55 条复习记录，分页大小 51（显示 50）
+    const entries: AnyLogEntry[] = []
+    for (let i = 0; i < 55; i++) {
+      entries.push(makeReviewEntry({
+        childId: 'child_a', character: '花', timestamp: i + 1, grade: 'a',
+        dayKey: `2026-07-${String(Math.floor(i / 5) + 1).padStart(2, '0')}`,
+      }))
+    }
+    await db.logs.bulkAdd(entries)
+
+    const page1 = await getReviewsForChildCharPaginated('child_a', '花', 51)
+    // 返回 50 条（limit - 1），有更多
+    expect(page1.entries).toHaveLength(50)
+    expect(page1.hasMore).toBe(true)
+    expect(page1.cursor).toBeGreaterThan(0)
+  })
+
+  it('returns hasMore=false when total < limit', async () => {
+    const entries: AnyLogEntry[] = []
+    for (let i = 0; i < 10; i++) {
+      entries.push(makeReviewEntry({
+        childId: 'child_a', character: '花', timestamp: i + 1, grade: 'a',
+        dayKey: `2026-07-0${i + 1}`,
+      }))
+    }
+    await db.logs.bulkAdd(entries)
+
+    const page = await getReviewsForChildCharPaginated('child_a', '花', 51)
+    expect(page.entries).toHaveLength(10)
+    expect(page.hasMore).toBe(false)
+    expect(page.cursor).toBeGreaterThan(0)  // 有 entry 就有 cursor
+  })
+
+  it('uses cursor to fetch next page', async () => {
+    const entries: AnyLogEntry[] = []
+    for (let i = 0; i < 105; i++) {
+      entries.push(makeReviewEntry({
+        childId: 'child_a', character: '花', timestamp: i + 1, grade: 'a',
+        dayKey: `2026-07-${String(Math.floor(i / 5) + 1).padStart(2, '0')}`,
+      }))
+    }
+    await db.logs.bulkAdd(entries)
+
+    // 第一页
+    const page1 = await getReviewsForChildCharPaginated('child_a', '花', 51)
+    expect(page1.entries).toHaveLength(50)
+    expect(page1.hasMore).toBe(true)
+
+    // 第二页 — 使用 page1.cursor
+    const page2 = await getReviewsForChildCharPaginated('child_a', '花', 51, page1.cursor!)
+    expect(page2.entries).toHaveLength(50)
+    expect(page2.hasMore).toBe(true)
+
+    // 第三页（最后，只有 5 条剩余）
+    const page3 = await getReviewsForChildCharPaginated('child_a', '花', 51, page2.cursor!)
+    expect(page3.entries).toHaveLength(5)
+    expect(page3.hasMore).toBe(false)
+    // cursor 仍然指向最后一条 entry 的 id，不用时为 null
+
+    // 验证不重叠：三页的 entry id 应互不重复
+    const ids = new Set([
+      ...page1.entries.map(e => (e as any).id),
+      ...page2.entries.map(e => (e as any).id),
+      ...page3.entries.map(e => (e as any).id),
+    ])
+    expect(ids.size).toBe(105)
+  })
+
+  it('returns empty when cursor has no more entries', async () => {
+    const entries: AnyLogEntry[] = []
+    for (let i = 0; i < 5; i++) {
+      entries.push(makeReviewEntry({
+        childId: 'child_a', character: '花', timestamp: i + 1, grade: 'a',
+        dayKey: '2026-07-01',
+      }))
+    }
+    await db.logs.bulkAdd(entries)
+
+    const page = await getReviewsForChildCharPaginated('child_a', '花', 51)
+    const lastId = page.entries[page.entries.length - 1]?.['id'] as number
+
+    const next = await getReviewsForChildCharPaginated('child_a', '花', 51, lastId + 999)
+    expect(next.entries).toHaveLength(0)
+    expect(next.hasMore).toBe(false)
+    expect(next.cursor).toBeNull()
   })
 })

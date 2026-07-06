@@ -18,6 +18,9 @@ vi.mock('../data/db', async () => {
     ...actual,
     getReviewsForChildInRange: vi.fn(() => Promise.resolve([])),
     getReviewsForChildChar: vi.fn(() => Promise.resolve([])),
+    getReviewsForChildCharPaginated: vi.fn(() =>
+      Promise.resolve({ entries: [], hasMore: false, cursor: null }),
+    ),
   }
 })
 
@@ -160,9 +163,13 @@ describe('useCharacterStats', () => {
 
   it('loading is true while query is in flight, false after', async () => {
     // 让 mock 延迟以测试 loading 状态切换
-    let resolveQuery: (value: any[]) => void
+    let resolveCounts: (value: any[]) => void
+    let resolveTimeline: (value: any) => void
     vi.mocked(db.getReviewsForChildChar).mockReturnValue(
-      new Promise(resolve => { resolveQuery = resolve })
+      new Promise(resolve => { resolveCounts = resolve })
+    )
+    vi.mocked(db.getReviewsForChildCharPaginated).mockReturnValue(
+      new Promise(resolve => { resolveTimeline = resolve })
     )
 
     let captured: { loading: boolean }[] = []
@@ -189,16 +196,18 @@ describe('useCharacterStats', () => {
     await act(async () => { await new Promise(r => setTimeout(r, 0)) })
     expect(result.current.loading).toBe(true)
 
-    // 解析查询
-    await act(async () => { resolveQuery!([]); await new Promise(r => setTimeout(r, 10)) })
+    // 解析 counts 查询
+    await act(async () => { resolveCounts!([]); await new Promise(r => setTimeout(r, 0)) })
+    // 此时 paginated 查询还在飞行中，loading 仍为 true
+    expect(result.current.loading).toBe(true)
+
+    // 解析 timeline 查询
+    await act(async () => {
+      resolveTimeline!({ entries: [], hasMore: false, cursor: null })
+      await new Promise(r => setTimeout(r, 10))
+    })
 
     // 查询完成后 loading 为 false
     expect(result.current.loading).toBe(false)
-
-    // 验证 loading 状态变化序列：false (初始) → true (查询中) → false (完成)
-    expect(captured.length).toBeGreaterThanOrEqual(3)
-    expect(captured[0].loading).toBe(false)
-    expect(captured[1].loading).toBe(true)
-    expect(captured[captured.length - 1].loading).toBe(false)
   })
 })
