@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import type { Grade, SM2State, ReviewEntry } from '../core/types'
 import { useApp } from '../state/AppContext'
-import { getReviewsForChildChar, getReviewsForChildCharPaginated, getReviewsForChildInRange } from '../data/db'
+import { getReviewsForChildCharPaginated, getReviewsForChildInRange } from '../data/db'
 import { getDayType } from '../utils/date'
 
 export { type Proficiency, getProficiency, PROFICIENCY_COLORS, PROFICIENCY_DOT } from '../core/proficiency'
@@ -77,36 +77,28 @@ export function useCharacterStats(childId: string, character: string): Character
     return child?.progress[character]
   }, [state.children, childId, character])
 
-  // Track SM2State fingerprint to skip re-query when only dataVersion
-  // bumped but this character's data didn't change.
-  const lastSM2 = useRef('')
+  // sm2State 是对象引用，immutable state 下每次状态更新都会变。
+  // 用 JSON 字符串做依赖，按值比较，值不变就不会触发 effect 重跑。
+  const sm2Key = useMemo(() => sm2State ? JSON.stringify(sm2State) : '', [sm2State])
 
-  // 首次加载：counts（全量）+ timeline 首页（分页）
+  // 首次加载：timeline 首页（分页，只读最多 51 条），counts 从首页数据统计
   useEffect(() => {
-    const sm2Key = sm2State ? JSON.stringify(sm2State) : ''
-    if (lastSM2.current === sm2Key) return
-    lastSM2.current = sm2Key
-
     let cancelled = false
     setLoading(true)
     cursorRef.current = undefined
 
     async function load() {
-      // counts 用全量查询（单字最多几百条，即时返回）
-      const allEntries = await getReviewsForChildChar(childId, character)
+      // 首页用分页查询，只物化最多 51 条记录
+      const page = await getReviewsForChildCharPaginated(childId, character, TIMELINE_PAGE_SIZE)
       if (cancelled) return
 
+      // 从首页数据统计 grade 分布（不保证完整，仅展示已加载部分）
       const counts = { a: 0, b: 0, c: 0, d: 0 }
-      for (const entry of allEntries) {
-        if (entry.type !== 'review') continue
+      for (const entry of page.entries) {
         counts[entry.grade as Grade]++
       }
       setGradeCounts(counts)
-      setTotalReviews(allEntries.length)
-
-      // timeline 首页用分页查询
-      const page = await getReviewsForChildCharPaginated(childId, character, TIMELINE_PAGE_SIZE)
-      if (cancelled) return
+      setTotalReviews(page.entries.length)
 
       setTimeline(entriesToTimeline(page.entries))
       setHasMore(page.hasMore)
@@ -116,7 +108,7 @@ export function useCharacterStats(childId: string, character: string): Character
 
     load()
     return () => { cancelled = true }
-  }, [childId, character, sm2State, dataVersion])
+  }, [childId, character, sm2Key])
 
   // 加载更早的页面
   const loadMore = useCallback(() => {

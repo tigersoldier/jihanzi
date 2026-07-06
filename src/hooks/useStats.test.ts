@@ -17,7 +17,6 @@ vi.mock('../data/db', async () => {
   return {
     ...actual,
     getReviewsForChildInRange: vi.fn(() => Promise.resolve([])),
-    getReviewsForChildChar: vi.fn(() => Promise.resolve([])),
     getReviewsForChildCharPaginated: vi.fn(() =>
       Promise.resolve({ entries: [], hasMore: false, cursor: null }),
     ),
@@ -93,7 +92,7 @@ describe('useHistory', () => {
 describe('useCharacterStats', () => {
   beforeEach(() => { vi.clearAllMocks() })
 
-  it('calls getReviewsForChildChar on initial mount', () => {
+  it('calls getReviewsForChildCharPaginated on initial mount', () => {
     renderHook(() => useCharacterStats('child_1', '雨'), {
       wrapper: ({ children }: { children: ReactNode }) => {
         const ctx: AppContextState = {
@@ -108,7 +107,7 @@ describe('useCharacterStats', () => {
         return React.createElement(AppContext.Provider, { value: ctx }, children)
       },
     })
-    expect(db.getReviewsForChildChar).toHaveBeenCalledTimes(1)
+    expect(db.getReviewsForChildCharPaginated).toHaveBeenCalledTimes(1)
   })
 
   it('skips re-query when dataVersion bumps but SM2State unchanged', async () => {
@@ -129,10 +128,10 @@ describe('useCharacterStats', () => {
     }
 
     renderHook(() => useCharacterStats('child_1', '雨'), { wrapper: W })
-    await vi.waitFor(() => { expect(db.getReviewsForChildChar).toHaveBeenCalledTimes(1) })
+    await vi.waitFor(() => { expect(db.getReviewsForChildCharPaginated).toHaveBeenCalledTimes(1) })
 
     await act(async () => { setDV(1); await new Promise(r => setTimeout(r, 50)) })
-    expect(db.getReviewsForChildChar).toHaveBeenCalledTimes(1)
+    expect(db.getReviewsForChildCharPaginated).toHaveBeenCalledTimes(1)
   })
 
   it('re-queries when SM2State actually changes', async () => {
@@ -153,26 +152,20 @@ describe('useCharacterStats', () => {
     }
 
     renderHook(() => useCharacterStats('child_1', '雨'), { wrapper: W })
-    await vi.waitFor(() => { expect(db.getReviewsForChildChar).toHaveBeenCalledTimes(1) })
+    await vi.waitFor(() => { expect(db.getReviewsForChildCharPaginated).toHaveBeenCalledTimes(1) })
 
     const updated = makeState()
     updated.children[0].progress['雨'] = { ...SM2_A, repetitions: 2 }
     await act(async () => { setState(updated); await new Promise(r => setTimeout(r, 50)) })
-    expect(db.getReviewsForChildChar).toHaveBeenCalledTimes(2)
+    expect(db.getReviewsForChildCharPaginated).toHaveBeenCalledTimes(2)
   })
 
   it('loading is true while query is in flight, false after', async () => {
-    // 让 mock 延迟以测试 loading 状态切换
-    let resolveCounts: (value: any[]) => void
     let resolveTimeline: (value: any) => void
-    vi.mocked(db.getReviewsForChildChar).mockReturnValue(
-      new Promise(resolve => { resolveCounts = resolve })
-    )
     vi.mocked(db.getReviewsForChildCharPaginated).mockReturnValue(
       new Promise(resolve => { resolveTimeline = resolve })
     )
 
-    let captured: { loading: boolean }[] = []
     function W({ children }: { children: ReactNode }) {
       const ctx: AppContextState = {
         state: makeState(), loading: false, dataVersion: 0,
@@ -186,22 +179,13 @@ describe('useCharacterStats', () => {
       return React.createElement(AppContext.Provider, { value: ctx }, children)
     }
 
-    const { result } = renderHook(() => {
-      const stats = useCharacterStats('child_1', '雨')
-      captured.push({ loading: stats.loading })
-      return stats
-    }, { wrapper: W })
+    const { result } = renderHook(() => useCharacterStats('child_1', '雨'), { wrapper: W })
 
     // 初始渲染后 useEffect 执行 → setLoading(true) → 查询飞行中
     await act(async () => { await new Promise(r => setTimeout(r, 0)) })
     expect(result.current.loading).toBe(true)
 
-    // 解析 counts 查询
-    await act(async () => { resolveCounts!([]); await new Promise(r => setTimeout(r, 0)) })
-    // 此时 paginated 查询还在飞行中，loading 仍为 true
-    expect(result.current.loading).toBe(true)
-
-    // 解析 timeline 查询
+    // 解析 paginated 查询
     await act(async () => {
       resolveTimeline!({ entries: [], hasMore: false, cursor: null })
       await new Promise(r => setTimeout(r, 10))

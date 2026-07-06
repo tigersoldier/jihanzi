@@ -411,9 +411,8 @@ describe('getReviewsForChildCharPaginated', () => {
     await db.logs.bulkAdd(entries)
 
     const page = await getReviewsForChildCharPaginated('child_a', '花', 51)
-    const lastId = page.entries[page.entries.length - 1]?.['id'] as number
-
-    const next = await getReviewsForChildCharPaginated('child_a', '花', 51, lastId + 999)
+    // reverse 排序下 cursor 是当前页最小的 id，传入 cursor 即 id < cursor 无更多记录
+    const next = await getReviewsForChildCharPaginated('child_a', '花', 51, page.cursor!)
     expect(next.entries).toHaveLength(0)
     expect(next.hasMore).toBe(false)
     expect(next.cursor).toBeNull()

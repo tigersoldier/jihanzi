@@ -222,8 +222,13 @@ export async function getReviewsForChildChar(
 /**
  * 分页获取指定孩子和字的复习记录 — cursor-based 分页。
  *
- * 每次多取 1 条以判断 hasMore：load 51 条，返回 50 条 + cursor。
- * 下一轮传入 cursor 作为 afterId 获取后续条目。
+ * 利用 [childId+character] 复合索引中同键值记录按主键排序的特性：
+ * reverse() 取最新（id 最大）在前，filter 限定 type==='review'，
+ * limit(N) 限制每次最多读 N 条（不会物化全量记录）。
+ *
+ * 每次多取 1 条以判断 hasMore：load 51 条，返回最多 50 条 + cursor。
+ * 多取的第 51 条在下一页作为第一条被重新读出，确保不丢数据。
+ * 下一轮传入 cursor（上一页最后一条的 id）获取更早的条目。
  */
 export async function getReviewsForChildCharPaginated(
   childId: string,
@@ -231,30 +236,28 @@ export async function getReviewsForChildCharPaginated(
   limit: number = 51,
   afterId?: number,
 ): Promise<{ entries: ReviewEntry[]; hasMore: boolean; cursor: number | null }> {
-  const all = await db.logs
+  let collection = db.logs
     .where({ childId, character })
-    .toArray()
+    .filter(e => e.type === 'review')
 
-  // 按 auto-increment id 排序
-  const reviews = all
-    .filter((e): e is ReviewEntry & { id: number } => e.type === 'review' && typeof (e as any).id === 'number')
-    .sort((a, b) => (a as any).id - (b as any).id)
-
-  // 跳过 cursor 之前的条目
-  let startIdx = 0
+  // 游标分页：reverse 下 id 从大到小，只取 id < afterId 的更早记录
   if (afterId !== undefined) {
-    startIdx = reviews.findIndex(e => (e as any).id > afterId)
-    if (startIdx === -1) return { entries: [], hasMore: false, cursor: null }
+    collection = collection.filter(e => (e as any).id < afterId)
   }
 
-  const slice = reviews.slice(startIdx, startIdx + limit)
-  const hasMore = slice.length === limit
-  const entries = slice.slice(0, limit - 1)   // 返回 limit-1 条
+  const entries = await collection
+    .reverse()
+    .limit(limit)
+    .toArray() as (ReviewEntry & { id: number })[]
+
+
+  const hasMore = entries.length === limit
+  const result = entries.slice(0, limit - 1) as ReviewEntry[]
 
   return {
-    entries,
+    entries: result,
     hasMore,
-    cursor: entries.length > 0 ? (entries[entries.length - 1] as any).id : null,
+    cursor: result.length > 0 ? (result[result.length - 1] as any).id : null,
   }
 }
 
