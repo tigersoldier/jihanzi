@@ -62,20 +62,8 @@ export default function CharacterDetail({ childId, character, onBack }: Characte
         )}
       </div>
 
-      {/* SM-2 State */}
-      {loading ? (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
-          <h3 className="text-sm font-medium text-gray-500 mb-3">🧠 当前记忆状态</h3>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i}>
-                <span className="text-gray-400">{['难度系数','间隔','成功重复','下次复习'][i]}</span>
-                <div className="h-5 w-20 bg-gray-200 animate-pulse rounded mt-1" />
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : sm2State && (
+      {/* SM-2 State — 数据来自 snapshot，同步可用，无需 loading */}
+      {sm2State && (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
           <h3 className="text-sm font-medium text-gray-500 mb-3">🧠 当前记忆状态</h3>
           <div className="grid grid-cols-2 gap-3 text-sm">
