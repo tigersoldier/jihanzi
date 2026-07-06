@@ -46,8 +46,16 @@ const CLOCK_SKEW_BUFFER = 60 * 60 * 1000
 /** Batch size for paginated log scans — odd number ensures batch boundaries are visible */
 const SCAN_BATCH_SIZE = 501
 
-/** Build a dedup key from a log entry's (timestamp, type, entityId) triple */
+/**
+ * 构建日志去重键。
+ * review 条目使用 timestamp + childId + character 作为自然主键；
+ * 其它条目沿用 timestamp + type + entityId 三元组。
+ */
 function makeDiffKey(e: AnyLogEntry): string {
+  if (e.type === 'review') {
+    const reviewEntry = e as import('../core/types').ReviewEntry
+    return `${e.timestamp}:${e.type}:${reviewEntry.childId}:${reviewEntry.character}`
+  }
   const entityId = (e as any).childId || (e as any).wordBookId || ''
   return `${e.timestamp}:${e.type}:${entityId}`
 }
@@ -312,7 +320,11 @@ export async function pushChanges(
     for (const [intervalKey, entries] of logsByInterval) {
       const fileName = logFileName(intervalKey)
       const existing = await findFile(childFolderId, fileName)
-      const logLines = entries.map((l: any) => JSON.stringify(l))
+      const logLines = entries.map((l: any) => {
+        // 去掉 IndexedDB 自增 id → Drive 上不需要存储这个无用的本地 ID
+        const { id: _id, ...rest } = l
+        return JSON.stringify(rest)
+      })
       await pushLogs(childFolderId, logLines, existing?.id, fileName)
     }
 

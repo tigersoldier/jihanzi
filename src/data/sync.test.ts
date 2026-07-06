@@ -149,6 +149,32 @@ describe('diffEntries', () => {
     expect(remoteOnly).toEqual([])
     expect(localOnly).toEqual([entryA, entryB, entryC])
   })
+
+  it('treats review entries with same timestamp+childId but different characters as different', () => {
+    // 同一个孩子在同一毫秒评了两个不同的字 → 应该是两条不同的日志
+    const reviewA = { timestamp: 1001, type: 'review', childId: 'c1', character: '花', grade: 'a', round: 1, dayKey: '2026-01-01' }
+    const reviewB = { timestamp: 1001, type: 'review', childId: 'c1', character: '山', grade: 'b', round: 1, dayKey: '2026-01-01' }
+
+    const { remoteOnly, localOnly } = diffEntries(
+      [reviewA],        // 本地只有「花」
+      [reviewA, reviewB], // 远程有「花」和「山」
+    )
+    // 「山」在本地不存在 → 应出现在 remoteOnly
+    expect(remoteOnly).toEqual([reviewB])
+    expect(localOnly).toEqual([])
+  })
+
+  it('treats review entries with same timestamp+childId+character as duplicates', () => {
+    // 完全相同的复习记录 → 应去重
+    const review = { timestamp: 1001, type: 'review', childId: 'c1', character: '花', grade: 'a', round: 1, dayKey: '2026-01-01' }
+
+    const { remoteOnly, localOnly } = diffEntries(
+      [review],
+      [review],
+    )
+    expect(remoteOnly).toEqual([])
+    expect(localOnly).toEqual([])
+  })
 })
 
 describe('pushChanges', () => {
@@ -240,6 +266,23 @@ describe('pushChanges', () => {
     const histPushCalls = mockPushSnapshot.mock.calls
       .filter((c: any[]) => c[3] === 'snapshot_2026-06-21.json')
     expect(histPushCalls.length).toBe(0)
+  })
+
+  it('strips auto-increment id from log entries before pushing to Drive', async () => {
+    // 模拟 IndexedDB 返回的条目带有自增 id
+    const entriesWithId = MOCK_LOG_ENTRIES.map((e, i) => ({ ...e, id: i + 1 }))
+    await pushChanges(entriesWithId as any, MOCK_SNAPSHOT as any)
+
+    // pushLogs 的第二个参数是 logLines（字符串数组）
+    const pushLogsCalls = mockPushLogs.mock.calls
+    for (const call of pushLogsCalls) {
+      const lines: string[] = call[1]
+      for (const line of lines) {
+        const parsed = JSON.parse(line)
+        // id 字段不应出现在 Drive 条目中
+        expect(parsed).not.toHaveProperty('id')
+      }
+    }
   })
 })
 

@@ -291,12 +291,16 @@ initialPull()
 
 ```typescript
 const makeKey = (e: AnyLogEntry): string => {
+  if (e.type === 'review') {
+    return `${e.timestamp}:${e.type}:${e.childId}:${e.character}`
+  }
   const entityId = (e as any).childId || (e as any).wordBookId || ''
   return `${e.timestamp}:${e.type}:${entityId}`
 }
 ```
 
-以 `timestamp:type:entityId` 三元组作为唯一标识。因为日志条目是不可变的（append-only），相同 key 即表示同一条记录，无需再次添加。
+review 条目使用 `timestamp:type:childId:character` 四元组作为唯一标识——同一孩子同一毫秒评两个字时不应去重。
+其它条目沿用 `timestamp:type:entityId` 三元组。日志条目不可变（append-only），相同 key 即表示同一条记录，无需再次添加。
 
 ### 2.2 从本地同步到 Google Drive (Push)
 
@@ -408,7 +412,7 @@ await initialPull()    // 再从 Drive 拉取远程变更
 2. 不同设备产生的日志条目有不同的 `timestamp`（基于 `Date.now()`），因此有不同的 dedup key。
 3. 合并策略是**集合并集**（union）——不存在"A 改了 B 也改了同一字段"的场景。
 
-**去重机制：** 使用 `timestamp:type:entityId` 三元组判断两条日志是否为同一条。如果 key 相同，远程日志会被跳过。
+**去重机制：** review 条目使用 `timestamp:type:childId:character` 四元组，其它条目使用 `timestamp:type:entityId` 三元组。key 相同则视为重复，远程日志会被跳过。
 
 ### 5.2 快照冲突
 
@@ -426,7 +430,7 @@ const bestSnapshot =
 
 ### 5.3 边际场景
 
-- **同一毫秒内的两次操作：** `generateTimestamp()` 使用 `Date.now()`（毫秒精度）。理论上同一毫秒内对同一实体的两次同类型操作会产生相同的 dedup key，导致其中一条被去重丢弃。实际发生概率极低。
+- **同一毫秒内的两次操作：** `generateTimestamp()` 使用 `Date.now()`（毫秒精度）。review 条目因包含 `character`，同一孩子同一毫秒评不同字不会冲突。非 review 条目对同一实体的同类型操作若落在同一毫秒，会产生相同的 dedup key 导致其中一条被去重丢弃——实际发生概率极低。
 - **同一汉字被两个设备分别复习：** 两条 ReviewEntry 有不同的 timestamp，都会被添加到日志中。重放时按 timestamp 排序依次应用 SM-2 更新，**后评的那个覆盖先评的**（Last Writer Wins）。结果可能不符合间隔重复算法的预期（因为 SM-2 的 interval 需要基于前一次的 interval 计算）。
 
 ---
