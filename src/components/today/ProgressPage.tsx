@@ -7,6 +7,7 @@ import { GRADE_LABELS, GRADE_COLORS, type Grade } from '../../core/types'
 import ProgressBar from './ProgressBar'
 import CharacterCard from './CharacterCard'
 import RatingButtons from './RatingButtons'
+import PresentingButtons from './PresentingButtons'
 import RoundComplete from './RoundComplete'
 import Celebration from './Celebration'
 import CharacterDetail from '../common/CharacterDetail'
@@ -56,6 +57,7 @@ export function TodaySession() {
     children,
     selectedChildId,
     handleRate,
+    handlePresentNav,
     startSession,
     handleContinueRound,
     handleSkipRound,
@@ -98,6 +100,32 @@ export function TodaySession() {
               开始学习
             </button>
           )}
+        </div>
+      )}
+
+      {/* 展示阶段 — 仅学新日，展示新字不评级 */}
+      {phase === 'presenting' && currentTask && (
+        <div className="space-y-4">
+          <div className="text-center">
+            <p className="text-sm text-gray-500 mb-2">请先让孩子看一遍生字，写下来并记住</p>
+            <span className="inline-block bg-indigo-100 text-indigo-700 text-xs font-medium px-3 py-1 rounded-full">
+              预习 {taskIndex + 1} / {totalTasks}
+            </span>
+          </div>
+          <ProgressBar current={taskIndex} total={totalTasks} />
+          <CharacterCard
+            character={currentTask.character}
+            isNew={false}
+            sm2State={undefined}
+            ratingAnimation={null}
+            slideDirection="in"
+          />
+          <PresentingButtons
+            taskIndex={taskIndex}
+            totalTasks={totalTasks}
+            onPrev={() => handlePresentNav('prev')}
+            onNext={() => handlePresentNav('next')}
+          />
         </div>
       )}
 

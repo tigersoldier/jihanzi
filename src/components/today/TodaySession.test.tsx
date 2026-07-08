@@ -55,6 +55,7 @@ function wrapperWith(state: AppState, childId = '') {
       removeCharacter: vi.fn() as any,
       reorderCharacters: vi.fn() as any,
       submitReview: vi.fn() as any,
+      submitPresentChars: vi.fn() as any,
       updateSettings: vi.fn() as any,
       getLogEntries: vi.fn() as any,
       bulkImport: vi.fn() as any,

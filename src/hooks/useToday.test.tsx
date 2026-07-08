@@ -137,6 +137,7 @@ function createStatefulWrapper(initialState: AppState) {
       removeCharacter: vi.fn() as any,
       reorderCharacters: vi.fn() as any,
       submitReview,
+      submitPresentChars: vi.fn(() => Promise.resolve()) as any,
       updateSettings: vi.fn() as any,
       getLogEntries: vi.fn() as any,
       bulkImport: vi.fn() as any,
@@ -164,12 +165,21 @@ describe('useToday', () => {
 
     const { result, unmount } = renderHook(() => useToday(), { wrapper })
 
-    // 开始学习
+    // 开始学习 → 学新日先进入展示阶段
     act(() => {
       result.current.startSession()
     })
+    expect(result.current.phase).toBe('presenting')
+    expect(result.current.taskIndex).toBe(0)
+    expect(result.current.currentTask?.character).toBe('一')
+
+    // 推进展示阶段（5 个新字逐个展示，最后一个触发进入复习阶段）
+    for (let i = 0; i < 5; i++) {
+      act(() => { result.current.handlePresentNav('next') })
+    }
     expect(result.current.phase).toBe('reviewing')
     expect(result.current.taskIndex).toBe(0)
+    // 复习队列：[...到期复习字(空), ...新字] → 第一个是「一」
     expect(result.current.currentTask?.character).toBe('一')
 
     // 评分「一」为 a
@@ -217,10 +227,14 @@ describe('useToday', () => {
 
     const { result, unmount } = renderHook(() => useToday(), { wrapper })
 
-    // 开始学习
+    // 开始学习 → 学新日先进入展示阶段（仅 1 个新字）
     act(() => {
       result.current.startSession()
     })
+    expect(result.current.phase).toBe('presenting')
+
+    // 推进展示阶段（1 个新字，点击即进入复习阶段）
+    act(() => { result.current.handlePresentNav('next') })
     expect(result.current.phase).toBe('reviewing')
 
     // 评完所有字（只有「一」）
@@ -258,13 +272,22 @@ describe('useToday', () => {
     // 确认 session 开始前有 5 个任务
     expect(result.current.totalTasks).toBe(5)
 
-    // 开始学习
+    // 开始学习 → 学新日先进入展示阶段
     act(() => {
       result.current.startSession()
     })
 
+    expect(result.current.phase).toBe('presenting')
+    expect(result.current.taskIndex).toBe(0)
+    expect(result.current.currentTask?.character).toBe('一')
+
+    // 推进展示阶段（5 个新字逐个展示，最后一个触发进入复习阶段）
+    for (let i = 0; i < 5; i++) {
+      act(() => { result.current.handlePresentNav('next') })
+    }
     expect(result.current.phase).toBe('reviewing')
     expect(result.current.taskIndex).toBe(0)
+    // 复习队列：[...到期复习字(空), ...新字] → 第一个是「一」
     expect(result.current.currentTask?.character).toBe('一')
 
     // When: 评分「一」为 a
@@ -291,6 +314,9 @@ describe('useToday', () => {
     act(() => {
       result.current.startSession()
     })
+    // 走完展示阶段（1 个新字 → 直接进入复习阶段）
+    act(() => { result.current.handlePresentNav('next') })
+    expect(result.current.phase).toBe('reviewing')
 
     // When: 在 350ms 内快速双击「a」按钮
     await act(async () => {
@@ -359,6 +385,7 @@ describe('useToday', () => {
         removeCharacter: vi.fn() as any,
         reorderCharacters: vi.fn() as any,
         submitReview: vi.fn() as any,
+        submitPresentChars: vi.fn() as any,
         updateSettings: vi.fn() as any,
         getLogEntries: vi.fn() as any,
         bulkImport: vi.fn() as any,
@@ -407,10 +434,17 @@ describe('useToday', () => {
       result.current.setSelectedChildId('child_2')
     })
 
-    // 开始学习
+    // 开始学习 → 学新日先进入展示阶段
     act(() => {
       result.current.startSession()
     })
+    expect(result.current.phase).toBe('presenting')
+    expect(result.current.currentTask?.character).toBe('花')
+
+    // 推进展示阶段（2 个新字，最后一个触发进入复习阶段）
+    act(() => { result.current.handlePresentNav('next') })
+    expect(result.current.phase).toBe('presenting')
+    act(() => { result.current.handlePresentNav('next') })
     expect(result.current.phase).toBe('reviewing')
     expect(result.current.currentTask?.character).toBe('花')
 
@@ -479,6 +513,12 @@ describe('useToday', () => {
     act(() => {
       result.current.startSession()
     })
+    expect(result.current.phase).toBe('presenting')
+
+    // 推进展示阶段（5 个新字逐个展示，最后一个触发进入复习阶段）
+    for (let i = 0; i < 5; i++) {
+      act(() => { result.current.handlePresentNav('next') })
+    }
     expect(result.current.phase).toBe('reviewing')
 
     // 逐字评分 'a'，完成第一轮

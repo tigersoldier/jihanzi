@@ -81,6 +81,9 @@ export function applyEntry(state: AppState, entry: AnyLogEntry): boolean {
       return applyReorderChars(state, entry)
     case 'review':
       return applyReview(state, entry)
+    case 'present_chars':
+      // 审计日志，不改变状态快照
+      return false
     case 'update_settings':
       return applyUpdateSettings(state, entry)
   }

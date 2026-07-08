@@ -50,6 +50,7 @@ export type LogEntryType =
   | 'remove_char'
   | 'reorder_chars'
   | 'review'
+  | 'present_chars'
   | 'update_settings'
 
 /** Base log entry */
@@ -134,6 +135,14 @@ export interface ReviewEntry extends LogEntry {
   dayKey: string      // "YYYY-MM-DD" — the day this review belongs to
 }
 
+/** Batch-present new characters (learn day presenting phase) */
+export interface PresentCharsEntry extends LogEntry {
+  type: 'present_chars'
+  childId: string
+  characters: string[]   // All new chars shown in one presenting session
+  dayKey: string
+}
+
 /** Update settings */
 export interface UpdateSettingsEntry extends LogEntry {
   type: 'update_settings'
@@ -152,6 +161,7 @@ export type AnyLogEntry =
   | RemoveCharEntry
   | ReorderCharsEntry
   | ReviewEntry
+  | PresentCharsEntry
   | UpdateSettingsEntry
 
 /** Reconstructed application state */

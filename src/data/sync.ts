@@ -56,6 +56,10 @@ function makeDiffKey(e: AnyLogEntry): string {
     const reviewEntry = e as import('../core/types').ReviewEntry
     return `${e.timestamp}:${e.type}:${reviewEntry.childId}:${reviewEntry.character}`
   }
+  if (e.type === 'present_chars') {
+    const presentEntry = e as import('../core/types').PresentCharsEntry
+    return `${e.timestamp}:${e.type}:${presentEntry.childId}:${presentEntry.dayKey}`
+  }
   const entityId = (e as any).childId || (e as any).wordBookId || ''
   return `${e.timestamp}:${e.type}:${entityId}`
 }

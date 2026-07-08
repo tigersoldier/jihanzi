@@ -5,7 +5,7 @@ import { generateTodayTasks } from '../core/scheduler'
 import { todayKey as getTodayKey, getDayType, getDayTypeLabel, formatDateLabel } from '../utils/date'
 import { getReviewsForChildOnDay } from '../data/db'
 
-export type SessionPhase = 'idle' | 'reviewing' | 'roundComplete' | 'celebration'
+export type SessionPhase = 'idle' | 'presenting' | 'reviewing' | 'roundComplete' | 'celebration'
 
 // ---- Session persistence (localStorage) ----
 
@@ -20,6 +20,7 @@ interface SavedSession {
   sessionTasks: TaskItem[]
   sessionReviews: ReviewEntry[]
   sessionStats: { a: number; b: number; c: number; d: number }
+  queuedReviewTasks: TaskItem[]
 }
 
 function sessionKey(childId: string, dayKey: string): string {
@@ -88,6 +89,7 @@ interface UseTodayReturn {
   children: { id: string; name: string; hasTasks: boolean }[]
   setSelectedChildId: (id: string) => void
   handleRate: (grade: Grade) => void
+  handlePresentNav: (direction: 'prev' | 'next') => void
   startSession: () => void
   handleContinueRound: () => void
   handleSkipRound: () => void
@@ -96,7 +98,7 @@ interface UseTodayReturn {
 }
 
 export function useToday(): UseTodayReturn {
-  const { state, submitReview, selectedChildId, setSelectedChildId, dataVersion } = useApp()
+  const { state, submitReview, submitPresentChars, selectedChildId, setSelectedChildId, dataVersion } = useApp()
   const todayKey = getTodayKey()
   const dayType = getDayType(todayKey)
   const dayTypeLabel = getDayTypeLabel(dayType)
@@ -112,6 +114,8 @@ export function useToday(): UseTodayReturn {
   // from shifting when state changes mid-session (e.g. submitReview
   // advances nextCharIndex, which would otherwise regenerate the list).
   const [sessionTasks, setSessionTasks] = useState<TaskItem[] | null>(null)
+  // 展示阶段：queuedReviewTasks = 到期复习字排队列表，sessionTasks 同时充当展示队列（新字）
+  const [queuedReviewTasks, setQueuedReviewTasks] = useState<TaskItem[]>([])
   const [doneToday, setDoneToday] = useState(false)
   const advancingRef = useRef(false)
   const continuingRef = useRef(false)
@@ -147,6 +151,7 @@ export function useToday(): UseTodayReturn {
         setSessionReviews(saved.sessionReviews)
         setSessionStats(saved.sessionStats)
         setSessionTasks(saved.sessionTasks)
+        setQueuedReviewTasks(saved.queuedReviewTasks || [])
         return
       }
     }
@@ -179,8 +184,9 @@ export function useToday(): UseTodayReturn {
       sessionTasks,
       sessionReviews,
       sessionStats,
+      queuedReviewTasks,
     })
-  }, [phase, taskIndex, round, sessionTasks, sessionReviews, sessionStats, selectedChildId, todayKey, state.children])
+  }, [phase, taskIndex, round, sessionTasks, sessionReviews, sessionStats, queuedReviewTasks, selectedChildId, todayKey, state.children])
 
   // ---- Sync-driven doneToday check ----
 
@@ -267,13 +273,55 @@ export function useToday(): UseTodayReturn {
     if (currentTasks.length === 0) return
     // Clear any stale saved session before starting a new one
     clearSession(selectedChildId, todayKey)
-    setSessionTasks([...currentTasks])  // snapshot so it won't shift mid-session
-    setPhase('reviewing')
+
+    const reviewTasks = currentTasks.filter(t => t.isReview)
+    const newTasks = currentTasks.filter(t => t.isNew)
+
+    if (dayType === 'learn' && newTasks.length > 0) {
+      // 学新日 + 有新字：先进入展示阶段
+      setQueuedReviewTasks(reviewTasks)
+      setSessionTasks(newTasks)
+      setPhase('presenting')
+    } else {
+      // 纯复习日 / 生字本已学完：直接进入复习阶段
+      setQueuedReviewTasks([])
+      setSessionTasks([...currentTasks])
+      setPhase('reviewing')
+    }
     setTaskIndex(0)
     setRound(1)
     setSessionReviews([])
     setSessionStats({ a: 0, b: 0, c: 0, d: 0 })
-  }, [selectedChildId, todayKey])
+  }, [selectedChildId, todayKey, dayType])
+
+  // 展示阶段完成：合并复习队列，写 present_chars 日志，进入复习阶段
+  const handlePresentComplete = useCallback(() => {
+    // sessionTasks 在展示阶段即为新字列表，先提取字符再覆盖
+    const newChars = sessionTasks!.map(t => t.character)
+    const mergedTasks = [...queuedReviewTasks, ...sessionTasks!]
+    setSessionTasks(mergedTasks)
+    setQueuedReviewTasks([])
+    setTaskIndex(0)
+    setPhase('reviewing')
+
+    // 写 present_chars 审计日志（fire-and-forget，不影响状态）
+    submitPresentChars(selectedChildId!, newChars, todayKey).catch(() => {})
+  }, [queuedReviewTasks, sessionTasks, selectedChildId, todayKey, submitPresentChars])
+
+  // 展示阶段导航：上一个 / 下一个（末尾字触发 handlePresentComplete）
+  const handlePresentNav = useCallback((direction: 'prev' | 'next') => {
+    // 仅在展示阶段有效，防止在其他阶段被误调用
+    if (phase !== 'presenting') return
+    if (direction === 'prev' && taskIndex > 0) {
+      setTaskIndex(prev => prev - 1)
+    } else if (direction === 'next') {
+      if (taskIndex + 1 < totalTasks) {
+        setTaskIndex(prev => prev + 1)
+      } else {
+        handlePresentComplete()
+      }
+    }
+  }, [taskIndex, totalTasks, handlePresentComplete, phase])
 
   const handleRate = useCallback((grade: Grade) => {
     if (!currentTask || !selectedChildId) return
@@ -356,6 +404,7 @@ export function useToday(): UseTodayReturn {
     setTaskIndex(0)
     setRound(1)
     setSessionTasks(null)  // clear session snapshot
+    setQueuedReviewTasks([])
     setSessionStats({ a: 0, b: 0, c: 0, d: 0 })
   }, [selectedChildId, todayKey])
 
@@ -373,6 +422,7 @@ export function useToday(): UseTodayReturn {
     children,
     setSelectedChildId,
     handleRate,
+    handlePresentNav,
     startSession,
     handleContinueRound,
     handleSkipRound,

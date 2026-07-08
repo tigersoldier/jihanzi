@@ -24,6 +24,7 @@ import type {
   UpdateChildEntry,
   UpdateWordBookEntry,
   ReviewEntry,
+  PresentCharsEntry,
 } from '../core/types'
 import { DEFAULT_SETTINGS } from '../core/types'
 import { applyEntry, deepCloneState } from '../core/log'
@@ -64,6 +65,8 @@ export interface AppContextState {
   reorderCharacters: (wordBookId: string, characters: string[]) => Promise<void>
   // Review operations
   submitReview: (childId: string, character: string, grade: 'a' | 'b' | 'c' | 'd', round: number, dayKey: string) => Promise<void>
+  /** Record a presenting-phase completion (audit log, no state change) */
+  submitPresentChars: (childId: string, characters: string[], dayKey: string) => Promise<void>
   // Settings operations
   updateSettings: (settings: Partial<Settings>) => Promise<void>
   // Data management
@@ -331,6 +334,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await applyAndPersist(entry)
   }, [applyAndPersist])
 
+  const submitPresentChars = useCallback(async (
+    childId: string,
+    characters: string[],
+    dayKey: string,
+  ) => {
+    const entry: PresentCharsEntry = {
+      timestamp: generateTimestamp(),
+      type: 'present_chars',
+      childId,
+      characters,
+      dayKey,
+    }
+    // applyEntry 返回 false，不触发快照更新，仅写日志
+    await applyAndPersist(entry)
+  }, [applyAndPersist])
+
   // ---- Settings Operations ----
 
   const updateSettings = useCallback(async (settings: Partial<Settings>) => {
@@ -398,6 +417,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         removeCharacter,
         reorderCharacters,
         submitReview,
+        submitPresentChars,
         updateSettings,
         getLogEntries,
         bulkImport,
