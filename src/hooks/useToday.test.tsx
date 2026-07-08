@@ -550,4 +550,115 @@ describe('useToday', () => {
     // 即使生字本中还有更多字（六、七、八、九、十），今天的配额已用完
     expect(result.current.isReady).toBe(false)
   })
+
+  // ---------------------------------------------------------------
+  // 任务预览相关测试
+  // ---------------------------------------------------------------
+
+  it('idle 状态下暴露今日任务预览（新学和复习分组）', () => {
+    const state = freshStateWithChars(['一', '二', '三', '四', '五'])
+    const wrapper = createStatefulWrapper(state)
+
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    // 学新日：5 个新字，0 个复习字
+    expect(result.current.todayNewChars).toEqual(['一', '二', '三', '四', '五'])
+    expect(result.current.todayReviewChars).toEqual([])
+  })
+
+  it('idle 状态下暴露今日复习任务预览（有到期复习字时）', () => {
+    const state = makeState({
+      children: [{
+        id: 'child_1', name: '小明', wordBookId: 'wb_1',
+        nextCharIndex: 3,
+        progress: {
+          '一': { ease: 2.5, interval: 1, repetitions: 1, nextReview: '2026-01-01', lastGrade: 'a', firstReviewDay: '2026-01-01' },
+          '二': { ease: 2.5, interval: 1, repetitions: 1, nextReview: '2026-01-01', lastGrade: 'b', firstReviewDay: '2026-01-01' },
+          '三': { ease: 2.5, interval: 2, repetitions: 1, nextReview: '2026-01-03', lastGrade: 'a', firstReviewDay: '2026-01-01' },
+        },
+      }],
+      wordBooks: [{
+        id: 'wb_1', name: '测试生字本', characters: ['一', '二', '三', '四', '五'],
+      }],
+    })
+    const wrapper = createStatefulWrapper(state)
+
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    // '一' 和 '二' 到期，'三' 还没到期
+    expect(result.current.todayReviewChars).toEqual(['一', '二'])
+    // 学新日，剩余配额填入新字（nextCharIndex=3，生字本还剩 '四' '五'，dailyNewChars=5）
+    expect(result.current.todayNewChars).toEqual(['四', '五'])
+  })
+
+  it('doneToday 初始为 false，handleDone 后为 true', async () => {
+    const initialState = freshStateWithChars(['一'])
+    const wrapper = createStatefulWrapper(initialState)
+
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    expect(result.current.doneToday).toBe(false)
+
+    // 走完流程
+    act(() => { result.current.startSession() })
+    act(() => { result.current.handlePresentNav('next') })
+    await act(async () => {
+      result.current.handleRate('a')
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+    expect(result.current.phase).toBe('roundComplete')
+
+    act(() => { result.current.handleDone() })
+
+    expect(result.current.doneToday).toBe(true)
+    expect(result.current.phase).toBe('idle')
+  })
+
+  it('会话完成后暴露明日任务预览', async () => {
+    const initialState = freshStateWithChars(['一', '二'])
+    const wrapper = createStatefulWrapper(initialState)
+
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    // 走完流程
+    act(() => { result.current.startSession() })
+    for (let i = 0; i < 2; i++) {
+      act(() => { result.current.handlePresentNav('next') })
+    }
+    for (const _char of ['一', '二']) {
+      await act(async () => {
+        result.current.handleRate('a')
+        await new Promise(resolve => setTimeout(resolve, 400))
+      })
+    }
+    act(() => { result.current.handleSkipRound() })
+    act(() => { result.current.handleDone() })
+
+    // doneToday=true 后触发明日计算
+    // 明天 2026-01-02 是纯复习日，「一」和「二」的 nextReview 都是 2026-01-02 → 到期
+    expect(result.current.tomorrowDayType).toBe('纯复习日')
+    expect(result.current.tomorrowNewChars).toEqual([])
+    expect(result.current.tomorrowReviewChars).toEqual(['一', '二'])
+  })
+
+  it('明天无任务时预览显示空列表', async () => {
+    const initialState = freshStateWithChars(['一'])
+    const wrapper = createStatefulWrapper(initialState)
+
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    // 走完流程
+    act(() => { result.current.startSession() })
+    act(() => { result.current.handlePresentNav('next') })
+    await act(async () => {
+      result.current.handleRate('a')
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+    act(() => { result.current.handleSkipRound() })
+    act(() => { result.current.handleDone() })
+
+    // 明天 2026-01-02 是纯复习日，「一」的 nextReview 是 2026-01-02 → 到期
+    // 所以明天的复习队列应该有「一」
+    expect(result.current.tomorrowReviewChars).toEqual(['一'])
+  })
 })

@@ -42,6 +42,15 @@ function nextMonth(ym: string): string {
 // Calls useToday() internally so it only runs when mounted.
 // ============================================================
 
+function TaskPreviewList({ label, chars }: { label: string; chars: string[] }) {
+  return (
+    <div className="text-xs text-gray-500 mb-1">
+      <span className="font-medium">{label}：</span>
+      {chars.join('、')}
+    </div>
+  )
+}
+
 export function TodaySession() {
   const { state, setSelectedChildId } = useApp()
   const today = useToday()
@@ -63,6 +72,12 @@ export function TodaySession() {
     handleSkipRound,
     handleDone,
     isReady,
+    doneToday,
+    todayNewChars,
+    todayReviewChars,
+    tomorrowDayType,
+    tomorrowNewChars,
+    tomorrowReviewChars,
   } = today
 
   return (
@@ -87,11 +102,28 @@ export function TodaySession() {
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
           <div className="text-6xl mb-4">{dayType === '学新日' ? '📖' : '📝'}</div>
           <h2 className="text-xl font-bold text-gray-800 mb-2">
-            {isReady ? `准备复习 ${totalTasks} 个字` : '今天没有需要复习的字'}
+            {isReady
+              ? `准备复习 ${totalTasks} 个字`
+              : doneToday
+                ? '今日已完成'
+                : '今天没有需要复习的字'}
           </h2>
           <p className="text-gray-400 text-sm mb-6">
             {dayType === '学新日' ? '学新日：复习 + 新字学习' : '纯复习日：巩固已学汉字'}
           </p>
+
+          {/* ---- 会话前预览：今日任务分组 ---- */}
+          {isReady && (todayNewChars.length > 0 || todayReviewChars.length > 0) && (
+            <div className="mb-4 text-left border-t border-gray-100 pt-4">
+              {todayNewChars.length > 0 && (
+                <TaskPreviewList label="新学" chars={todayNewChars} />
+              )}
+              {todayReviewChars.length > 0 && (
+                <TaskPreviewList label="复习" chars={todayReviewChars} />
+              )}
+            </div>
+          )}
+
           {isReady && (
             <button
               onClick={startSession}
@@ -99,6 +131,29 @@ export function TodaySession() {
             >
               开始学习
             </button>
+          )}
+
+          {/* ---- 会话后预览：明日任务 ---- */}
+          {doneToday && (
+            <div className="border-t border-gray-100 pt-4 mt-4 text-left">
+              {tomorrowNewChars.length > 0 || tomorrowReviewChars.length > 0 ? (
+                <>
+                  <p className="text-xs text-gray-400 mb-2 text-center">
+                    明日（{tomorrowDayType}）
+                  </p>
+                  {tomorrowNewChars.length > 0 && (
+                    <TaskPreviewList label="新学" chars={tomorrowNewChars} />
+                  )}
+                  {tomorrowReviewChars.length > 0 && (
+                    <TaskPreviewList label="复习" chars={tomorrowReviewChars} />
+                  )}
+                </>
+              ) : (
+                <p className="text-xs text-gray-400 text-center">
+                  明天没有需要复习或学习的字
+                </p>
+              )}
+            </div>
           )}
         </div>
       )}

@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import type { TaskItem, Grade, ReviewEntry, AppState } from '../core/types'
 import { useApp } from '../state/AppContext'
 import { generateTodayTasks } from '../core/scheduler'
-import { todayKey as getTodayKey, getDayType, getDayTypeLabel, formatDateLabel } from '../utils/date'
+import { todayKey as getTodayKey, addDays, getDayType, getDayTypeLabel, formatDateLabel } from '../utils/date'
 import { getReviewsForChildOnDay } from '../data/db'
 
 export type SessionPhase = 'idle' | 'presenting' | 'reviewing' | 'roundComplete' | 'celebration'
@@ -95,6 +95,12 @@ interface UseTodayReturn {
   handleSkipRound: () => void
   handleDone: () => void
   isReady: boolean
+  doneToday: boolean
+  todayNewChars: string[]
+  todayReviewChars: string[]
+  tomorrowDayType: string
+  tomorrowNewChars: string[]
+  tomorrowReviewChars: string[]
 }
 
 export function useToday(): UseTodayReturn {
@@ -103,6 +109,7 @@ export function useToday(): UseTodayReturn {
   const dayType = getDayType(todayKey)
   const dayTypeLabel = getDayTypeLabel(dayType)
   const dateLabel = formatDateLabel(todayKey)
+  const tomorrowKey = addDays(todayKey, 1)
 
   const [phase, setPhase] = useState<SessionPhase>('idle')
   const [taskIndex, setTaskIndex] = useState(0)
@@ -218,6 +225,7 @@ export function useToday(): UseTodayReturn {
       // 4. 达标判定
       const threshold = Math.min(currentState.settings.dailyReviewLimit, dueReviewCount)
       if (reviewCount >= threshold && threshold > 0) {
+        clearSession(childId, dayKey)
         markDayDone(childId, dayKey)
         setDoneToday(true)
       }
@@ -267,6 +275,33 @@ export function useToday(): UseTodayReturn {
 
   const currentTask = effectiveTasks[taskIndex] || null
   const totalTasks = effectiveTasks.length
+
+  // 今日任务按新学/复习分组（idle 预览用）
+  const todayNewChars = useMemo(() => {
+    return effectiveTasks.filter(t => t.isNew).map(t => t.character)
+  }, [effectiveTasks])
+
+  const todayReviewChars = useMemo(() => {
+    return effectiveTasks.filter(t => t.isReview).map(t => t.character)
+  }, [effectiveTasks])
+
+  // 明日任务预览（仅在 doneToday 后需要，做 gating 避免会话期间无谓计算）
+  const tomorrowTasks = useMemo(() => {
+    if (!doneToday || !selectedChildId) return []
+    return generateTodayTasks(state, selectedChildId, tomorrowKey)
+  }, [doneToday, state, selectedChildId, tomorrowKey])
+
+  const tomorrowNewChars = useMemo(() => {
+    return tomorrowTasks.filter(t => t.isNew).map(t => t.character)
+  }, [tomorrowTasks])
+
+  const tomorrowReviewChars = useMemo(() => {
+    return tomorrowTasks.filter(t => t.isReview).map(t => t.character)
+  }, [tomorrowTasks])
+
+  const tomorrowDayType = useMemo(() => {
+    return getDayTypeLabel(getDayType(tomorrowKey))
+  }, [tomorrowKey])
 
   const startSession = useCallback(() => {
     const currentTasks = tasksRef.current
@@ -405,6 +440,7 @@ export function useToday(): UseTodayReturn {
     setRound(1)
     setSessionTasks(null)  // clear session snapshot
     setQueuedReviewTasks([])
+    setSessionReviews([])
     setSessionStats({ a: 0, b: 0, c: 0, d: 0 })
   }, [selectedChildId, todayKey])
 
@@ -428,5 +464,11 @@ export function useToday(): UseTodayReturn {
     handleSkipRound,
     handleDone,
     isReady: selectedChildId !== '' && effectiveTasks.length > 0 && !doneToday,
+    doneToday,
+    todayNewChars,
+    todayReviewChars,
+    tomorrowDayType,
+    tomorrowNewChars,
+    tomorrowReviewChars,
   }
 }

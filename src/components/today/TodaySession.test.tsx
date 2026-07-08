@@ -71,7 +71,7 @@ describe('TodaySession', () => {
     localStorageStore.clear()
   })
 
-  it('renders idle state with task count for the selected child', () => {
+  it('renders idle state with task count and character preview for the selected child', () => {
     const state = makeState({
       children: [{
         id: 'child_1', name: '小明', wordBookId: 'wb_1',
@@ -87,5 +87,30 @@ describe('TodaySession', () => {
     // 学新日，3 个新字 + 0 个复习字 = 3 个任务
     expect(screen.getByText(/准备复习 3 个字/)).toBeDefined()
     expect(screen.getByText('开始学习')).toBeDefined()
+    // 预览列表：应显示新学组，不显示复习组（文本跨 span 拆分用 getByText 查子元素）
+    expect(screen.getByText('新学：')).toBeDefined()
+    expect(screen.getByText('一、二、三')).toBeDefined()
+  })
+
+  it('shows after-session preview with tomorrow tasks when day is done', () => {
+    const state = makeState({
+      children: [{
+        id: 'child_1', name: '小明', wordBookId: 'wb_1',
+        nextCharIndex: 0, progress: {},
+      }],
+      wordBooks: [{
+        id: 'wb_1', name: '测试', characters: ['一', '二', '三'],
+      }],
+    })
+
+    // 预设 doneToday 标记
+    localStorageStore.set('jihanzi_done_child_1_2026-01-01', '1')
+
+    render(<TodaySession />, { wrapper: wrapperWith(state, 'child_1') })
+
+    // 应显示"今日已完成"标题
+    expect(screen.getByText('今日已完成')).toBeDefined()
+    // 明天是纯复习日且无到期任务 → 显示空状态提示（不显示日类型标签）
+    expect(screen.getByText('明天没有需要复习或学习的字')).toBeDefined()
   })
 })
