@@ -1,6 +1,6 @@
 import { useCharacterStats } from '../../hooks/useStats'
 import { getCharInfo } from '../../utils/chars'
-import { formatDateLabel, getDayTypeLabel, getDayType } from '../../utils/date'
+import { formatDateLabel } from '../../utils/date'
 import { GRADE_LABELS, GRADE_COLORS } from '../../core/types'
 import { useEffect, useRef } from 'react'
 
@@ -133,7 +133,6 @@ export default function CharacterDetail({ childId, character, onBack }: Characte
               <div key={dayKey} className="flex items-start gap-3 py-2 border-b border-gray-50 last:border-b-0">
                 <div className="flex-shrink-0 min-w-0">
                   <div className="text-xs text-gray-500">{formatDateLabel(dayKey)}</div>
-                  <div className="text-xs text-gray-400">{getDayTypeLabel(getDayType(dayKey))}</div>
                 </div>
                 <div className="flex gap-1.5 flex-wrap">
                   {rounds.map((r, i) => (

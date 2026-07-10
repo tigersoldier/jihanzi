@@ -288,6 +288,21 @@ export async function getReviewsForChildOnDay(
     .then(filterReviews)
 }
 
+/**
+ * 找到指定孩子最近一次有复习记录的 dayKey。
+ * 用于判断上次学习日的类型（学新 vs 纯复习）。
+ * 若无记录返回 undefined。
+ */
+export async function getLastStudyDayForChild(childId: string): Promise<string | undefined> {
+  const entries = await db.logs
+    .where('childId')
+    .equals(childId)
+    .filter(e => e.type === 'review')
+    .sortBy('dayKey')
+  if (entries.length === 0) return undefined
+  return entries[entries.length - 1].dayKey
+}
+
 // ============================================================
 // Snapshot Operations
 // ============================================================

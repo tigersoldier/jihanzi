@@ -1,11 +1,74 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
-import type { TaskItem, Grade, ReviewEntry, AppState } from '../core/types'
+import type { TaskItem, Grade, ReviewEntry, AppState, DayType } from '../core/types'
 import { useApp } from '../state/AppContext'
-import { generateTodayTasks } from '../core/scheduler'
-import { todayKey as getTodayKey, addDays, getDayType, getDayTypeLabel, formatDateLabel } from '../utils/date'
-import { getReviewsForChildOnDay } from '../data/db'
+import { generateTodayTasks, getEffectiveDayType } from '../core/scheduler'
+import { todayKey as getTodayKey, addDays, getDayTypeLabel, formatDateLabel } from '../utils/date'
+import { getReviewsForChildOnDay, getLastStudyDayForChild } from '../data/db'
 
 export type SessionPhase = 'idle' | 'presenting' | 'reviewing' | 'roundComplete' | 'celebration'
+
+// ---- Shared day type hook (used by both header and session) ----
+
+export interface DayTypeInfo {
+  dayType: DayType
+  dayTypeLabel: string
+  dateLabel: string
+  /** 从日志推导的日类型，null=加载中 */
+  effectiveDayType: DayType | null
+  /** IndexedDB 查询是否仍在进行 */
+  dayTypeLoading: boolean
+  todayKey: string
+}
+
+/**
+ * 共享钩子：从 IndexedDB 日志推导今日日类型。
+ * ProgressPage 和 useToday 共用此钩子，确保 header 与卡片一致。
+ */
+export function useDayType(): DayTypeInfo {
+  const { state, selectedChildId } = useApp()
+  const todayKey = getTodayKey()
+
+  const [effectiveDayType, setEffectiveDayType] = useState<DayType | null>(null)
+  const [dayTypeLoading, setDayTypeLoading] = useState(true)
+  const dayTypeResolvedRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    // 没有选中孩子或状态尚未加载 → 不算 loading（没有查询可做）
+    if (!selectedChildId || state.children.length === 0) {
+      setDayTypeLoading(false)
+      return
+    }
+    const cacheKey = `${selectedChildId}_${todayKey}`
+    if (dayTypeResolvedRef.current === cacheKey) {
+      setDayTypeLoading(false)
+      return
+    }
+
+    setDayTypeLoading(true)
+    getLastStudyDayForChild(selectedChildId).then(lastStudyDay => {
+      const child = state.children.find(c => c.id === selectedChildId)
+      if (!child) return
+      const dt = getEffectiveDayType(lastStudyDay, child.progress)
+      setEffectiveDayType(dt)
+      dayTypeResolvedRef.current = cacheKey
+      setDayTypeLoading(false)
+    }).catch(() => {
+      setEffectiveDayType(null)
+      setDayTypeLoading(false)
+    })
+  }, [selectedChildId, todayKey, state.children])
+
+  const dayType: DayType = effectiveDayType ?? 'learn'
+
+  return {
+    dayType,
+    dayTypeLabel: getDayTypeLabel(dayType),
+    dateLabel: formatDateLabel(todayKey),
+    effectiveDayType,
+    dayTypeLoading,
+    todayKey,
+  }
+}
 
 // ---- Session persistence (localStorage) ----
 
@@ -105,10 +168,7 @@ interface UseTodayReturn {
 
 export function useToday(): UseTodayReturn {
   const { state, submitReview, submitPresentChars, selectedChildId, setSelectedChildId, dataVersion } = useApp()
-  const todayKey = getTodayKey()
-  const dayType = getDayType(todayKey)
-  const dayTypeLabel = getDayTypeLabel(dayType)
-  const dateLabel = formatDateLabel(todayKey)
+  const { dayType, dayTypeLabel, dateLabel, effectiveDayType, dayTypeLoading, todayKey } = useDayType()
   const tomorrowKey = addDays(todayKey, 1)
 
   const [phase, setPhase] = useState<SessionPhase>('idle')
@@ -219,7 +279,7 @@ export function useToday(): UseTodayReturn {
       if (reviewCount === 0) return
 
       // 3. 算当日到期复习字数
-      const tasks = generateTodayTasks(currentState, childId, dayKey)
+      const tasks = generateTodayTasks(currentState, childId, dayKey, effectiveDayType ?? 'learn')
       const dueReviewCount = tasks.filter(t => t.isReview).length
 
       // 4. 达标判定
@@ -262,8 +322,8 @@ export function useToday(): UseTodayReturn {
   // source of truth for task order until the session ends.
   const tasks = useMemo(() => {
     if (!selectedChildId || sessionTasks !== null) return []
-    return generateTodayTasks(state, selectedChildId, todayKey)
-  }, [state, selectedChildId, todayKey, sessionTasks])
+    return generateTodayTasks(state, selectedChildId, todayKey, effectiveDayType ?? 'learn')
+  }, [state, selectedChildId, todayKey, sessionTasks, effectiveDayType])
 
   // Keep the ref in sync so startSession (which has [] deps) always
   // reads the latest tasks.
@@ -288,8 +348,10 @@ export function useToday(): UseTodayReturn {
   // 明日任务预览（仅在 doneToday 后需要，做 gating 避免会话期间无谓计算）
   const tomorrowTasks = useMemo(() => {
     if (!doneToday || !selectedChildId) return []
-    return generateTodayTasks(state, selectedChildId, tomorrowKey)
-  }, [doneToday, state, selectedChildId, tomorrowKey])
+    // 明日日类型：今日的反面
+    const nextDayType: DayType = dayType === 'learn' ? 'review' : 'learn'
+    return generateTodayTasks(state, selectedChildId, tomorrowKey, nextDayType)
+  }, [doneToday, state, selectedChildId, tomorrowKey, dayType])
 
   const tomorrowNewChars = useMemo(() => {
     return tomorrowTasks.filter(t => t.isNew).map(t => t.character)
@@ -299,9 +361,16 @@ export function useToday(): UseTodayReturn {
     return tomorrowTasks.filter(t => t.isReview).map(t => t.character)
   }, [tomorrowTasks])
 
+  // 明日预览日类型：基于当日是否有学新推导
   const tomorrowDayType = useMemo(() => {
-    return getDayTypeLabel(getDayType(tomorrowKey))
-  }, [tomorrowKey])
+    if (!doneToday || !selectedChildId) return ''
+    const child = state.children.find(c => c.id === selectedChildId)
+    if (!child) return ''
+    const todayHadNewChars = Object.values(child.progress).some(
+      s => s.firstReviewDay === todayKey,
+    )
+    return todayHadNewChars ? '纯复习日' : '学新日'
+  }, [doneToday, selectedChildId, state.children, todayKey])
 
   const startSession = useCallback(() => {
     const currentTasks = tasksRef.current
@@ -463,7 +532,7 @@ export function useToday(): UseTodayReturn {
     handleContinueRound,
     handleSkipRound,
     handleDone,
-    isReady: selectedChildId !== '' && effectiveTasks.length > 0 && !doneToday,
+    isReady: selectedChildId !== '' && effectiveTasks.length > 0 && !doneToday && !dayTypeLoading,
     doneToday,
     todayNewChars,
     todayReviewChars,

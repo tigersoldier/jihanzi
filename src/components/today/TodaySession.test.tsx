@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import React, { useState, type ReactNode } from 'react'
 import type { AppState } from '../../core/types'
 import { AppContext, type AppContextState } from '../../state/AppContext'
@@ -71,7 +71,7 @@ describe('TodaySession', () => {
     localStorageStore.clear()
   })
 
-  it('renders idle state with task count and character preview for the selected child', () => {
+  it('renders idle state with task count and character preview for the selected child', async () => {
     const state = makeState({
       children: [{
         id: 'child_1', name: '小明', wordBookId: 'wb_1',
@@ -84,15 +84,17 @@ describe('TodaySession', () => {
 
     render(<TodaySession />, { wrapper: wrapperWith(state, 'child_1') })
 
-    // 学新日，3 个新字 + 0 个复习字 = 3 个任务
-    expect(screen.getByText(/准备复习 3 个字/)).toBeDefined()
+    // 等待 useDayType 的 IndexedDB 查询完成（jsdom 中会 reject → loading=false）
+    await waitFor(() => {
+      expect(screen.getByText(/准备复习 3 个字/)).toBeDefined()
+    })
     expect(screen.getByText('开始学习')).toBeDefined()
     // 预览列表：应显示新学组，不显示复习组（文本跨 span 拆分用 getByText 查子元素）
     expect(screen.getByText('新学：')).toBeDefined()
     expect(screen.getByText('一、二、三')).toBeDefined()
   })
 
-  it('shows after-session preview with tomorrow tasks when day is done', () => {
+  it('shows after-session preview with tomorrow tasks when day is done', async () => {
     const state = makeState({
       children: [{
         id: 'child_1', name: '小明', wordBookId: 'wb_1',
@@ -108,8 +110,10 @@ describe('TodaySession', () => {
 
     render(<TodaySession />, { wrapper: wrapperWith(state, 'child_1') })
 
-    // 应显示"今日已完成"标题
-    expect(screen.getByText('今日已完成')).toBeDefined()
+    // 等待 useDayType 查询完成
+    await waitFor(() => {
+      expect(screen.getByText('今日已完成')).toBeDefined()
+    })
     // 明天是纯复习日且无到期任务 → 显示空状态提示（不显示日类型标签）
     expect(screen.getByText('明天没有需要复习或学习的字')).toBeDefined()
   })

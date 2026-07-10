@@ -8,20 +8,40 @@
  * - Daily quota limits
  */
 
-import type { AppState, Child, TaskItem, DayType, ReviewEntry } from './types'
+import type { AppState, Child, TaskItem, DayType, ReviewEntry, SM2State } from './types'
 import { isDueForReview, todayKey } from './sm2'
-import { getDayType } from '../utils/date'
+
+/**
+ * 根据上次学习日是否有新字来判断今天的日类型。
+ *
+ * - 从未学习过（lastStudyDay 为 undefined）→ 学新日
+ * - 上次学习日有 firstReviewDay 匹配 → 有学新 → 今天是复习日
+ * - 上次学习日无 firstReviewDay 匹配 → 纯复习 → 今天是学新日
+ */
+export function getEffectiveDayType(
+  lastStudyDay: string | undefined,
+  progress: Record<string, SM2State>,
+): DayType {
+  if (!lastStudyDay) return 'learn'
+  const lastDayHadNewChars = Object.values(progress).some(
+    s => s.firstReviewDay === lastStudyDay,
+  )
+  return lastDayHadNewChars ? 'review' : 'learn'
+}
 
 /**
  * Generate today's task queue for a specific child.
  *
  * Review characters come first (sorted by due date, then by ease),
  * then new characters (on learn days only).
+ *
+ * @param dayType — 日类型，由调用方从日志推导后传入
  */
 export function generateTodayTasks(
   state: AppState,
   childId: string,
   dateKey: string,
+  dayType: DayType,
 ): TaskItem[] {
   const child = state.children.find(c => c.id === childId)
   if (!child) return []
@@ -29,7 +49,7 @@ export function generateTodayTasks(
   const wordBook = state.wordBooks.find(w => w.id === child.wordBookId)
   if (!wordBook) return []
 
-  const dayType = getDayType(dateKey)
+  const effectiveDayType = dayType
   const { dailyReviewLimit, dailyNewChars } = state.settings
 
   // 1. Collect due review characters
@@ -49,7 +69,7 @@ export function generateTodayTasks(
 
   // 3. Add new characters on learn days (fill remaining quota)
   let newTasks: TaskItem[] = []
-  if (dayType === 'learn') {
+  if (effectiveDayType === 'learn') {
     const remainingQuota = Math.min(
       dailyNewChars,
       dailyReviewLimit + dailyNewChars - reviewTasks.length,

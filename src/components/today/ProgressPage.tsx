@@ -1,8 +1,8 @@
 import { useState, useMemo } from 'react'
 import { useApp } from '../../state/AppContext'
-import { useToday } from '../../hooks/useToday'
+import { useToday, useDayType } from '../../hooks/useToday'
 import { useHistory, type DaySummary } from '../../hooks/useStats'
-import { todayKey, formatDateLabel, getDayTypeLabel, getDayType } from '../../utils/date'
+import { formatDateLabel, getDayTypeLabel } from '../../utils/date'
 import { GRADE_LABELS, GRADE_COLORS, type Grade } from '../../core/types'
 import ProgressBar from './ProgressBar'
 import CharacterCard from './CharacterCard'
@@ -231,7 +231,6 @@ export function TodaySession() {
 
 export default function ProgressPage() {
   const { state, selectedChildId, setSelectedChildId } = useApp()
-  const tKey = todayKey()
   const curYM = currentYearMonth()
 
   const [viewMonth, setViewMonth] = useState(curYM)
@@ -240,9 +239,8 @@ export default function ProgressPage() {
 
   const isCurrentMonth = viewMonth === curYM
 
-  // Header values — computed without useToday
-  const dateLabel = formatDateLabel(tKey)
-  const dayType = getDayTypeLabel(getDayType(tKey))
+  // Header values — use shared hook for consistent day type
+  const { dateLabel, dayTypeLabel: dayType, dayTypeLoading } = useDayType()
   const dayChildren = state.children.map(c => ({ id: c.id, name: c.name, hasTasks: true }))
 
   const activeChildId = selectedChildId || state.children[0]?.id || ''
@@ -305,11 +303,17 @@ export default function ProgressPage() {
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm text-gray-500">{dateLabel}</p>
-          <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full mt-1 ${
-            dayType === '学新日' ? 'bg-indigo-100 text-indigo-700' : 'bg-teal-100 text-teal-700'
-          }`}>
-            {dayType}
-          </span>
+          {dayTypeLoading ? (
+            <span className="inline-block text-xs font-medium px-2 py-0.5 rounded-full mt-1 bg-gray-100 text-gray-300 animate-pulse">
+              ···
+            </span>
+          ) : (
+            <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full mt-1 ${
+              dayType === '学新日' ? 'bg-indigo-100 text-indigo-700' : 'bg-teal-100 text-teal-700'
+            }`}>
+              {dayType}
+            </span>
+          )}
         </div>
         {dayChildren.length > 1 && (
           <select

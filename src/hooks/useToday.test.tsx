@@ -112,6 +112,7 @@ function createStatefulWrapper(initialState: AppState) {
             repetitions: 1,
             nextReview: '2026-01-02',
             lastGrade: 'a',
+            firstReviewDay: _dayKey,
           }
 
           return newState

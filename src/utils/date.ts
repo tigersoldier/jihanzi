@@ -4,32 +4,11 @@
 
 import type { DayType } from '../core/types'
 
-/** Reference epoch for day type alternation — a known "learn" day */
-const EPOCH_LEARN_DATE = '2026-01-01'
-
 /**
  * Convert a date key "YYYY-MM-DD" to a Date object.
  */
 export function parseDateKey(key: string): Date {
   return new Date(key + 'T00:00:00')
-}
-
-/**
- * Get the number of days between two date keys.
- */
-export function daysBetween(a: string, b: string): number {
-  const da = parseDateKey(a)
-  const db = parseDateKey(b)
-  return Math.round((db.getTime() - da.getTime()) / (1000 * 60 * 60 * 24))
-}
-
-/**
- * Determine if a given date is a "learn" day or "review" day.
- * Alternates: learn → review → learn → review → ...
- */
-export function getDayType(dateKey: string): DayType {
-  const diff = daysBetween(EPOCH_LEARN_DATE, dateKey)
-  return diff % 2 === 0 ? 'learn' : 'review'
 }
 
 /**

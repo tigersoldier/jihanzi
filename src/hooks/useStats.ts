@@ -2,7 +2,6 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import type { Grade, SM2State, ReviewEntry } from '../core/types'
 import { useApp } from '../state/AppContext'
 import { getReviewsForChildCharPaginated, getReviewsForChildInRange } from '../data/db'
-import { getDayType } from '../utils/date'
 
 export { type Proficiency, getProficiency, PROFICIENCY_COLORS, PROFICIENCY_DOT } from '../core/proficiency'
 
@@ -244,7 +243,7 @@ export function useHistory(childId: string, yearMonth: string): MonthHistory {
 
         summaries.push({
           dayKey,
-          dayType: getDayType(dayKey),
+          dayType: newChars.length > 0 ? 'learn' : 'review',
           newChars,
           reviewChars,
           stats,
