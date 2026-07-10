@@ -641,4 +641,82 @@ describe('initialPull', () => {
     // CLOCK_SKEW_BUFFER = 1小时 = 3600000ms, 1000 - 3600000 = -3599000 → max(0, ...) = 0
     expect(queryStart).toBe(0)
   })
+
+  // ---- Incremental pull: driveIsEmpty must be false when child folders exist ----
+
+  it('reports driveIsEmpty=false when child folders exist but no files match modifiedAfter filter', async () => {
+    // 模拟增量同步场景：Drive 上有子文件夹，但因 modifiedAfter 过滤没有匹配的文件
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
+      childData: {
+        '小明': {
+          snapshot: null,    // 快照文件不在过滤范围内
+          historicalSnapshots: [],
+          logs: [],          // 日志文件不在过滤范围内
+        },
+      },
+    })
+
+    const result = await initialPull(1700000000000) // 传入非零的 lastKnownRemoteTime
+
+    // 关键断言：Drive 非空（有子文件夹），只是没有最近变更的文件
+    expect(result.driveIsEmpty).toBe(false)
+  })
+
+  it('reports driveIsEmpty=true when no child folders and no modifiedAfter (true first sync)', async () => {
+    mockPullAllData.mockResolvedValue({
+      meta: null,
+      childData: {},
+    })
+
+    const result = await initialPull(0)
+
+    expect(result.driveIsEmpty).toBe(true)
+  })
+})
+
+// ---- syncOnce ------------------------------------------------------------
+
+describe('syncOnce', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockHasValidToken.mockReturnValue(true)
+    mockLastKnownRemoteTime.mockResolvedValue(1700000000000) // 非零 → 已有同步记录
+    mockGetLatestSnapshot.mockResolvedValue(MOCK_SNAPSHOT as any)
+    mockGetLogsAfter.mockResolvedValue(MOCK_LOG_ENTRIES)
+    // 模拟 Drive 有子文件夹但无最近变更的文件
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
+      childData: {
+        '小明': { snapshot: null, historicalSnapshots: [], logs: [] },
+      },
+    })
+    mockFindOrCreateRootFolder.mockResolvedValue('root-id')
+    mockFindOrCreateFolder.mockResolvedValue('folder-id')
+    mockFindFile.mockResolvedValue(null)
+    mockPushMeta.mockResolvedValue('meta-id')
+    mockPushSnapshot.mockResolvedValue('snap-id')
+    mockPushLogs.mockResolvedValue('log-id')
+    mockGetHistoricalSnapshots.mockResolvedValue([])
+  })
+
+  it('uses lastKnownRemoteTime as candidate window lower bound when no remote changes', async () => {
+    // 远程无最近变更 → remoteLogEntries 为空 → candidate window 应以 lastKnownRemoteTime 为基准
+    await syncOnce()
+
+    // getLogsAfter 应收到 lastKnownRemoteTime - CLOCK_SKEW_BUFFER 作为下限
+    const queryStart = mockGetLogsAfter.mock.calls[0][0] as number
+    // CLOCK_SKEW_BUFFER = 3600000, lastKnownRemoteTime = 1700000000000
+    expect(queryStart).toBe(1700000000000 - 3600000)
+  })
+
+  it('does not push when no local-only entries found', async () => {
+    // 本地候选条目为空 → 不应 push
+    mockGetLogsAfter.mockResolvedValue([])
+
+    await syncOnce()
+
+    // pushLogs 不应被调用
+    expect(mockPushLogs).not.toHaveBeenCalled()
+  })
 })

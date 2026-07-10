@@ -38,6 +38,7 @@ afterEach(() => {
 })
 
 import { writeFile, pushLogs, readFile, logFileName, snapshotFileName, listFiles, pushSnapshot } from './drive'
+import { makeDiffKey } from '../utils/logKey'
 
 describe('writeFile', () => {
   it('sends multipart body as a string (not FormData) so gapi can handle it', async () => {
@@ -288,6 +289,92 @@ describe('pushLogs', () => {
 
     // Must NOT create an empty file with just a newline
     expect(mockGapiRequest).not.toHaveBeenCalled()
+  })
+
+  // ---- Dedup: filter out entries already present in the Drive file ----
+
+  it('filters out entries already present in the Drive file (content-based dedup)', async () => {
+    // Existing file has entries 0 and 1
+    const existingLines = [logEntries[0], logEntries[1]]
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(
+        new TextEncoder().encode(existingLines.join('\n') + '\n').buffer.slice(0),
+      ),
+    })
+    mockGapiRequest.mockResolvedValue({ result: { id: 'existing-log-id' } })
+
+    // Push all 3 entries; only entry 2 (timestamp 3) is actually new
+    await pushLogs('folder-abc', logEntries, 'existing-log-id')
+
+    expect(mockGapiRequest).toHaveBeenCalledTimes(1)
+    const reqConfig = mockGapiRequest.mock.calls[0][0]
+
+    // Verify: existing content preserved, only new entry appended
+    const body = reqConfig.body as string
+    const lines = body.split('\n').filter((l: string) => l.trim())
+    // 2 existing + 1 new = 3 lines, no duplicates
+    expect(lines).toHaveLength(3)
+    expect(body).toContain('"timestamp":1')
+    expect(body).toContain('"timestamp":2')
+    expect(body).toContain('"timestamp":3')
+    // Each timestamp should appear exactly once
+    expect(body.split('"timestamp":1').length).toBe(2) // split yields 2 parts = 1 occurrence
+    expect(body.split('"timestamp":2').length).toBe(2)
+  })
+
+  it('skips write entirely when all entries already exist on Drive', async () => {
+    // Existing file has all 3 entries
+    const existingContent = logEntries.join('\n') + '\n'
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(
+        new TextEncoder().encode(existingContent).buffer.slice(0),
+      ),
+    })
+    mockGapiRequest.mockResolvedValue({ result: { id: 'existing-log-id' } })
+
+    await pushLogs('folder-abc', logEntries, 'existing-log-id')
+
+    // Nothing new to push → no write needed
+    expect(mockGapiRequest).not.toHaveBeenCalled()
+  })
+
+  it('deduplicates against existing file even when file has trailing whitespace', async () => {
+    // Existing file has entries 0 and 1 with trailing newline
+    const existingContent = logEntries[0] + '\n' + logEntries[1] + '\n\n'
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(
+        new TextEncoder().encode(existingContent).buffer.slice(0),
+      ),
+    })
+    mockGapiRequest.mockResolvedValue({ result: { id: 'existing-log-id' } })
+
+    await pushLogs('folder-abc', logEntries, 'existing-log-id')
+
+    expect(mockGapiRequest).toHaveBeenCalledTimes(1)
+    const reqConfig = mockGapiRequest.mock.calls[0][0]
+    const body = reqConfig.body as string
+    const lines = body.split('\n').filter((l: string) => l.trim())
+    expect(lines).toHaveLength(3) // 2 existing + 1 new
+  })
+
+  it('handles empty existing file (no existing entries)', async () => {
+    // Existing file is empty
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+    })
+    mockGapiRequest.mockResolvedValue({ result: { id: 'existing-log-id' } })
+
+    await pushLogs('folder-abc', logEntries, 'existing-log-id')
+
+    expect(mockGapiRequest).toHaveBeenCalledTimes(1)
+    const reqConfig = mockGapiRequest.mock.calls[0][0]
+    const body = reqConfig.body as string
+    const lines = body.split('\n').filter((l: string) => l.trim())
+    expect(lines).toHaveLength(3) // all 3 entries written
   })
 })
 

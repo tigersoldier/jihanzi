@@ -11,6 +11,8 @@
  */
 
 import { getAccessToken, setGapiToken, clearTokenStorage } from './gapi'
+import { makeDiffKey } from '../utils/logKey'
+import type { AnyLogEntry } from '../core/types'
 
 const ROOT_FOLDER_NAME = '记汉字'
 const META_FILE_NAME = 'app_meta.json'
@@ -440,10 +442,42 @@ export async function pushLogs(
   setGapiToken(token)
 
   if (existingFileId) {
-    // Read existing content once, append all new entries in batch, write once.
+    // Read existing content, parse existing entries, dedup new entries by content key,
+    // then append only truly new entries in batch.
     const current = await readFile(existingFileId)
+
+    // Parse existing lines and build a Set of diff keys
+    const existingKeys = new Set<string>()
+    if (current) {
+      for (const line of current.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        try {
+          const entry = JSON.parse(trimmed) as AnyLogEntry
+          existingKeys.add(makeDiffKey(entry))
+        } catch {
+          // Malformed line — skip it for dedup purposes but preserve in output
+        }
+      }
+    }
+
+    // Filter: only keep entries not already in the file
+    const newEntries = logEntries.filter(line => {
+      try {
+        const entry = JSON.parse(line) as AnyLogEntry
+        return !existingKeys.has(makeDiffKey(entry))
+      } catch {
+        return true // Malformed line — keep it rather than silently drop
+      }
+    })
+
+    if (newEntries.length === 0) {
+      // Nothing new to append — skip the write entirely
+      return existingFileId
+    }
+
     const normalized = current && !current.endsWith('\n') ? current + '\n' : current
-    const updated = normalized + logEntries.join('\n') + '\n'
+    const updated = normalized + newEntries.join('\n') + '\n'
     return writeFile(childFolderId, name, updated, NDJSON_MIME, existingFileId)
   } else {
     return writeFile(childFolderId, name, logEntries.join('\n') + '\n', NDJSON_MIME)

@@ -34,6 +34,7 @@ import {
   snapshotFileName,
 } from './drive'
 import { getIntervalKey, getIntervalKeysBetween } from '../utils/date'
+import { makeDiffKey } from '../utils/logKey'
 import { hasValidToken } from './gapi'
 
 // ============================================================
@@ -45,24 +46,6 @@ const CLOCK_SKEW_BUFFER = 60 * 60 * 1000
 
 /** Batch size for paginated log scans — odd number ensures batch boundaries are visible */
 const SCAN_BATCH_SIZE = 501
-
-/**
- * 构建日志去重键。
- * review 条目使用 timestamp + childId + character 作为自然主键；
- * 其它条目沿用 timestamp + type + entityId 三元组。
- */
-function makeDiffKey(e: AnyLogEntry): string {
-  if (e.type === 'review') {
-    const reviewEntry = e as import('../core/types').ReviewEntry
-    return `${e.timestamp}:${e.type}:${reviewEntry.childId}:${reviewEntry.character}`
-  }
-  if (e.type === 'present_chars') {
-    const presentEntry = e as import('../core/types').PresentCharsEntry
-    return `${e.timestamp}:${e.type}:${presentEntry.childId}:${presentEntry.dayKey}`
-  }
-  const entityId = (e as any).childId || (e as any).wordBookId || ''
-  return `${e.timestamp}:${e.type}:${entityId}`
-}
 
 /**
  * Diff two log entry collections by content (not timestamp range).
@@ -194,10 +177,18 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
       }
     }
 
-    // Drive is empty
+    // Drive is empty — but only if we didn't filter by modifiedAfter.
+    // When modifiedAfter is set and child folders exist (but no files matched the filter),
+    // Drive is not empty — it's just that nothing changed remotely.
     if (!remoteSnapshot && remoteLogEntries.length === 0) {
+      const hasChildFolders = Object.keys(childData).length > 0
       setSyncStatus('online')
-      return { didMerge: false, driveIsEmpty: true, remoteSnapshot: null, remoteLogEntries: [] }
+      return {
+        didMerge: false,
+        driveIsEmpty: !modifiedAfter && !hasChildFolders,
+        remoteSnapshot: null,
+        remoteLogEntries: [],
+      }
     }
 
     // Merge snapshot: pick the newer one by timestamp
@@ -403,14 +394,24 @@ export async function syncOnce(): Promise<boolean> {
       return false
     }
 
-    // 使用远程批次中最早条目的 timestamp 作为候选窗口下限
-    const localOnlyTMin = pullResult.remoteLogEntries.reduce(
+    // 使用远程批次中最早条目的 timestamp 作为候选窗口下限。
+    // 当远程无新条目时（增量同步无变更），以 lastKnownRemoteTime 为基准，
+    // 避免把已同步的旧条目全部标记为 localOnly。
+    const remoteBatchTMin = pullResult.remoteLogEntries.reduce(
       (min, e) => Math.min(min, e.timestamp),
-      pullResult.remoteSnapshot?.timestamp ?? Infinity,
+      Infinity,
     )
-    const localOnlyLowerBound = localOnlyTMin === Infinity
-      ? 0
-      : Math.max(0, localOnlyTMin - CLOCK_SKEW_BUFFER)
+    let localOnlyLowerBound: number
+    if (remoteBatchTMin !== Infinity) {
+      // 有远程条目 → 以远程最早条目为基准，减 clock-skew buffer
+      localOnlyLowerBound = Math.max(0, remoteBatchTMin - CLOCK_SKEW_BUFFER)
+    } else if (!pullResult.driveIsEmpty) {
+      // 无远程变更但 Drive 非空 → 以 lastKnownRemoteTime 为基准
+      localOnlyLowerBound = Math.max(0, remoteTime - CLOCK_SKEW_BUFFER)
+    } else {
+      // Drive 为空 → 全量推送（首次同步已在 driveIsEmpty 分支处理）
+      localOnlyLowerBound = 0
+    }
     const localCandidates = await getLogsAfter(localOnlyLowerBound)
 
     const { localOnly } = diffEntries(localCandidates, pullResult.remoteLogEntries)
