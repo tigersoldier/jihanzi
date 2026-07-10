@@ -258,51 +258,37 @@ export function useToday(): UseTodayReturn {
   // ---- Sync-driven doneToday check ----
 
   /**
-   * 同步拉取到远程复习日志后，检查当日复习是否达标。
-   * 达标条件：去重复习字（firstReviewDay !== todayKey）数 >= min(限额, 到期数)。
+  /**
+   * 同步拉取到远程学习日志后，检查当日是否已有学习记录。
+   * 有当日 round-1 日志 → 标记 doneToday。
    * 仅在 idle 态执行，不打断进行中的学习会话。
    */
-  async function checkAndMarkDone(childId: string, dayKey: string, currentState: AppState) {
+  async function checkAndMarkDone(childId: string, dayKey: string) {
     try {
-      // 1. 查 IndexedDB 中当日 round 1 复习日志
       const reviews = await getReviewsForChildOnDay(childId, dayKey)
-
-      // 2. 去重 + 只数复习字（firstReviewDay !== dayKey 的是复习，等于的是新学）
-      const child = currentState.children.find(c => c.id === childId)
-      if (!child) return
-      const reviewedChars = new Set(reviews.map(r => r.character))
-      let reviewCount = 0
-      for (const char of reviewedChars) {
-        const sm2 = child.progress[char]
-        if (sm2 && sm2.firstReviewDay !== dayKey) reviewCount++
-      }
-      if (reviewCount === 0) return
-
-      // 3. 算当日到期复习字数
-      const tasks = generateTodayTasks(currentState, childId, dayKey, effectiveDayType ?? 'learn')
-      const dueReviewCount = tasks.filter(t => t.isReview).length
-
-      // 4. 达标判定
-      if (dueReviewCount === 0) {
-        // 快照中无到期复习字（含同步后全部完成场景）→ 有今日记录即可标记完成
-        if (reviewCount > 0) {
-          clearSession(childId, dayKey)
-          markDayDone(childId, dayKey)
-          setDoneToday(true)
-        }
-      } else {
-        const threshold = Math.min(currentState.settings.dailyReviewLimit, dueReviewCount)
-        if (reviewCount >= threshold) {
-          clearSession(childId, dayKey)
-          markDayDone(childId, dayKey)
-          setDoneToday(true)
-        }
+      if (reviews.length > 0) {
+        clearSession(childId, dayKey)
+        markDayDone(childId, dayKey)
+        setDoneToday(true)
       }
     } catch {
       // IndexedDB 查询可能失败（如登出期间）——静默忽略
     }
   }
 
+  // 每次同步合并数据后（dataVersion 递增）检查当日是否已有学习记录
+  useEffect(() => {
+    if (phase !== 'idle') return
+    if (state.children.length === 0) return
+
+    const childId = selectedChildId || state.children[0]?.id
+    if (!childId) return
+
+    // 已标记完成的跳过，避免重复查 IndexedDB
+    if (isDayDone(childId, todayKey)) return
+
+    checkAndMarkDone(childId, todayKey)
+  }, [phase, state, selectedChildId, todayKey, dataVersion])
   // 每次同步合并数据后（dataVersion 递增）检查当日是否已达标
   useEffect(() => {
     if (phase !== 'idle') return
