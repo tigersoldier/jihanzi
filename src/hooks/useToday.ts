@@ -258,7 +258,6 @@ export function useToday(): UseTodayReturn {
   // ---- Sync-driven doneToday check ----
 
   /**
-  /**
    * 同步拉取到远程学习日志后，检查当日是否已有学习记录。
    * 有当日 round-1 日志 → 标记 doneToday。
    * 仅在 idle 态执行，不打断进行中的学习会话。
@@ -288,19 +287,6 @@ export function useToday(): UseTodayReturn {
     if (isDayDone(childId, todayKey)) return
 
     checkAndMarkDone(childId, todayKey)
-  }, [phase, state, selectedChildId, todayKey, dataVersion])
-  // 每次同步合并数据后（dataVersion 递增）检查当日是否已达标
-  useEffect(() => {
-    if (phase !== 'idle') return
-    if (state.children.length === 0) return
-
-    const childId = selectedChildId || state.children[0]?.id
-    if (!childId) return
-
-    // 已标记完成的跳过，避免重复查 IndexedDB
-    if (isDayDone(childId, todayKey)) return
-
-    checkAndMarkDone(childId, todayKey, state)
   }, [phase, state, selectedChildId, todayKey, dataVersion])
 
   // Get available children
