@@ -75,7 +75,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   }, [isLoggedIn])
 
   const syncNow = async () => {
-    await syncOnce()
+    const didMerge = await syncOnce()
+    if (didMerge) {
+      reloadState()
+    }
     setLastSyncTime(Date.now())
   }
 

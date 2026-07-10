@@ -25,7 +25,7 @@ export interface DayTypeInfo {
  * ProgressPage 和 useToday 共用此钩子，确保 header 与卡片一致。
  */
 export function useDayType(): DayTypeInfo {
-  const { state, selectedChildId } = useApp()
+  const { state, selectedChildId, dataVersion } = useApp()
   const todayKey = getTodayKey()
 
   const [effectiveDayType, setEffectiveDayType] = useState<DayType | null>(null)
@@ -38,7 +38,7 @@ export function useDayType(): DayTypeInfo {
       setDayTypeLoading(false)
       return
     }
-    const cacheKey = `${selectedChildId}_${todayKey}`
+    const cacheKey = `${selectedChildId}_${todayKey}_${dataVersion}`
     if (dayTypeResolvedRef.current === cacheKey) {
       setDayTypeLoading(false)
       return
@@ -283,11 +283,20 @@ export function useToday(): UseTodayReturn {
       const dueReviewCount = tasks.filter(t => t.isReview).length
 
       // 4. 达标判定
-      const threshold = Math.min(currentState.settings.dailyReviewLimit, dueReviewCount)
-      if (reviewCount >= threshold && threshold > 0) {
-        clearSession(childId, dayKey)
-        markDayDone(childId, dayKey)
-        setDoneToday(true)
+      if (dueReviewCount === 0) {
+        // 快照中无到期复习字（含同步后全部完成场景）→ 有今日记录即可标记完成
+        if (reviewCount > 0) {
+          clearSession(childId, dayKey)
+          markDayDone(childId, dayKey)
+          setDoneToday(true)
+        }
+      } else {
+        const threshold = Math.min(currentState.settings.dailyReviewLimit, dueReviewCount)
+        if (reviewCount >= threshold) {
+          clearSession(childId, dayKey)
+          markDayDone(childId, dayKey)
+          setDoneToday(true)
+        }
       }
     } catch {
       // IndexedDB 查询可能失败（如登出期间）——静默忽略

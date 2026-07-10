@@ -28,6 +28,22 @@ vi.mock('../utils/date', async () => {
   }
 })
 
+// Mock DB functions for sync-driven checkAndMarkDone tests.
+// Default: no reviews, no last study day → works like before for existing tests.
+const { mockGetReviewsForChildOnDay, mockGetLastStudyDayForChild } = vi.hoisted(() => ({
+  mockGetReviewsForChildOnDay: vi.fn().mockResolvedValue([]),
+  mockGetLastStudyDayForChild: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('../data/db', async () => {
+  const actual = await vi.importActual<typeof import('../data/db')>('../data/db')
+  return {
+    ...actual,
+    getReviewsForChildOnDay: mockGetReviewsForChildOnDay,
+    getLastStudyDayForChild: mockGetLastStudyDayForChild,
+  }
+})
+
 import { useToday } from './useToday'
 
 // ---------------------------------------------------------------
@@ -640,6 +656,174 @@ describe('useToday', () => {
     expect(result.current.tomorrowDayType).toBe('纯复习日')
     expect(result.current.tomorrowNewChars).toEqual([])
     expect(result.current.tomorrowReviewChars).toEqual(['一', '二'])
+  })
+
+  // ---------------------------------------------------------------
+  // 同步驱动 doneToday 检测
+  // ---------------------------------------------------------------
+
+  function createSyncWrapper(initialState: AppState) {
+    function SyncWrapper({ children }: { children: ReactNode }) {
+      const [state] = useState<AppState>(initialState)
+      const [dataVersion, setDataVersion] = useState(0)
+      const [selectedChildId, setSelectedChildId] = useState<string>(
+        () => state.children[0]?.id || ''
+      )
+
+      const reloadState = useCallback(() => {
+        setDataVersion(v => v + 1)
+      }, [])
+
+      const submitReview = useCallback(
+        async (
+          childId: string,
+          character: string,
+          _grade: 'a' | 'b' | 'c' | 'd',
+          round: number,
+          _dayKey: string,
+        ) => {
+          if (round !== 1) return
+          // no-op for sync tests — state is read-only
+        },
+        [],
+      )
+
+      const contextValue: AppContextState = {
+        state,
+        loading: false,
+        dataVersion,
+        selectedChildId,
+        setSelectedChildId,
+        reloadState,
+        createChild: vi.fn() as any,
+        updateChild: vi.fn() as any,
+        deleteChild: vi.fn() as any,
+        createWordBook: vi.fn() as any,
+        updateWordBook: vi.fn() as any,
+        deleteWordBook: vi.fn() as any,
+        addCharacter: vi.fn() as any,
+        removeCharacter: vi.fn() as any,
+        reorderCharacters: vi.fn() as any,
+        submitReview,
+        submitPresentChars: vi.fn(() => Promise.resolve()) as any,
+        updateSettings: vi.fn() as any,
+        getLogEntries: vi.fn() as any,
+        bulkImport: vi.fn() as any,
+      }
+
+      return React.createElement(AppContext.Provider, { value: contextValue }, children)
+    }
+    SyncWrapper.displayName = 'SyncWrapper'
+    return SyncWrapper
+  }
+
+  it('sync 后快照无到期字但 IndexedDB 有今日复习日志 → doneToday 自动标记为 true', async () => {
+    // 模拟同步拉取场景：状态已重放（SM-2 更新，无到期字），
+    // IndexedDB 中有今日复习记录。
+    mockGetReviewsForChildOnDay.mockResolvedValue([
+      {
+        timestamp: 1000000, type: 'review', childId: 'child_1',
+        character: '一', grade: 'a', round: 1, dayKey: '2026-01-01',
+      },
+      {
+        timestamp: 1000001, type: 'review', childId: 'child_1',
+        character: '二', grade: 'b', round: 1, dayKey: '2026-01-01',
+      },
+    ])
+    mockGetLastStudyDayForChild.mockResolvedValue('2025-12-31')
+
+    // state: '一' 和 '二' 的 nextReview 都在未来（> 2026-01-01），无到期字
+    const state = makeState({
+      children: [{
+        id: 'child_1', name: '小明', wordBookId: 'wb_1',
+        nextCharIndex: 2,
+        progress: {
+          '一': { ease: 2.5, interval: 2, repetitions: 1, nextReview: '2026-01-03', lastGrade: 'a', firstReviewDay: '2025-12-31' },
+          '二': { ease: 2.5, interval: 3, repetitions: 1, nextReview: '2026-01-04', lastGrade: 'b', firstReviewDay: '2025-12-31' },
+        },
+      }],
+      wordBooks: [{
+        id: 'wb_1', name: '测试生字本', characters: ['一', '二', '三', '四', '五'],
+      }],
+    })
+    const wrapper = createSyncWrapper(state)
+
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    // 等待 checkAndMarkDone 异步完成
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    })
+
+    expect(result.current.doneToday).toBe(true)
+    expect(result.current.phase).toBe('idle')
+  })
+
+  it('sync 后快照无到期字且 IndexedDB 无今日复习日志 → doneToday 保持 false', async () => {
+    // 无到期字、无今日复习记录 — 今天确实没有需要复习的
+    mockGetReviewsForChildOnDay.mockResolvedValue([])
+    mockGetLastStudyDayForChild.mockResolvedValue('2025-12-31')
+
+    const state = makeState({
+      children: [{
+        id: 'child_1', name: '小明', wordBookId: 'wb_1',
+        nextCharIndex: 2,
+        progress: {
+          '一': { ease: 2.5, interval: 2, repetitions: 1, nextReview: '2026-01-03', lastGrade: 'a', firstReviewDay: '2025-12-31' },
+          '二': { ease: 2.5, interval: 3, repetitions: 1, nextReview: '2026-01-04', lastGrade: 'b', firstReviewDay: '2025-12-31' },
+        },
+      }],
+      wordBooks: [{
+        id: 'wb_1', name: '测试生字本', characters: ['一', '二', '三', '四', '五'],
+      }],
+    })
+    const wrapper = createSyncWrapper(state)
+
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    })
+
+    expect(result.current.doneToday).toBe(false)
+  })
+
+  it('sync 后仍有到期字 → 按原阈值逻辑判断（部分完成达标）', async () => {
+    // 部分同步场景：有 1 个字仍未到期（缺 1 条日志），
+    // 但已完成数 >= 阈值 → doneToday
+    mockGetReviewsForChildOnDay.mockResolvedValue([
+      {
+        timestamp: 1000000, type: 'review', childId: 'child_1',
+        character: '一', grade: 'a', round: 1, dayKey: '2026-01-01',
+      },
+    ])
+    mockGetLastStudyDayForChild.mockResolvedValue('2025-12-31')
+
+    // '一' 的 nextReview 已更新（已复习），'二' 仍到期（缺日志未更新）
+    const state = makeState({
+      children: [{
+        id: 'child_1', name: '小明', wordBookId: 'wb_1',
+        nextCharIndex: 1,
+        progress: {
+          '一': { ease: 2.5, interval: 2, repetitions: 1, nextReview: '2026-01-03', lastGrade: 'a', firstReviewDay: '2025-12-31' },
+          '二': { ease: 2.5, interval: 1, repetitions: 1, nextReview: '2026-01-01', lastGrade: 'b', firstReviewDay: '2025-12-31' },
+        },
+      }],
+      wordBooks: [{
+        id: 'wb_1', name: '测试生字本', characters: ['一', '二', '三'],
+      }],
+    })
+    const wrapper = createSyncWrapper(state)
+
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    })
+
+    // 1 个到期复习字 ('二')，1 条已完成复习日志 ('一')
+    // threshold = min(30, 1) = 1，reviewCount = 1 >= 1 → done
+    expect(result.current.doneToday).toBe(true)
   })
 
   it('明天无任务时预览显示空列表', async () => {
