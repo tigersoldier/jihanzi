@@ -61,9 +61,9 @@ describe('generateTodayTasks', () => {
           id: 'child_1',
           name: '小明',
           wordBookId: 'wb_1',
-          nextCharIndex: 1,  // ← 「一」已学，指针前进
+          nextCharIndex: 1, // ← 「一」已学，指针前进
           progress: {
-            '一': {
+            一: {
               ease: 2.6,
               interval: 1,
               repetitions: 1,
@@ -98,7 +98,7 @@ describe('generateTodayTasks', () => {
     // 更新而重新计算，那么 tasksAfter[taskIndex=1] = 三，而不是 二！
     // 用户就跳过了「二」。
     expect(tasksBefore[1].character).toBe('二')
-    expect(tasksAfter[1].character).toBe('三')  // ← 跳过了二！
+    expect(tasksAfter[1].character).toBe('三') // ← 跳过了二！
   })
 
   it('传入 dayType 参数时应优先生效', () => {
@@ -142,9 +142,9 @@ describe('getChildStats', () => {
       wordBookId: 'wb1',
       nextCharIndex: 3,
       progress: {
-        '花': { ease: 2.7, interval: 8, repetitions: 2, nextReview: '2026-07-08', lastGrade: 'a' },
-        '途': { ease: 2.5, interval: 1, repetitions: 0, nextReview: '2026-07-01', lastGrade: 'd' },
-        '滚': { ease: 2.56, interval: 20, repetitions: 3, nextReview: '2026-07-20', lastGrade: 'b' },
+        花: { ease: 2.7, interval: 8, repetitions: 2, nextReview: '2026-07-08', lastGrade: 'a' },
+        途: { ease: 2.5, interval: 1, repetitions: 0, nextReview: '2026-07-01', lastGrade: 'd' },
+        滚: { ease: 2.56, interval: 20, repetitions: 3, nextReview: '2026-07-20', lastGrade: 'b' },
       },
     }
 
@@ -165,7 +165,7 @@ describe('getChildStats', () => {
       wordBookId: 'wb1',
       nextCharIndex: 1,
       progress: {
-        '斯': { ease: 2.38, interval: 6, repetitions: 3, nextReview: '2026-07-06', lastGrade: 'c' },
+        斯: { ease: 2.38, interval: 6, repetitions: 3, nextReview: '2026-07-06', lastGrade: 'c' },
       },
     }
 
@@ -198,7 +198,7 @@ describe('getEffectiveDayType', () => {
 
   it('上次学习日有新字 → 今日复习日', () => {
     const progress = makeProgress({
-      '一': { firstReviewDay: '2026-01-01' },  // ← 上次学习日引入了新字
+      一: { firstReviewDay: '2026-01-01' }, // ← 上次学习日引入了新字
     })
     expect(getEffectiveDayType('2026-01-01', progress)).toBe('review')
   })
@@ -206,7 +206,7 @@ describe('getEffectiveDayType', () => {
   it('上次学习日无新字（纯复习日）→ 今日学新日', () => {
     // 2026-01-02 是纯复习日，没有引入新字（firstReviewDay 都不是 01-02）
     const progress = makeProgress({
-      '一': { firstReviewDay: '2026-01-01' },  // ← 新字是在 01-01 引入的，不是 01-02
+      一: { firstReviewDay: '2026-01-01' }, // ← 新字是在 01-01 引入的，不是 01-02
     })
     expect(getEffectiveDayType('2026-01-02', progress)).toBe('learn')
   })
@@ -214,7 +214,7 @@ describe('getEffectiveDayType', () => {
   it('跳天后日类型仍然正确翻转（上次学新日 → 今天复习日）', () => {
     // 用户在 01-01 学新字，01-02 缺席，01-03 回来
     const progress = makeProgress({
-      '一': { firstReviewDay: '2026-01-01' },  // ← 01-01 引入了新字
+      一: { firstReviewDay: '2026-01-01' }, // ← 01-01 引入了新字
     })
     // 即使跳过了 01-02，也应该是复习日（因为上次学了新字）
     expect(getEffectiveDayType('2026-01-01', progress)).toBe('review')
@@ -223,8 +223,8 @@ describe('getEffectiveDayType', () => {
   it('连续两次学新日后 → 第三次为复习日', () => {
     // 模拟: 首日学新(learn) → 次日复习(无新字) → 第三日学新(有新字) → 第四日?
     const progress = makeProgress({
-      '一': { firstReviewDay: '2026-01-01' },
-      '二': { firstReviewDay: '2026-01-03' },  // ← 01-03 引入了新字
+      一: { firstReviewDay: '2026-01-01' },
+      二: { firstReviewDay: '2026-01-03' }, // ← 01-03 引入了新字
     })
     // lastStudyDay=01-03 有新字 → 今天应该是复习日
     expect(getEffectiveDayType('2026-01-03', progress)).toBe('review')

@@ -27,12 +27,12 @@ export function useWordBook(): UseWordBookReturn {
   } = useApp()
 
   const [selectedWBId, setSelectedWBId] = useState<string | null>(
-    () => state.wordBooks[0]?.id || null
+    () => state.wordBooks[0]?.id || null,
   )
 
-  const wbList = useMemo(() =>
-    state.wordBooks.map(w => ({ id: w.id, name: w.name, count: w.characters.length })),
-    [state.wordBooks]
+  const wbList = useMemo(
+    () => state.wordBooks.map(w => ({ id: w.id, name: w.name, count: w.characters.length })),
+    [state.wordBooks],
   )
 
   const currentWB = useMemo(() => {
@@ -41,54 +41,72 @@ export function useWordBook(): UseWordBookReturn {
     return wb || null
   }, [selectedWBId, state.wordBooks])
 
-  const addCharacter = useCallback(async (char: string) => {
-    const trimmed = char.trim()
-    if (!selectedWBId || !trimmed) return
-    // Add each character separately, skipping non-Chinese characters
-    // (commas, spaces, punctuation) and duplicates.
-    for (const c of trimmed) {
-      if (!isChineseChar(c)) continue
-      try {
-        await addCharFn(selectedWBId, c)
-      } catch (err) {
-        if (err instanceof ValidationError) {
-          // Skip duplicates or other validation failures; continue with
-          // remaining characters so one bad input doesn't block the rest.
-          continue
+  const addCharacter = useCallback(
+    async (char: string) => {
+      const trimmed = char.trim()
+      if (!selectedWBId || !trimmed) return
+      // Add each character separately, skipping non-Chinese characters
+      // (commas, spaces, punctuation) and duplicates.
+      for (const c of trimmed) {
+        if (!isChineseChar(c)) continue
+        try {
+          await addCharFn(selectedWBId, c)
+        } catch (err) {
+          if (err instanceof ValidationError) {
+            // Skip duplicates or other validation failures; continue with
+            // remaining characters so one bad input doesn't block the rest.
+            continue
+          }
+          // System errors (IndexedDB, network, …) must propagate so the
+          // caller can surface them to the user.
+          console.error('addCharacter failed:', err)
+          throw err
         }
-        // System errors (IndexedDB, network, …) must propagate so the
-        // caller can surface them to the user.
-        console.error('addCharacter failed:', err)
-        throw err
       }
-    }
-  }, [selectedWBId, addCharFn])
+    },
+    [selectedWBId, addCharFn],
+  )
 
-  const removeCharacter = useCallback(async (char: string, index: number) => {
-    if (!selectedWBId) return
-    await removeCharFn(selectedWBId, char, index)
-  }, [selectedWBId, removeCharFn])
+  const removeCharacter = useCallback(
+    async (char: string, index: number) => {
+      if (!selectedWBId) return
+      await removeCharFn(selectedWBId, char, index)
+    },
+    [selectedWBId, removeCharFn],
+  )
 
-  const reorderCharacters = useCallback(async (chars: string[]) => {
-    if (!selectedWBId) return
-    await reorderFn(selectedWBId, chars)
-  }, [selectedWBId, reorderFn])
+  const reorderCharacters = useCallback(
+    async (chars: string[]) => {
+      if (!selectedWBId) return
+      await reorderFn(selectedWBId, chars)
+    },
+    [selectedWBId, reorderFn],
+  )
 
-  const createWB = useCallback(async (name: string, chars?: string[]) => {
-    const id = await createWordBook(name, chars)
-    setSelectedWBId(id)
-  }, [createWordBook])
+  const createWB = useCallback(
+    async (name: string, chars?: string[]) => {
+      const id = await createWordBook(name, chars)
+      setSelectedWBId(id)
+    },
+    [createWordBook],
+  )
 
-  const deleteWB = useCallback(async (id: string) => {
-    await deleteWordBook(id)
-    if (selectedWBId === id) {
-      setSelectedWBId(state.wordBooks[0]?.id || null)
-    }
-  }, [deleteWordBook, selectedWBId, state.wordBooks])
+  const deleteWB = useCallback(
+    async (id: string) => {
+      await deleteWordBook(id)
+      if (selectedWBId === id) {
+        setSelectedWBId(state.wordBooks[0]?.id || null)
+      }
+    },
+    [deleteWordBook, selectedWBId, state.wordBooks],
+  )
 
-  const updateWBName = useCallback(async (id: string, name: string) => {
-    await updateWordBook(id, name)
-  }, [updateWordBook])
+  const updateWBName = useCallback(
+    async (id: string, name: string) => {
+      await updateWordBook(id, name)
+    },
+    [updateWordBook],
+  )
 
   return {
     selectedWBId,

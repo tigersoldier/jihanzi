@@ -49,11 +49,16 @@ export async function parseImportFiles(
 
     if (isJsonl) {
       // JSONL — 每行一条日志
-      file.text.split('\n').filter(l => l.trim()).forEach(line => {
-        try {
-          logs.push(JSON.parse(line))
-        } catch { /* skip invalid lines */ }
-      })
+      file.text
+        .split('\n')
+        .filter(l => l.trim())
+        .forEach(line => {
+          try {
+            logs.push(JSON.parse(line))
+          } catch {
+            /* skip invalid lines */
+          }
+        })
       continue
     }
 
@@ -84,7 +89,9 @@ export async function parseImportFiles(
         }
         if (parsed.logs) logs.push(...parsed.logs)
       }
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
 
   return { snapshot: dateSnapshot ?? otherSnapshot, logs }

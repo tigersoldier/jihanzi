@@ -26,17 +26,25 @@ vi.mock('../data/db', async () => {
 import { useHistory, useCharacterStats } from './useStats'
 
 const SM2_A: SM2State = {
-  ease: 2.5, interval: 1, repetitions: 1,
-  nextReview: '2026-01-02', lastGrade: 'a',
+  ease: 2.5,
+  interval: 1,
+  repetitions: 1,
+  nextReview: '2026-01-02',
+  lastGrade: 'a',
   firstReviewDay: '2026-01-01',
 }
 
 function makeState(overrides?: Partial<AppState>): AppState {
   return {
-    children: [{
-      id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 1,
-      progress: { '雨': SM2_A },
-    }],
+    children: [
+      {
+        id: 'child_1',
+        name: '小明',
+        wordBookId: 'wb_1',
+        nextCharIndex: 1,
+        progress: { 雨: SM2_A },
+      },
+    ],
     wordBooks: [{ id: 'wb_1', name: '测试', characters: ['雨'] }],
     settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
     ...overrides,
@@ -44,19 +52,33 @@ function makeState(overrides?: Partial<AppState>): AppState {
 }
 
 describe('useHistory', () => {
-  beforeEach(() => { vi.clearAllMocks() })
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
 
   it('calls getReviewsForChildInRange on initial mount (no more getFirstReviewDays)', () => {
     renderHook(() => useHistory('child_1', '2026-06'), {
       wrapper: ({ children }: { children: ReactNode }) => {
         const ctx: AppContextState = {
-          state: makeState(), loading: false, dataVersion: 0,
-          selectedChildId: 'child_1', setSelectedChildId: vi.fn(), reloadState: vi.fn(),
-          createChild: vi.fn() as any, updateChild: vi.fn() as any, deleteChild: vi.fn() as any,
-          createWordBook: vi.fn() as any, updateWordBook: vi.fn() as any, deleteWordBook: vi.fn() as any,
-          addCharacter: vi.fn() as any, removeCharacter: vi.fn() as any, reorderCharacters: vi.fn() as any,
-          submitReview: vi.fn() as any, updateSettings: vi.fn() as any,
-          getLogEntries: vi.fn() as any, bulkImport: vi.fn() as any,
+          state: makeState(),
+          loading: false,
+          dataVersion: 0,
+          selectedChildId: 'child_1',
+          setSelectedChildId: vi.fn(),
+          reloadState: vi.fn(),
+          createChild: vi.fn() as any,
+          updateChild: vi.fn() as any,
+          deleteChild: vi.fn() as any,
+          createWordBook: vi.fn() as any,
+          updateWordBook: vi.fn() as any,
+          deleteWordBook: vi.fn() as any,
+          addCharacter: vi.fn() as any,
+          removeCharacter: vi.fn() as any,
+          reorderCharacters: vi.fn() as any,
+          submitReview: vi.fn() as any,
+          updateSettings: vi.fn() as any,
+          getLogEntries: vi.fn() as any,
+          bulkImport: vi.fn() as any,
         }
         return React.createElement(AppContext.Provider, { value: ctx }, children)
       },
@@ -70,39 +92,70 @@ describe('useHistory', () => {
       const [dv, set] = useState(0)
       setDV = set
       const ctx: AppContextState = {
-        state: makeState(), loading: false, dataVersion: dv,
-        selectedChildId: 'child_1', setSelectedChildId: vi.fn(), reloadState: vi.fn(),
-        createChild: vi.fn() as any, updateChild: vi.fn() as any, deleteChild: vi.fn() as any,
-        createWordBook: vi.fn() as any, updateWordBook: vi.fn() as any, deleteWordBook: vi.fn() as any,
-        addCharacter: vi.fn() as any, removeCharacter: vi.fn() as any, reorderCharacters: vi.fn() as any,
-        submitReview: vi.fn() as any, updateSettings: vi.fn() as any,
-        getLogEntries: vi.fn() as any, bulkImport: vi.fn() as any,
+        state: makeState(),
+        loading: false,
+        dataVersion: dv,
+        selectedChildId: 'child_1',
+        setSelectedChildId: vi.fn(),
+        reloadState: vi.fn(),
+        createChild: vi.fn() as any,
+        updateChild: vi.fn() as any,
+        deleteChild: vi.fn() as any,
+        createWordBook: vi.fn() as any,
+        updateWordBook: vi.fn() as any,
+        deleteWordBook: vi.fn() as any,
+        addCharacter: vi.fn() as any,
+        removeCharacter: vi.fn() as any,
+        reorderCharacters: vi.fn() as any,
+        submitReview: vi.fn() as any,
+        updateSettings: vi.fn() as any,
+        getLogEntries: vi.fn() as any,
+        bulkImport: vi.fn() as any,
       }
       return React.createElement(AppContext.Provider, { value: ctx }, children)
     }
 
     renderHook(() => useHistory('child_1', '2026-06'), { wrapper: W })
-    await vi.waitFor(() => { expect(db.getReviewsForChildInRange).toHaveBeenCalledTimes(1) })
+    await vi.waitFor(() => {
+      expect(db.getReviewsForChildInRange).toHaveBeenCalledTimes(1)
+    })
 
-    await act(async () => { setDV(1); await new Promise(r => setTimeout(r, 50)) })
+    await act(async () => {
+      setDV(1)
+      await new Promise(r => setTimeout(r, 50))
+    })
     expect(db.getReviewsForChildInRange).toHaveBeenCalledTimes(1) // skipped
   })
 })
 
 describe('useCharacterStats', () => {
-  beforeEach(() => { vi.clearAllMocks() })
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
 
   it('calls getReviewsForChildCharPaginated on initial mount', () => {
     renderHook(() => useCharacterStats('child_1', '雨'), {
       wrapper: ({ children }: { children: ReactNode }) => {
         const ctx: AppContextState = {
-          state: makeState(), loading: false, dataVersion: 0,
-          selectedChildId: 'child_1', setSelectedChildId: vi.fn(), reloadState: vi.fn(),
-          createChild: vi.fn() as any, updateChild: vi.fn() as any, deleteChild: vi.fn() as any,
-          createWordBook: vi.fn() as any, updateWordBook: vi.fn() as any, deleteWordBook: vi.fn() as any,
-          addCharacter: vi.fn() as any, removeCharacter: vi.fn() as any, reorderCharacters: vi.fn() as any,
-          submitReview: vi.fn() as any, updateSettings: vi.fn() as any,
-          getLogEntries: vi.fn() as any, bulkImport: vi.fn() as any,
+          state: makeState(),
+          loading: false,
+          dataVersion: 0,
+          selectedChildId: 'child_1',
+          setSelectedChildId: vi.fn(),
+          reloadState: vi.fn(),
+          createChild: vi.fn() as any,
+          updateChild: vi.fn() as any,
+          deleteChild: vi.fn() as any,
+          createWordBook: vi.fn() as any,
+          updateWordBook: vi.fn() as any,
+          deleteWordBook: vi.fn() as any,
+          addCharacter: vi.fn() as any,
+          removeCharacter: vi.fn() as any,
+          reorderCharacters: vi.fn() as any,
+          submitReview: vi.fn() as any,
+          updateSettings: vi.fn() as any,
+          getLogEntries: vi.fn() as any,
+          bulkImport: vi.fn() as any,
         }
         return React.createElement(AppContext.Provider, { value: ctx }, children)
       },
@@ -116,21 +169,38 @@ describe('useCharacterStats', () => {
       const [dv, set] = useState(0)
       setDV = set
       const ctx: AppContextState = {
-        state: makeState(), loading: false, dataVersion: dv,
-        selectedChildId: 'child_1', setSelectedChildId: vi.fn(), reloadState: vi.fn(),
-        createChild: vi.fn() as any, updateChild: vi.fn() as any, deleteChild: vi.fn() as any,
-        createWordBook: vi.fn() as any, updateWordBook: vi.fn() as any, deleteWordBook: vi.fn() as any,
-        addCharacter: vi.fn() as any, removeCharacter: vi.fn() as any, reorderCharacters: vi.fn() as any,
-        submitReview: vi.fn() as any, updateSettings: vi.fn() as any,
-        getLogEntries: vi.fn() as any, bulkImport: vi.fn() as any,
+        state: makeState(),
+        loading: false,
+        dataVersion: dv,
+        selectedChildId: 'child_1',
+        setSelectedChildId: vi.fn(),
+        reloadState: vi.fn(),
+        createChild: vi.fn() as any,
+        updateChild: vi.fn() as any,
+        deleteChild: vi.fn() as any,
+        createWordBook: vi.fn() as any,
+        updateWordBook: vi.fn() as any,
+        deleteWordBook: vi.fn() as any,
+        addCharacter: vi.fn() as any,
+        removeCharacter: vi.fn() as any,
+        reorderCharacters: vi.fn() as any,
+        submitReview: vi.fn() as any,
+        updateSettings: vi.fn() as any,
+        getLogEntries: vi.fn() as any,
+        bulkImport: vi.fn() as any,
       }
       return React.createElement(AppContext.Provider, { value: ctx }, children)
     }
 
     renderHook(() => useCharacterStats('child_1', '雨'), { wrapper: W })
-    await vi.waitFor(() => { expect(db.getReviewsForChildCharPaginated).toHaveBeenCalledTimes(1) })
+    await vi.waitFor(() => {
+      expect(db.getReviewsForChildCharPaginated).toHaveBeenCalledTimes(1)
+    })
 
-    await act(async () => { setDV(1); await new Promise(r => setTimeout(r, 50)) })
+    await act(async () => {
+      setDV(1)
+      await new Promise(r => setTimeout(r, 50))
+    })
     expect(db.getReviewsForChildCharPaginated).toHaveBeenCalledTimes(1)
   })
 
@@ -140,41 +210,72 @@ describe('useCharacterStats', () => {
       const [s, set] = useState(makeState())
       setState = set
       const ctx: AppContextState = {
-        state: s, loading: false, dataVersion: 0,
-        selectedChildId: 'child_1', setSelectedChildId: vi.fn(), reloadState: vi.fn(),
-        createChild: vi.fn() as any, updateChild: vi.fn() as any, deleteChild: vi.fn() as any,
-        createWordBook: vi.fn() as any, updateWordBook: vi.fn() as any, deleteWordBook: vi.fn() as any,
-        addCharacter: vi.fn() as any, removeCharacter: vi.fn() as any, reorderCharacters: vi.fn() as any,
-        submitReview: vi.fn() as any, updateSettings: vi.fn() as any,
-        getLogEntries: vi.fn() as any, bulkImport: vi.fn() as any,
+        state: s,
+        loading: false,
+        dataVersion: 0,
+        selectedChildId: 'child_1',
+        setSelectedChildId: vi.fn(),
+        reloadState: vi.fn(),
+        createChild: vi.fn() as any,
+        updateChild: vi.fn() as any,
+        deleteChild: vi.fn() as any,
+        createWordBook: vi.fn() as any,
+        updateWordBook: vi.fn() as any,
+        deleteWordBook: vi.fn() as any,
+        addCharacter: vi.fn() as any,
+        removeCharacter: vi.fn() as any,
+        reorderCharacters: vi.fn() as any,
+        submitReview: vi.fn() as any,
+        updateSettings: vi.fn() as any,
+        getLogEntries: vi.fn() as any,
+        bulkImport: vi.fn() as any,
       }
       return React.createElement(AppContext.Provider, { value: ctx }, children)
     }
 
     renderHook(() => useCharacterStats('child_1', '雨'), { wrapper: W })
-    await vi.waitFor(() => { expect(db.getReviewsForChildCharPaginated).toHaveBeenCalledTimes(1) })
+    await vi.waitFor(() => {
+      expect(db.getReviewsForChildCharPaginated).toHaveBeenCalledTimes(1)
+    })
 
     const updated = makeState()
     updated.children[0].progress['雨'] = { ...SM2_A, repetitions: 2 }
-    await act(async () => { setState(updated); await new Promise(r => setTimeout(r, 50)) })
+    await act(async () => {
+      setState(updated)
+      await new Promise(r => setTimeout(r, 50))
+    })
     expect(db.getReviewsForChildCharPaginated).toHaveBeenCalledTimes(2)
   })
 
   it('loading is true while query is in flight, false after', async () => {
     let resolveTimeline: (value: any) => void
     vi.mocked(db.getReviewsForChildCharPaginated).mockReturnValue(
-      new Promise(resolve => { resolveTimeline = resolve })
+      new Promise(resolve => {
+        resolveTimeline = resolve
+      }),
     )
 
     function W({ children }: { children: ReactNode }) {
       const ctx: AppContextState = {
-        state: makeState(), loading: false, dataVersion: 0,
-        selectedChildId: 'child_1', setSelectedChildId: vi.fn(), reloadState: vi.fn(),
-        createChild: vi.fn() as any, updateChild: vi.fn() as any, deleteChild: vi.fn() as any,
-        createWordBook: vi.fn() as any, updateWordBook: vi.fn() as any, deleteWordBook: vi.fn() as any,
-        addCharacter: vi.fn() as any, removeCharacter: vi.fn() as any, reorderCharacters: vi.fn() as any,
-        submitReview: vi.fn() as any, updateSettings: vi.fn() as any,
-        getLogEntries: vi.fn() as any, bulkImport: vi.fn() as any,
+        state: makeState(),
+        loading: false,
+        dataVersion: 0,
+        selectedChildId: 'child_1',
+        setSelectedChildId: vi.fn(),
+        reloadState: vi.fn(),
+        createChild: vi.fn() as any,
+        updateChild: vi.fn() as any,
+        deleteChild: vi.fn() as any,
+        createWordBook: vi.fn() as any,
+        updateWordBook: vi.fn() as any,
+        deleteWordBook: vi.fn() as any,
+        addCharacter: vi.fn() as any,
+        removeCharacter: vi.fn() as any,
+        reorderCharacters: vi.fn() as any,
+        submitReview: vi.fn() as any,
+        updateSettings: vi.fn() as any,
+        getLogEntries: vi.fn() as any,
+        bulkImport: vi.fn() as any,
       }
       return React.createElement(AppContext.Provider, { value: ctx }, children)
     }
@@ -182,7 +283,9 @@ describe('useCharacterStats', () => {
     const { result } = renderHook(() => useCharacterStats('child_1', '雨'), { wrapper: W })
 
     // 初始渲染后 useEffect 执行 → setLoading(true) → 查询飞行中
-    await act(async () => { await new Promise(r => setTimeout(r, 0)) })
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 0))
+    })
     expect(result.current.loading).toBe(true)
 
     // 解析 paginated 查询

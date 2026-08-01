@@ -4,12 +4,12 @@
  * Tests for useWordBook hook — verifies word book management behavior.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import React, { useState, useRef, useCallback, type ReactNode } from 'react'
 import type { AppState } from '../core/types'
 import { AppContext, type AppContextState } from '../state/AppContext'
-import { validateAddChar, ValidationError } from '../utils/chars'
+import { validateAddChar } from '../utils/chars'
 
 import { useWordBook } from './useWordBook'
 
@@ -60,32 +60,25 @@ function createStatefulWrapper(initialState: AppState) {
     const wordBooksRef = useRef(state.wordBooks)
     wordBooksRef.current = state.wordBooks
 
-    const addCharacter = useCallback(
-      async (wordBookId: string, character: string) => {
-        const wb = wordBooksRef.current.find(w => w.id === wordBookId)
-        if (!wb) return
-        validateAddChar(character, wb)
-        addedChars.push(character)
+    const addCharacter = useCallback(async (wordBookId: string, character: string) => {
+      const wb = wordBooksRef.current.find(w => w.id === wordBookId)
+      if (!wb) return
+      validateAddChar(character, wb)
+      addedChars.push(character)
 
-        // Eagerly update ref so sequential calls in the same microtask
-        // see each other's additions (mirrors AppContext behaviour).
-        wordBooksRef.current = wordBooksRef.current.map(w =>
-          w.id === wordBookId
-            ? { ...w, characters: [...w.characters, character] }
-            : w
-        )
+      // Eagerly update ref so sequential calls in the same microtask
+      // see each other's additions (mirrors AppContext behaviour).
+      wordBooksRef.current = wordBooksRef.current.map(w =>
+        w.id === wordBookId ? { ...w, characters: [...w.characters, character] } : w,
+      )
 
-        setState(prev => ({
-          ...prev,
-          wordBooks: prev.wordBooks.map(w =>
-            w.id === wordBookId
-              ? { ...w, characters: [...w.characters, character] }
-              : w
-          ),
-        }))
-      },
-      [],
-    )
+      setState(prev => ({
+        ...prev,
+        wordBooks: prev.wordBooks.map(w =>
+          w.id === wordBookId ? { ...w, characters: [...w.characters, character] } : w,
+        ),
+      }))
+    }, [])
 
     const contextValue: AppContextState = {
       state,
@@ -213,12 +206,9 @@ describe('useWordBook', () => {
       function SystemErrorWrapper({ children }: { children: ReactNode }) {
         const [state] = useState<AppState>(stateWithWordBook([]))
 
-        const addCharacter = useCallback(
-          async (_wordBookId: string, _character: string) => {
-            throw systemError
-          },
-          [],
-        )
+        const addCharacter = useCallback(async (_wordBookId: string, _character: string) => {
+          throw systemError
+        }, [])
 
         const contextValue: AppContextState = {
           state,
@@ -235,7 +225,7 @@ describe('useWordBook', () => {
           submitReview: vi.fn() as any,
           updateSettings: vi.fn() as any,
           getLogEntries: vi.fn() as any,
-      bulkImport: vi.fn() as any,
+          bulkImport: vi.fn() as any,
         }
 
         return React.createElement(AppContext.Provider, { value: contextValue }, children)

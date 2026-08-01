@@ -18,7 +18,8 @@ export type Proficiency = 'mastered' | 'progressing' | 'weak' | 'unlearned'
 export function getProficiency(sm2State: SM2State | undefined): Proficiency {
   if (!sm2State) return 'unlearned'
   if (sm2State.lastGrade === 'a' && sm2State.repetitions >= 3) return 'mastered'
-  if (sm2State.lastGrade === 'd' || (sm2State.lastGrade === 'c' && sm2State.repetitions < 2)) return 'weak'
+  if (sm2State.lastGrade === 'd' || (sm2State.lastGrade === 'c' && sm2State.repetitions < 2))
+    return 'weak'
   return 'progressing'
 }
 

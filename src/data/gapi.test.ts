@@ -43,9 +43,15 @@ vi.mock('./gapi', async () => {
 const store = new Map<string, string>()
 const mockLocalStorage = {
   getItem: vi.fn((key: string) => store.get(key) ?? null),
-  setItem: vi.fn((key: string, value: string) => { store.set(key, value) }),
-  removeItem: vi.fn((key: string) => { store.delete(key) }),
-  clear: vi.fn(() => { store.clear() }),
+  setItem: vi.fn((key: string, value: string) => {
+    store.set(key, value)
+  }),
+  removeItem: vi.fn((key: string) => {
+    store.delete(key)
+  }),
+  clear: vi.fn(() => {
+    store.clear()
+  }),
 }
 vi.stubGlobal('localStorage', mockLocalStorage)
 
@@ -61,7 +67,6 @@ import {
   hasValidToken,
   initTokenClient,
   trySilentLogin,
-  isGoogleConfigured,
   TOKEN_READY_EVENT,
 } from './gapi'
 
@@ -122,7 +127,11 @@ describe('gapi localStorage persistence', () => {
 
   describe('saveUserToStorage / loadUserFromStorage', () => {
     it('saves and loads user profile', () => {
-      const user = { name: 'Test User', email: 'test@example.com', picture: 'https://example.com/photo.jpg' }
+      const user = {
+        name: 'Test User',
+        email: 'test@example.com',
+        picture: 'https://example.com/photo.jpg',
+      }
       saveUserToStorage(user)
       const result = loadUserFromStorage()
 
@@ -284,7 +293,8 @@ describe('gapi localStorage persistence', () => {
       initTokenClient()
 
       // Simulate callback firing synchronously
-      const mockTokenClient = (google.accounts.oauth2.initTokenClient as ReturnType<typeof vi.fn>).mock.results[0].value
+      const mockTokenClient = (google.accounts.oauth2.initTokenClient as ReturnType<typeof vi.fn>)
+        .mock.results[0].value
       mockTokenClient.callback = vi.fn()
 
       // Mock requestAccessToken to invoke the callback with a token
@@ -304,7 +314,8 @@ describe('gapi localStorage persistence', () => {
     it('resolves to null when Google callback fires with error', async () => {
       initTokenClient()
 
-      const mockTokenClient = (google.accounts.oauth2.initTokenClient as ReturnType<typeof vi.fn>).mock.results[0].value
+      const mockTokenClient = (google.accounts.oauth2.initTokenClient as ReturnType<typeof vi.fn>)
+        .mock.results[0].value
       mockTokenClient.callback = vi.fn()
 
       mockRequestAccessToken.mockImplementationOnce(() => {
@@ -322,7 +333,8 @@ describe('gapi localStorage persistence', () => {
     it('saves token and dispatches TOKEN_READY_EVENT when callback fires after timeout', async () => {
       // Given: token client initialized and trySilentLogin called
       initTokenClient()
-      const mockTokenClient = (google.accounts.oauth2.initTokenClient as ReturnType<typeof vi.fn>).mock.results[0].value
+      const mockTokenClient = (google.accounts.oauth2.initTokenClient as ReturnType<typeof vi.fn>)
+        .mock.results[0].value
 
       // Spy on window.dispatchEvent
       const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
@@ -353,7 +365,8 @@ describe('gapi localStorage persistence', () => {
     it('does not resolve twice when callback fires before timeout', async () => {
       // Given: token client initialized
       initTokenClient()
-      const mockTokenClient = (google.accounts.oauth2.initTokenClient as ReturnType<typeof vi.fn>).mock.results[0].value
+      const mockTokenClient = (google.accounts.oauth2.initTokenClient as ReturnType<typeof vi.fn>)
+        .mock.results[0].value
 
       // When: callback fires immediately with success
       mockRequestAccessToken.mockImplementationOnce(() => {

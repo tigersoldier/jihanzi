@@ -10,8 +10,6 @@ import {
 import type {
   AppState,
   AnyLogEntry,
-  Child,
-  WordBook,
   Settings,
   CreateChildEntry,
   CreateWordBookEntry,
@@ -65,7 +63,13 @@ export interface AppContextState {
   removeCharacter: (wordBookId: string, character: string, index: number) => Promise<void>
   reorderCharacters: (wordBookId: string, characters: string[]) => Promise<void>
   // Review operations
-  submitReview: (childId: string, character: string, grade: 'a' | 'b' | 'c' | 'd', round: number, dayKey: string) => Promise<void>
+  submitReview: (
+    childId: string,
+    character: string,
+    grade: 'a' | 'b' | 'c' | 'd',
+    round: number,
+    dayKey: string,
+  ) => Promise<void>
   /** Record a presenting-phase completion (audit log, no state change) */
   submitPresentChars: (childId: string, characters: string[], dayKey: string) => Promise<void>
   // Settings operations
@@ -73,7 +77,10 @@ export interface AppContextState {
   // Data management
   getLogEntries: () => Promise<AnyLogEntry[]>
   /** Import a snapshot + log entries — writes to IndexedDB and reloads state */
-  bulkImport: (snapshot: { timestamp: number; state: AppState }, logs: AnyLogEntry[]) => Promise<void>
+  bulkImport: (
+    snapshot: { timestamp: number; state: AppState },
+    logs: AnyLogEntry[],
+  ) => Promise<void>
   /** Reload state from IndexedDB — called after Drive pull merges new data */
   reloadState: () => void
 }
@@ -146,9 +153,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   //
   // Consolidation rounds (round != 1) write the log entry for sync but
   // don't update the snapshot.
-  const applyAndPersist = useCallback(async (
-    entry: AnyLogEntry,
-  ): Promise<boolean> => {
+  const applyAndPersist = useCallback(async (entry: AnyLogEntry): Promise<boolean> => {
     const now = Date.now()
     let changed = false
     let newState: AppState = EMPTY_STATE
@@ -188,11 +193,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Trigger debounced push to Google Drive
       notifyDataChanged()
       // Prune logs if over threshold (500k), fire-and-forget
-      getLogCount().then(count => {
-        if (count > 500_000) pruneOldestLogs(1000)
-      }).catch(err => {
-        console.error('Log pruning failed:', err)
-      })
+      getLogCount()
+        .then(count => {
+          if (count > 500_000) pruneOldestLogs(1000)
+        })
+        .catch(err => {
+          console.error('Log pruning failed:', err)
+        })
     }
 
     return changed
@@ -200,167 +207,197 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // ---- Child Operations ----
 
-  const createChild = useCallback(async (name: string, wordBookId: string): Promise<string> => {
-    const childId = `child_${generateTimestamp()}`
-    const entry: CreateChildEntry = {
-      timestamp: generateTimestamp(),
-      type: 'create_child',
-      childId,
-      name,
-      wordBookId,
-    }
-    await applyAndPersist(entry)
-    return childId
-  }, [applyAndPersist])
+  const createChild = useCallback(
+    async (name: string, wordBookId: string): Promise<string> => {
+      const childId = `child_${generateTimestamp()}`
+      const entry: CreateChildEntry = {
+        timestamp: generateTimestamp(),
+        type: 'create_child',
+        childId,
+        name,
+        wordBookId,
+      }
+      await applyAndPersist(entry)
+      return childId
+    },
+    [applyAndPersist],
+  )
 
-  const updateChild = useCallback(async (childId: string, updates: { name?: string; wordBookId?: string }) => {
-    const entry: UpdateChildEntry = {
-      timestamp: generateTimestamp(),
-      type: 'update_child',
-      childId,
-      ...updates,
-    }
-    await applyAndPersist(entry)
-  }, [applyAndPersist])
+  const updateChild = useCallback(
+    async (childId: string, updates: { name?: string; wordBookId?: string }) => {
+      const entry: UpdateChildEntry = {
+        timestamp: generateTimestamp(),
+        type: 'update_child',
+        childId,
+        ...updates,
+      }
+      await applyAndPersist(entry)
+    },
+    [applyAndPersist],
+  )
 
-  const deleteChild = useCallback(async (childId: string) => {
-    const entry: DeleteChildEntry = {
-      timestamp: generateTimestamp(),
-      type: 'delete_child',
-      childId,
-    }
-    await applyAndPersist(entry)
-  }, [applyAndPersist])
+  const deleteChild = useCallback(
+    async (childId: string) => {
+      const entry: DeleteChildEntry = {
+        timestamp: generateTimestamp(),
+        type: 'delete_child',
+        childId,
+      }
+      await applyAndPersist(entry)
+    },
+    [applyAndPersist],
+  )
 
   // ---- Word Book Operations ----
 
-  const createWordBook = useCallback(async (name: string, characters: string[] = []): Promise<string> => {
-    const wordBookId = `wb_${generateTimestamp()}`
-    const entry: CreateWordBookEntry = {
-      timestamp: generateTimestamp(),
-      type: 'create_wordbook',
-      wordBookId,
-      name,
-      characters,
-    }
-    await applyAndPersist(entry)
-    return wordBookId
-  }, [applyAndPersist])
+  const createWordBook = useCallback(
+    async (name: string, characters: string[] = []): Promise<string> => {
+      const wordBookId = `wb_${generateTimestamp()}`
+      const entry: CreateWordBookEntry = {
+        timestamp: generateTimestamp(),
+        type: 'create_wordbook',
+        wordBookId,
+        name,
+        characters,
+      }
+      await applyAndPersist(entry)
+      return wordBookId
+    },
+    [applyAndPersist],
+  )
 
-  const updateWordBook = useCallback(async (wordBookId: string, name: string) => {
-    const entry: UpdateWordBookEntry = {
-      timestamp: generateTimestamp(),
-      type: 'update_wordbook',
-      wordBookId,
-      name,
-    }
-    await applyAndPersist(entry)
-  }, [applyAndPersist])
+  const updateWordBook = useCallback(
+    async (wordBookId: string, name: string) => {
+      const entry: UpdateWordBookEntry = {
+        timestamp: generateTimestamp(),
+        type: 'update_wordbook',
+        wordBookId,
+        name,
+      }
+      await applyAndPersist(entry)
+    },
+    [applyAndPersist],
+  )
 
-  const deleteWordBook = useCallback(async (wordBookId: string) => {
-    const entry: DeleteWordBookEntry = {
-      timestamp: generateTimestamp(),
-      type: 'delete_wordbook',
-      wordBookId,
-    }
-    await applyAndPersist(entry)
-  }, [applyAndPersist])
+  const deleteWordBook = useCallback(
+    async (wordBookId: string) => {
+      const entry: DeleteWordBookEntry = {
+        timestamp: generateTimestamp(),
+        type: 'delete_wordbook',
+        wordBookId,
+      }
+      await applyAndPersist(entry)
+    },
+    [applyAndPersist],
+  )
 
-  const addCharacter = useCallback(async (wordBookId: string, character: string) => {
-    // Validate BEFORE persisting so errors propagate to the caller.
-    const wb = wordBooksRef.current.find(w => w.id === wordBookId)
-    if (!wb) return
-    validateAddChar(character, wb)
+  const addCharacter = useCallback(
+    async (wordBookId: string, character: string) => {
+      // Validate BEFORE persisting so errors propagate to the caller.
+      const wb = wordBooksRef.current.find(w => w.id === wordBookId)
+      if (!wb) return
+      validateAddChar(character, wb)
 
-    const entry: AddCharEntry = {
-      timestamp: generateTimestamp(),
-      type: 'add_char',
-      wordBookId,
-      character,
-      index: wb.characters.length,
-    }
+      const entry: AddCharEntry = {
+        timestamp: generateTimestamp(),
+        type: 'add_char',
+        wordBookId,
+        character,
+        index: wb.characters.length,
+      }
 
-    // Eagerly update the ref so that sequential calls within the same
-    // microtask (e.g. a batch addCharacter loop) see each other's
-    // additions for validation and correct index assignment.
-    wordBooksRef.current = wordBooksRef.current.map(w =>
-      w.id === wordBookId
-        ? { ...w, characters: [...w.characters, character] }
-        : w
-    )
+      // Eagerly update the ref so that sequential calls within the same
+      // microtask (e.g. a batch addCharacter loop) see each other's
+      // additions for validation and correct index assignment.
+      wordBooksRef.current = wordBooksRef.current.map(w =>
+        w.id === wordBookId ? { ...w, characters: [...w.characters, character] } : w,
+      )
 
-    await applyAndPersist(entry)
-  }, [applyAndPersist])
+      await applyAndPersist(entry)
+    },
+    [applyAndPersist],
+  )
 
-  const removeCharacter = useCallback(async (wordBookId: string, character: string, index: number) => {
-    const entry: RemoveCharEntry = {
-      timestamp: generateTimestamp(),
-      type: 'remove_char',
-      wordBookId,
-      character,
-      index,
-    }
-    await applyAndPersist(entry)
-  }, [applyAndPersist])
+  const removeCharacter = useCallback(
+    async (wordBookId: string, character: string, index: number) => {
+      const entry: RemoveCharEntry = {
+        timestamp: generateTimestamp(),
+        type: 'remove_char',
+        wordBookId,
+        character,
+        index,
+      }
+      await applyAndPersist(entry)
+    },
+    [applyAndPersist],
+  )
 
-  const reorderCharacters = useCallback(async (wordBookId: string, characters: string[]) => {
-    const entry: ReorderCharsEntry = {
-      timestamp: generateTimestamp(),
-      type: 'reorder_chars',
-      wordBookId,
-      characters,
-    }
-    await applyAndPersist(entry)
-  }, [applyAndPersist])
+  const reorderCharacters = useCallback(
+    async (wordBookId: string, characters: string[]) => {
+      const entry: ReorderCharsEntry = {
+        timestamp: generateTimestamp(),
+        type: 'reorder_chars',
+        wordBookId,
+        characters,
+      }
+      await applyAndPersist(entry)
+    },
+    [applyAndPersist],
+  )
 
   // ---- Review Operations ----
 
-  const submitReview = useCallback(async (
-    childId: string,
-    character: string,
-    grade: 'a' | 'b' | 'c' | 'd',
-    round: number,
-    dayKey: string,
-  ) => {
-    const entry: ReviewEntry = {
-      timestamp: generateTimestamp(),
-      type: 'review',
-      childId,
-      character,
-      grade,
-      round,
-      dayKey,
-    }
-    // applyAndPersist handles snapshot update (round 1 only) + React state
-    await applyAndPersist(entry)
-  }, [applyAndPersist])
+  const submitReview = useCallback(
+    async (
+      childId: string,
+      character: string,
+      grade: 'a' | 'b' | 'c' | 'd',
+      round: number,
+      dayKey: string,
+    ) => {
+      const entry: ReviewEntry = {
+        timestamp: generateTimestamp(),
+        type: 'review',
+        childId,
+        character,
+        grade,
+        round,
+        dayKey,
+      }
+      // applyAndPersist handles snapshot update (round 1 only) + React state
+      await applyAndPersist(entry)
+    },
+    [applyAndPersist],
+  )
 
-  const submitPresentChars = useCallback(async (
-    childId: string,
-    characters: string[],
-    dayKey: string,
-  ) => {
-    const entry: PresentCharsEntry = {
-      timestamp: generateTimestamp(),
-      type: 'present_chars',
-      childId,
-      characters,
-      dayKey,
-    }
-    // applyEntry 返回 false，不触发快照更新，仅写日志
-    await applyAndPersist(entry)
-  }, [applyAndPersist])
+  const submitPresentChars = useCallback(
+    async (childId: string, characters: string[], dayKey: string) => {
+      const entry: PresentCharsEntry = {
+        timestamp: generateTimestamp(),
+        type: 'present_chars',
+        childId,
+        characters,
+        dayKey,
+      }
+      // applyEntry 返回 false，不触发快照更新，仅写日志
+      await applyAndPersist(entry)
+    },
+    [applyAndPersist],
+  )
 
   // ---- Settings Operations ----
 
-  const updateSettings = useCallback(async (settings: Partial<Settings>) => {
-    const entry: UpdateSettingsEntry = {
-      timestamp: generateTimestamp(),
-      type: 'update_settings',
-      settings,
-    }
-    await applyAndPersist(entry)
-  }, [applyAndPersist])
+  const updateSettings = useCallback(
+    async (settings: Partial<Settings>) => {
+      const entry: UpdateSettingsEntry = {
+        timestamp: generateTimestamp(),
+        type: 'update_settings',
+        settings,
+      }
+      await applyAndPersist(entry)
+    },
+    [applyAndPersist],
+  )
 
   // ---- Data Management ----
 
@@ -375,41 +412,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return result
   }, [])
 
-  const bulkImport = useCallback(async (
-    snapshot: { timestamp: number; state: AppState },
-    logs: AnyLogEntry[],
-  ): Promise<void> => {
-    // 导入前按内容去重：导出数据可能携带历史同步 bug 的重复条目，
-    // 不去重会导致同一复习被多次应用、SM-2 间隔指数爆炸
-    const uniqueLogs = dedupeLogEntries(logs)
+  const bulkImport = useCallback(
+    async (
+      snapshot: { timestamp: number; state: AppState },
+      logs: AnyLogEntry[],
+    ): Promise<void> => {
+      // 导入前按内容去重：导出数据可能携带历史同步 bug 的重复条目，
+      // 不去重会导致同一复习被多次应用、SM-2 间隔指数爆炸
+      const uniqueLogs = dedupeLogEntries(logs)
 
-    // 1. 只重放快照时间戳之后的日志（增量物化下快照是完整状态：
-    //    快照已包含其 timestamp 之前所有日志的效果，重放它们会把
-    //    同一复习重复应用——reps 翻倍、interval 指数放大（如导入
-    //    20260731 数据后'途'字 3 次被算成 6 次、interval 变成 595 天））。
-    //    快照之后的日志不可能已被快照包含，必须重放以补全新进度。
-    const newState = deepCloneState(snapshot.state)
-    const pendingLogs = uniqueLogs
-      .filter(e => e.timestamp > snapshot.timestamp)
-      .sort((a, b) => a.timestamp - b.timestamp)
-    for (const entry of pendingLogs) {
-      applyEntry(newState, entry)
-    }
+      // 1. 只重放快照时间戳之后的日志（增量物化下快照是完整状态：
+      //    快照已包含其 timestamp 之前所有日志的效果，重放它们会把
+      //    同一复习重复应用——reps 翻倍、interval 指数放大（如导入
+      //    20260731 数据后'途'字 3 次被算成 6 次、interval 变成 595 天））。
+      //    快照之后的日志不可能已被快照包含，必须重放以补全新进度。
+      const newState = deepCloneState(snapshot.state)
+      const pendingLogs = uniqueLogs
+        .filter(e => e.timestamp > snapshot.timestamp)
+        .sort((a, b) => a.timestamp - b.timestamp)
+      for (const entry of pendingLogs) {
+        applyEntry(newState, entry)
+      }
 
-    // 2. Save the merged snapshot as current
-    await saveCurrentSnapshot({ timestamp: Date.now(), state: newState })
+      // 2. Save the merged snapshot as current
+      await saveCurrentSnapshot({ timestamp: Date.now(), state: newState })
 
-    // 3. Append all log entries（去重后的全集：同步载体 + 审计线索）
-    if (uniqueLogs.length > 0) {
-      await appendLogs(uniqueLogs)
-    }
+      // 3. Append all log entries（去重后的全集：同步载体 + 审计线索）
+      if (uniqueLogs.length > 0) {
+        await appendLogs(uniqueLogs)
+      }
 
-    // 4. Update React state
-    setState(newState)
+      // 4. Update React state
+      setState(newState)
 
-    // 5. Trigger sync to push imported data to Drive
-    notifyDataChanged()
-  }, [])
+      // 5. Trigger sync to push imported data to Drive
+      notifyDataChanged()
+    },
+    [],
+  )
 
   return (
     <AppContext.Provider

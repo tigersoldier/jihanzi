@@ -91,7 +91,9 @@ export function TodaySession() {
             className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white"
           >
             {children.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
             ))}
           </select>
         </div>
@@ -115,9 +117,7 @@ export function TodaySession() {
           {/* ---- 会话前预览：今日任务分组 ---- */}
           {isReady && (todayNewChars.length > 0 || todayReviewChars.length > 0) && (
             <div className="mb-4 text-left border-t border-gray-100 pt-4">
-              {todayNewChars.length > 0 && (
-                <TaskPreviewList label="新学" chars={todayNewChars} />
-              )}
+              {todayNewChars.length > 0 && <TaskPreviewList label="新学" chars={todayNewChars} />}
               {todayReviewChars.length > 0 && (
                 <TaskPreviewList label="复习" chars={todayReviewChars} />
               )}
@@ -149,9 +149,7 @@ export function TodaySession() {
                   )}
                 </>
               ) : (
-                <p className="text-xs text-gray-400 text-center">
-                  明天没有需要复习或学习的字
-                </p>
+                <p className="text-xs text-gray-400 text-center">明天没有需要复习或学习的字</p>
               )}
             </div>
           )}
@@ -308,9 +306,11 @@ export default function ProgressPage() {
               ···
             </span>
           ) : (
-            <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full mt-1 ${
-              dayType === '学新日' ? 'bg-indigo-100 text-indigo-700' : 'bg-teal-100 text-teal-700'
-            }`}>
+            <span
+              className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full mt-1 ${
+                dayType === '学新日' ? 'bg-indigo-100 text-indigo-700' : 'bg-teal-100 text-teal-700'
+              }`}
+            >
               {dayType}
             </span>
           )}
@@ -322,7 +322,9 @@ export default function ProgressPage() {
             className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white"
           >
             {dayChildren.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
             ))}
           </select>
         )}
@@ -394,12 +396,12 @@ function DaySummaryRow({ day }: { day: DaySummary }) {
   return (
     <div>
       <div className="flex items-center gap-2 mb-1">
-        <span className="text-sm font-medium text-gray-700">
-          📅 {dateNum}日
-        </span>
-        <span className={`text-xs px-1.5 py-0.5 rounded-full ${
-          day.dayType === 'learn' ? 'bg-indigo-100 text-indigo-600' : 'bg-teal-100 text-teal-600'
-        }`}>
+        <span className="text-sm font-medium text-gray-700">📅 {dateNum}日</span>
+        <span
+          className={`text-xs px-1.5 py-0.5 rounded-full ${
+            day.dayType === 'learn' ? 'bg-indigo-100 text-indigo-600' : 'bg-teal-100 text-teal-600'
+          }`}
+        >
           {dayTypeLabel}
         </span>
         <span className="text-xs text-gray-400">{dayLabel}</span>
@@ -412,11 +414,16 @@ function DaySummaryRow({ day }: { day: DaySummary }) {
       )}
       {day.reviewChars.length > 0 && (
         <div className="text-xs text-gray-500 ml-1">
-          复习：{day.reviewChars.slice(0, 5).map(c => {
-            const g = c.grade
-            const sym = g === 'a' ? '✓' : g === 'b' ? '✓' : g === 'c' ? '△' : '✗'
-            return `${c.character}(${sym})`
-          }).join(' ')}{day.reviewChars.length > 5 ? ` … 共${day.reviewChars.length}字` : ''}
+          复习：
+          {day.reviewChars
+            .slice(0, 5)
+            .map(c => {
+              const g = c.grade
+              const sym = g === 'a' ? '✓' : g === 'b' ? '✓' : g === 'c' ? '△' : '✗'
+              return `${c.character}(${sym})`
+            })
+            .join(' ')}
+          {day.reviewChars.length > 5 ? ` … 共${day.reviewChars.length}字` : ''}
         </div>
       )}
       <div className="text-xs text-gray-400 mt-1 ml-1">
@@ -454,15 +461,25 @@ function DayDetailView({
       {/* Day header */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
         <p className="text-sm text-gray-500">{dayLabel}</p>
-        <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full mt-1 ${
-          daySummary.dayType === 'learn' ? 'bg-indigo-100 text-indigo-700' : 'bg-teal-100 text-teal-700'
-        }`}>
+        <span
+          className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full mt-1 ${
+            daySummary.dayType === 'learn'
+              ? 'bg-indigo-100 text-indigo-700'
+              : 'bg-teal-100 text-teal-700'
+          }`}
+        >
           {dayTypeLabel}
         </span>
         <div className="flex gap-4 mt-3 text-sm">
-          <span>总字数: <strong>{daySummary.totalCount}</strong></span>
-          <span>新学: <strong>{daySummary.newChars.length}</strong></span>
-          <span>复习: <strong>{daySummary.reviewChars.length}</strong></span>
+          <span>
+            总字数: <strong>{daySummary.totalCount}</strong>
+          </span>
+          <span>
+            新学: <strong>{daySummary.newChars.length}</strong>
+          </span>
+          <span>
+            复习: <strong>{daySummary.reviewChars.length}</strong>
+          </span>
           <span className="text-gray-400">
             a{daySummary.stats.a} b{daySummary.stats.b} c{daySummary.stats.c} d{daySummary.stats.d}
           </span>

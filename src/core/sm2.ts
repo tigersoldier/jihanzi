@@ -6,7 +6,13 @@
  */
 
 import type { Grade, SM2State } from './types'
-import { GRADE_TO_Q, SM2_INITIAL_EASE, SM2_INITIAL_INTERVAL, SM2_MIN_EASE, MAX_SANE_INTERVAL_DAYS } from './types'
+import {
+  GRADE_TO_Q,
+  SM2_INITIAL_EASE,
+  SM2_INITIAL_INTERVAL,
+  SM2_MIN_EASE,
+  MAX_SANE_INTERVAL_DAYS,
+} from './types'
 
 export { MAX_SANE_INTERVAL_DAYS }
 
@@ -78,10 +84,7 @@ export function updateSM2(
 
   // New interval = round(current interval × new ease)
   // 上限截断：防止重复应用导致的指数爆炸（见 MAX_SANE_INTERVAL_DAYS）
-  const newInterval = Math.min(
-    MAX_SANE_INTERVAL_DAYS,
-    Math.round(current.interval * newEase),
-  )
+  const newInterval = Math.min(MAX_SANE_INTERVAL_DAYS, Math.round(current.interval * newEase))
 
   // Calculate next review date
   const nextDate = new Date(reviewDate + 'T00:00:00')

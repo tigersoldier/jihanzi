@@ -13,7 +13,10 @@ import { describe, it, expect } from 'vitest'
 import { parseImportFiles } from './import'
 
 function snapshotFile(name: string, timestamp: number) {
-  return { name, text: JSON.stringify({ timestamp, state: { children: [], wordBooks: [], settings: {} } }) }
+  return {
+    name,
+    text: JSON.stringify({ timestamp, state: { children: [], wordBooks: [], settings: {} } }),
+  }
 }
 
 describe('parseImportFiles — 导入文件解析', () => {
@@ -21,7 +24,7 @@ describe('parseImportFiles — 导入文件解析', () => {
     const files = [
       snapshotFile('snapshot_2026-06-21.json', 1782000000000), // 最早的固定日期快照
       snapshotFile('snapshot_2026-07-01.json', 1783663380979), // 固定日期快照中最近的一个（07-09 23:03）
-      snapshotFile('snapshot_current.json', 1785564867246),    // 时间戳最新但不是固定日期快照
+      snapshotFile('snapshot_current.json', 1785564867246), // 时间戳最新但不是固定日期快照
     ]
     // 文件顺序无关
     const { snapshot } = await parseImportFiles([files[2], files[1], files[0]])
@@ -37,12 +40,31 @@ describe('parseImportFiles — 导入文件解析', () => {
 
   it('解析 jsonl 日志文件，跳过无效行', async () => {
     const { snapshot, logs } = await parseImportFiles([
-      { name: 'log_2026-07-21.jsonl', text: [
-        JSON.stringify({ timestamp: 1, type: 'review', childId: 'c', character: '一', grade: 'a', round: 1, dayKey: '2026-07-21' }),
-        'not-json',
-        '',
-        JSON.stringify({ timestamp: 2, type: 'review', childId: 'c', character: '二', grade: 'b', round: 1, dayKey: '2026-07-21' }),
-      ].join('\n') },
+      {
+        name: 'log_2026-07-21.jsonl',
+        text: [
+          JSON.stringify({
+            timestamp: 1,
+            type: 'review',
+            childId: 'c',
+            character: '一',
+            grade: 'a',
+            round: 1,
+            dayKey: '2026-07-21',
+          }),
+          'not-json',
+          '',
+          JSON.stringify({
+            timestamp: 2,
+            type: 'review',
+            childId: 'c',
+            character: '二',
+            grade: 'b',
+            round: 1,
+            dayKey: '2026-07-21',
+          }),
+        ].join('\n'),
+      },
     ])
     expect(snapshot).toBeNull()
     expect(logs).toHaveLength(2)
@@ -52,11 +74,24 @@ describe('parseImportFiles — 导入文件解析', () => {
 
   it('解析旧版整包备份格式（children/wordBooks + logs）', async () => {
     const { snapshot, logs } = await parseImportFiles([
-      { name: 'backup.json', text: JSON.stringify({
-        children: [{ id: 'c1', name: '小明' }],
-        wordBooks: [],
-        logs: [{ timestamp: 100, type: 'review', childId: 'c1', character: '一', grade: 'a', round: 1, dayKey: '2026-07-01' }],
-      }) },
+      {
+        name: 'backup.json',
+        text: JSON.stringify({
+          children: [{ id: 'c1', name: '小明' }],
+          wordBooks: [],
+          logs: [
+            {
+              timestamp: 100,
+              type: 'review',
+              childId: 'c1',
+              character: '一',
+              grade: 'a',
+              round: 1,
+              dayKey: '2026-07-01',
+            },
+          ],
+        }),
+      },
     ])
     expect(snapshot).not.toBeNull()
     expect(snapshot!.state.children[0].name).toBe('小明')

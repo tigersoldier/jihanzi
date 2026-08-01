@@ -3,7 +3,12 @@ import type { Grade, SM2State, ReviewEntry } from '../core/types'
 import { useApp } from '../state/AppContext'
 import { getReviewsForChildCharPaginated, getReviewsForChildInRange } from '../data/db'
 
-export { type Proficiency, getProficiency, PROFICIENCY_COLORS, PROFICIENCY_DOT } from '../core/proficiency'
+export {
+  type Proficiency,
+  getProficiency,
+  PROFICIENCY_COLORS,
+  PROFICIENCY_DOT,
+} from '../core/proficiency'
 
 // ============================================================
 // Character stats
@@ -61,7 +66,7 @@ function mergeTimeline(
 }
 
 export function useCharacterStats(childId: string, character: string): CharacterStats {
-  const { state, dataVersion } = useApp()
+  const { state } = useApp()
   const [gradeCounts, setGradeCounts] = useState({ a: 0, b: 0, c: 0, d: 0 })
   const [totalReviews, setTotalReviews] = useState(0)
   const [timeline, setTimeline] = useState<CharacterStats['timeline']>([])
@@ -78,7 +83,7 @@ export function useCharacterStats(childId: string, character: string): Character
 
   // sm2State 是对象引用，immutable state 下每次状态更新都会变。
   // 用 JSON 字符串做依赖，按值比较，值不变就不会触发 effect 重跑。
-  const sm2Key = useMemo(() => sm2State ? JSON.stringify(sm2State) : '', [sm2State])
+  const sm2Key = useMemo(() => (sm2State ? JSON.stringify(sm2State) : ''), [sm2State])
 
   // 首次加载：timeline 首页（分页，只读最多 51 条），counts 从首页数据统计
   useEffect(() => {
@@ -106,7 +111,9 @@ export function useCharacterStats(childId: string, character: string): Character
     }
 
     load()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [childId, character, sm2Key])
 
   // 加载更早的页面
@@ -177,9 +184,8 @@ export function useHistory(childId: string, yearMonth: string): MonthHistory {
     let cancelled = false
 
     const isCurrentMonth = yearMonth === currentYearMonth()
-    const sameParams = lastFetch.current
-      && lastFetch.current.ym === yearMonth
-      && lastFetch.current.child === childId
+    const sameParams =
+      lastFetch.current && lastFetch.current.ym === yearMonth && lastFetch.current.child === childId
 
     // For past months, skip the entire load when only dataVersion
     // changed — past-month review data is immutable.
@@ -255,7 +261,9 @@ export function useHistory(childId: string, yearMonth: string): MonthHistory {
     }
 
     load()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [childId, yearMonth, dataVersion, state])
 
   return { yearMonth, days }

@@ -50,22 +50,22 @@ describe('isUTF8Corrupted', () => {
   // ---- Invalid: lone surrogates ----
 
   it('lone high surrogate returns true', () => {
-    const corrupted = String.fromCharCode(0xD800)
+    const corrupted = String.fromCharCode(0xd800)
     expect(isUTF8Corrupted(corrupted)).toBe(true)
   })
 
   it('lone low surrogate returns true', () => {
-    const corrupted = String.fromCharCode(0xDC00)
+    const corrupted = String.fromCharCode(0xdc00)
     expect(isUTF8Corrupted(corrupted)).toBe(true)
   })
 
   it('high surrogate followed by non-surrogate returns true', () => {
-    const corrupted = String.fromCharCode(0xD800) + 'a'
+    const corrupted = String.fromCharCode(0xd800) + 'a'
     expect(isUTF8Corrupted(corrupted)).toBe(true)
   })
 
   it('string with embedded lone surrogate returns true', () => {
-    const corrupted = 'ab' + String.fromCharCode(0xD800) + 'cd'
+    const corrupted = 'ab' + String.fromCharCode(0xd800) + 'cd'
     expect(isUTF8Corrupted(corrupted)).toBe(true)
   })
 
@@ -87,7 +87,14 @@ describe('isUTF8Corrupted', () => {
 // repairCorruptedLogs — migration repair tests
 // ============================================================
 
-import db, { appendLog, repairCorruptedLogs, getReviewsForChild, getReviewsForChildChar, getReviewsForChildCharPaginated, dedupeLocalLogs } from './db'
+import db, {
+  appendLog,
+  repairCorruptedLogs,
+  getReviewsForChild,
+  getReviewsForChildChar,
+  getReviewsForChildCharPaginated,
+  dedupeLocalLogs,
+} from './db'
 
 function makeReviewEntry(overrides: Partial<AnyLogEntry> = {}): AnyLogEntry {
   return {
@@ -192,7 +199,6 @@ describe('repairCorruptedLogs', () => {
 // ============================================================
 
 import Dexie from 'dexie'
-import type { Snapshot } from '../core/types'
 
 describe('v2→v3 snapshot migration', () => {
   it('stamps type=current on existing v2 snapshot rows after upgrade', async () => {
@@ -207,7 +213,9 @@ describe('v2→v3 snapshot migration', () => {
     })
 
     const snapshotState = {
-      children: [{ id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} }],
+      children: [
+        { id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} },
+      ],
       wordBooks: [{ id: 'wb_1', name: '测试', characters: ['花'] }],
       settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
     }
@@ -227,17 +235,20 @@ describe('v2→v3 snapshot migration', () => {
       snapshot: '++id, timestamp',
       meta: 'key',
     })
-    v3db.version(3).stores({
-      logs: '++id, timestamp',
-      snapshot: '++id, timestamp, type',
-      meta: 'key',
-    }).upgrade(async tx => {
-      // The upgrade callback: stamp existing rows
-      const snapshots = tx.table('snapshot')
-      await snapshots.toCollection().modify(row => {
-        row.type = 'current'
+    v3db
+      .version(3)
+      .stores({
+        logs: '++id, timestamp',
+        snapshot: '++id, timestamp, type',
+        meta: 'key',
       })
-    })
+      .upgrade(async tx => {
+        // The upgrade callback: stamp existing rows
+        const snapshots = tx.table('snapshot')
+        await snapshots.toCollection().modify(row => {
+          row.type = 'current'
+        })
+      })
 
     await v3db.open()
 
@@ -288,9 +299,27 @@ describe('getReviewsForChildChar', () => {
   })
 
   it('returns review entries for a specific child and character', async () => {
-    const r1 = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1, grade: 'a', dayKey: '2026-07-01' })
-    const r2 = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 2, grade: 'b', dayKey: '2026-07-02' })
-    const r3 = makeReviewEntry({ childId: 'child_a', character: '山', timestamp: 3, grade: 'c', dayKey: '2026-07-01' })
+    const r1 = makeReviewEntry({
+      childId: 'child_a',
+      character: '花',
+      timestamp: 1,
+      grade: 'a',
+      dayKey: '2026-07-01',
+    })
+    const r2 = makeReviewEntry({
+      childId: 'child_a',
+      character: '花',
+      timestamp: 2,
+      grade: 'b',
+      dayKey: '2026-07-02',
+    })
+    const r3 = makeReviewEntry({
+      childId: 'child_a',
+      character: '山',
+      timestamp: 3,
+      grade: 'c',
+      dayKey: '2026-07-01',
+    })
     await db.logs.bulkAdd([r1, r2, r3])
 
     const result = await getReviewsForChildChar('child_a', '花')
@@ -308,11 +337,19 @@ describe('getReviewsForChildChar', () => {
   })
 
   it('filters out non-review entries with same child and character', async () => {
-    const reviewEntry = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1, grade: 'a' })
+    const reviewEntry = makeReviewEntry({
+      childId: 'child_a',
+      character: '花',
+      timestamp: 1,
+      grade: 'a',
+    })
     // 非 review 条目不应被返回
     const nonReview = {
-      timestamp: 2, type: 'create_child',
-      childId: 'child_a', name: '小明', wordBookId: 'wb_1',
+      timestamp: 2,
+      type: 'create_child',
+      childId: 'child_a',
+      name: '小明',
+      wordBookId: 'wb_1',
     } as AnyLogEntry
     await db.logs.bulkAdd([reviewEntry, nonReview])
 
@@ -335,10 +372,15 @@ describe('getReviewsForChildCharPaginated', () => {
     // 创建 55 条复习记录，分页大小 51（显示 50）
     const entries: AnyLogEntry[] = []
     for (let i = 0; i < 55; i++) {
-      entries.push(makeReviewEntry({
-        childId: 'child_a', character: '花', timestamp: i + 1, grade: 'a',
-        dayKey: `2026-07-${String(Math.floor(i / 5) + 1).padStart(2, '0')}`,
-      }))
+      entries.push(
+        makeReviewEntry({
+          childId: 'child_a',
+          character: '花',
+          timestamp: i + 1,
+          grade: 'a',
+          dayKey: `2026-07-${String(Math.floor(i / 5) + 1).padStart(2, '0')}`,
+        }),
+      )
     }
     await db.logs.bulkAdd(entries)
 
@@ -352,26 +394,36 @@ describe('getReviewsForChildCharPaginated', () => {
   it('returns hasMore=false when total < limit', async () => {
     const entries: AnyLogEntry[] = []
     for (let i = 0; i < 10; i++) {
-      entries.push(makeReviewEntry({
-        childId: 'child_a', character: '花', timestamp: i + 1, grade: 'a',
-        dayKey: `2026-07-0${i + 1}`,
-      }))
+      entries.push(
+        makeReviewEntry({
+          childId: 'child_a',
+          character: '花',
+          timestamp: i + 1,
+          grade: 'a',
+          dayKey: `2026-07-0${i + 1}`,
+        }),
+      )
     }
     await db.logs.bulkAdd(entries)
 
     const page = await getReviewsForChildCharPaginated('child_a', '花', 51)
     expect(page.entries).toHaveLength(10)
     expect(page.hasMore).toBe(false)
-    expect(page.cursor).toBeGreaterThan(0)  // 有 entry 就有 cursor
+    expect(page.cursor).toBeGreaterThan(0) // 有 entry 就有 cursor
   })
 
   it('uses cursor to fetch next page', async () => {
     const entries: AnyLogEntry[] = []
     for (let i = 0; i < 105; i++) {
-      entries.push(makeReviewEntry({
-        childId: 'child_a', character: '花', timestamp: i + 1, grade: 'a',
-        dayKey: `2026-07-${String(Math.floor(i / 5) + 1).padStart(2, '0')}`,
-      }))
+      entries.push(
+        makeReviewEntry({
+          childId: 'child_a',
+          character: '花',
+          timestamp: i + 1,
+          grade: 'a',
+          dayKey: `2026-07-${String(Math.floor(i / 5) + 1).padStart(2, '0')}`,
+        }),
+      )
     }
     await db.logs.bulkAdd(entries)
 
@@ -403,10 +455,15 @@ describe('getReviewsForChildCharPaginated', () => {
   it('returns empty when cursor has no more entries', async () => {
     const entries: AnyLogEntry[] = []
     for (let i = 0; i < 5; i++) {
-      entries.push(makeReviewEntry({
-        childId: 'child_a', character: '花', timestamp: i + 1, grade: 'a',
-        dayKey: '2026-07-01',
-      }))
+      entries.push(
+        makeReviewEntry({
+          childId: 'child_a',
+          character: '花',
+          timestamp: i + 1,
+          grade: 'a',
+          dayKey: '2026-07-01',
+        }),
+      )
     }
     await db.logs.bulkAdd(entries)
 

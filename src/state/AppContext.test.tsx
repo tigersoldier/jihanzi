@@ -54,21 +54,22 @@ vi.mock('../data/gapi', () => ({
 }))
 
 // Mock db with state accumulation so applyAndPersist can read the latest snapshot
-const { mockTransaction, mockGetLatestSnapshot, mockSaveCurrentSnapshot, mockAppendLogs } = vi.hoisted(() => {
-  let savedSnapshot: { timestamp: number; state: any } | null = null
+const { mockTransaction, mockGetLatestSnapshot, mockSaveCurrentSnapshot, mockAppendLogs } =
+  vi.hoisted(() => {
+    let savedSnapshot: { timestamp: number; state: any } | null = null
 
-  return {
-    mockTransaction: vi.fn((...args: unknown[]) => {
-      const fn = args[args.length - 1] as () => Promise<void>
-      return fn()
-    }),
-    mockGetLatestSnapshot: vi.fn(async () => savedSnapshot),
-    mockSaveCurrentSnapshot: vi.fn(async (snap: { timestamp: number; state: any }) => {
-      savedSnapshot = snap
-    }),
-    mockAppendLogs: vi.fn().mockResolvedValue(undefined),
-  }
-})
+    return {
+      mockTransaction: vi.fn((...args: unknown[]) => {
+        const fn = args[args.length - 1] as () => Promise<void>
+        return fn()
+      }),
+      mockGetLatestSnapshot: vi.fn(async () => savedSnapshot),
+      mockSaveCurrentSnapshot: vi.fn(async (snap: { timestamp: number; state: any }) => {
+        savedSnapshot = snap
+      }),
+      mockAppendLogs: vi.fn().mockResolvedValue(undefined),
+    }
+  })
 
 vi.mock('../data/db', () => ({
   default: {
@@ -90,9 +91,7 @@ vi.mock('../data/db', () => ({
 }))
 
 function wrapper({ children }: { children: ReactNode }) {
-  return React.createElement(AuthProvider, null,
-    React.createElement(AppProvider, null, children),
-  )
+  return React.createElement(AuthProvider, null, React.createElement(AppProvider, null, children))
 }
 
 describe('AppContext — sync triggers', () => {
@@ -107,14 +106,19 @@ describe('AppContext — sync triggers', () => {
     })
 
     // Wait for auth to resolve (demo mode sets isLoading=false immediately)
-    await vi.waitFor(() => {
-      // AppProvider's loadState will run after isLoggedIn becomes true
-    }, { timeout: 1000 })
+    await vi.waitFor(
+      () => {
+        // AppProvider's loadState will run after isLoggedIn becomes true
+      },
+      { timeout: 1000 },
+    )
 
     const snapshot = {
       timestamp: Date.now(),
       state: {
-        children: [{ id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} }],
+        children: [
+          { id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} },
+        ],
         wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '二', '三'] }],
         settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
       },
@@ -132,9 +136,12 @@ describe('AppContext — sync triggers', () => {
   it('exposes reloadState as a callable function', async () => {
     const { result } = renderHook(() => useApp(), { wrapper })
 
-    await vi.waitFor(() => {
-      // Wait for auth + initial load
-    }, { timeout: 1000 })
+    await vi.waitFor(
+      () => {
+        // Wait for auth + initial load
+      },
+      { timeout: 1000 },
+    )
 
     expect(typeof result.current.reloadState).toBe('function')
     // Calling reloadState should not throw
@@ -157,9 +164,12 @@ describe('AppContext — sync triggers', () => {
     })
 
     // Wait for AppProvider's async loadState to finish
-    await vi.waitFor(() => {
-      expect(result.current.app.loading).toBe(false)
-    }, { timeout: 2000 })
+    await vi.waitFor(
+      () => {
+        expect(result.current.app.loading).toBe(false)
+      },
+      { timeout: 2000 },
+    )
 
     // Create a wordbook with some characters
     let wbId = ''
@@ -208,9 +218,12 @@ describe('AppContext — sync triggers', () => {
       await result.current.auth.login()
     })
 
-    await vi.waitFor(() => {
-      expect(result.current.app.loading).toBe(false)
-    }, { timeout: 2000 })
+    await vi.waitFor(
+      () => {
+        expect(result.current.app.loading).toBe(false)
+      },
+      { timeout: 2000 },
+    )
 
     // Setup: create wordbook + child
     let wbId = ''
@@ -227,7 +240,7 @@ describe('AppContext — sync triggers', () => {
 
     // submitReview should reject because the transaction failed
     await expect(
-      result.current.app.submitReview(childId, '一', 'a', 1, '2026-07-01')
+      result.current.app.submitReview(childId, '一', 'a', 1, '2026-07-01'),
     ).rejects.toThrow('IndexedDB write failed')
 
     // State should NOT have the failed review
@@ -245,9 +258,12 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
 
   async function renderWithBulkImport() {
     const { result } = renderHook(() => useApp(), { wrapper })
-    await vi.waitFor(() => {
-      expect(result.current.bulkImport).toBeDefined()
-    }, { timeout: 1000 })
+    await vi.waitFor(
+      () => {
+        expect(result.current.bulkImport).toBeDefined()
+      },
+      { timeout: 1000 },
+    )
     return result
   }
 
@@ -259,20 +275,56 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
     const snapshot = {
       timestamp: 1785564867246,
       state: {
-        children: [{
-          id: 'child_1', name: '陈尚恩', wordBookId: 'wb_1', nextCharIndex: 2,
-          progress: {
-            '途': { ease: 2.8, interval: 22, repetitions: 3, nextReview: '2026-08-18', lastGrade: 'a', firstReviewDay: '2026-07-08' },
+        children: [
+          {
+            id: 'child_1',
+            name: '陈尚恩',
+            wordBookId: 'wb_1',
+            nextCharIndex: 2,
+            progress: {
+              途: {
+                ease: 2.8,
+                interval: 22,
+                repetitions: 3,
+                nextReview: '2026-08-18',
+                lastGrade: 'a',
+                firstReviewDay: '2026-07-08',
+              },
+            },
           },
-        }],
+        ],
         wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '途'] }],
         settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
       },
     }
     const logs = [
-      { timestamp: 1783566656274, type: 'review', childId: 'child_1', character: '途', grade: 'a', round: 1, dayKey: '2026-07-08' },
-      { timestamp: 1783616286291, type: 'review', childId: 'child_1', character: '途', grade: 'a', round: 1, dayKey: '2026-07-09' },
-      { timestamp: 1785205079007, type: 'review', childId: 'child_1', character: '途', grade: 'a', round: 1, dayKey: '2026-07-27' },
+      {
+        timestamp: 1783566656274,
+        type: 'review',
+        childId: 'child_1',
+        character: '途',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-07-08',
+      },
+      {
+        timestamp: 1783616286291,
+        type: 'review',
+        childId: 'child_1',
+        character: '途',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-07-09',
+      },
+      {
+        timestamp: 1785205079007,
+        type: 'review',
+        childId: 'child_1',
+        character: '途',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-07-27',
+      },
     ]
 
     await act(async () => {
@@ -281,7 +333,11 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
 
     // 快照是完整状态：这些日志已被快照物化，重放会重复计数（reps 3→6、interval 22→595）
     const state = mockSaveCurrentSnapshot.mock.calls.at(-1)[0].state
-    expect(state.children[0].progress['途']).toMatchObject({ ease: 2.8, interval: 22, repetitions: 3 })
+    expect(state.children[0].progress['途']).toMatchObject({
+      ease: 2.8,
+      interval: 22,
+      repetitions: 3,
+    })
     // nextCharIndex 不被重复推进
     expect(state.children[0].nextCharIndex).toBe(2)
     // 日志仍全部追加到 DB（用于同步/审计），且未去重丢失
@@ -295,19 +351,39 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
     const snapshot = {
       timestamp: 1000,
       state: {
-        children: [{
-          id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0,
-          progress: {
-            '一': { ease: 2.8, interval: 22, repetitions: 3, nextReview: '2026-08-18', lastGrade: 'a', firstReviewDay: '2026-07-01' },
+        children: [
+          {
+            id: 'child_1',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: 0,
+            progress: {
+              一: {
+                ease: 2.8,
+                interval: 22,
+                repetitions: 3,
+                nextReview: '2026-08-18',
+                lastGrade: 'a',
+                firstReviewDay: '2026-07-01',
+              },
+            },
           },
-        }],
+        ],
         wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '二'] }],
         settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
       },
     }
     // 快照时间戳之后的 review：快照不可能已包含它，必须重放
     const logs = [
-      { timestamp: 2000, type: 'review', childId: 'child_1', character: '一', grade: 'a', round: 1, dayKey: '2026-07-27' },
+      {
+        timestamp: 2000,
+        type: 'review',
+        childId: 'child_1',
+        character: '一',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-07-27',
+      },
     ]
 
     await act(async () => {
@@ -315,7 +391,11 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
     })
 
     const state = mockSaveCurrentSnapshot.mock.calls.at(-1)[0].state
-    expect(state.children[0].progress['一']).toMatchObject({ ease: 2.9, interval: 64, repetitions: 4 })
+    expect(state.children[0].progress['一']).toMatchObject({
+      ease: 2.9,
+      interval: 64,
+      repetitions: 4,
+    })
   })
 
   it('早期快照 + 后期日志：基座只含 07-09 前的 2 次学习，重放 07-27 日志后正确得到 3 次', async () => {
@@ -327,20 +407,56 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
     const snapshot = {
       timestamp: 1783663380979,
       state: {
-        children: [{
-          id: 'child_1', name: '陈尚恩', wordBookId: 'wb_1', nextCharIndex: 1,
-          progress: {
-            '途': { ease: 2.7, interval: 8, repetitions: 2, nextReview: '2026-07-17', lastGrade: 'a', firstReviewDay: '2026-07-08' },
+        children: [
+          {
+            id: 'child_1',
+            name: '陈尚恩',
+            wordBookId: 'wb_1',
+            nextCharIndex: 1,
+            progress: {
+              途: {
+                ease: 2.7,
+                interval: 8,
+                repetitions: 2,
+                nextReview: '2026-07-17',
+                lastGrade: 'a',
+                firstReviewDay: '2026-07-08',
+              },
+            },
           },
-        }],
+        ],
         wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '途'] }],
         settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
       },
     }
     const logs = [
-      { timestamp: 1783566656274, type: 'review', childId: 'child_1', character: '途', grade: 'a', round: 1, dayKey: '2026-07-08' },
-      { timestamp: 1783616286291, type: 'review', childId: 'child_1', character: '途', grade: 'a', round: 1, dayKey: '2026-07-09' },
-      { timestamp: 1785205079007, type: 'review', childId: 'child_1', character: '途', grade: 'a', round: 1, dayKey: '2026-07-27' },
+      {
+        timestamp: 1783566656274,
+        type: 'review',
+        childId: 'child_1',
+        character: '途',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-07-08',
+      },
+      {
+        timestamp: 1783616286291,
+        type: 'review',
+        childId: 'child_1',
+        character: '途',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-07-09',
+      },
+      {
+        timestamp: 1785205079007,
+        type: 'review',
+        childId: 'child_1',
+        character: '途',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-07-27',
+      },
     ]
 
     await act(async () => {
@@ -349,7 +465,11 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
 
     // 基座 2 次 + 重放 07-27 的 1 次 = 3 次；interval 8 → 22（非 595）
     const state = mockSaveCurrentSnapshot.mock.calls.at(-1)[0].state
-    expect(state.children[0].progress['途']).toMatchObject({ ease: 2.8, interval: 22, repetitions: 3 })
+    expect(state.children[0].progress['途']).toMatchObject({
+      ease: 2.8,
+      interval: 22,
+      repetitions: 3,
+    })
   })
 
   it('导入含重复条目的日志时先去重（DB 无重复、interval 不爆炸）', async () => {
@@ -358,14 +478,22 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
     const snapshot = {
       timestamp: 1000,
       state: {
-        children: [{ id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} }],
+        children: [
+          { id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} },
+        ],
         wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '二'] }],
         settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
       },
     }
     // 导出数据可能携带历史同步 bug 的重复条目（同一条 review ×14）
     const review = {
-      timestamp: 2000, type: 'review', childId: 'child_1', character: '一', grade: 'a', round: 1, dayKey: '2026-07-01',
+      timestamp: 2000,
+      type: 'review',
+      childId: 'child_1',
+      character: '一',
+      grade: 'a',
+      round: 1,
+      dayKey: '2026-07-01',
     }
     const logs = Array(14).fill(review)
 
@@ -375,7 +503,11 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
 
     // 去重后只应用一次：interval 3（而非爆炸值）
     const state = mockSaveCurrentSnapshot.mock.calls.at(-1)[0].state
-    expect(state.children[0].progress['一']).toMatchObject({ ease: 2.6, interval: 3, repetitions: 1 })
+    expect(state.children[0].progress['一']).toMatchObject({
+      ease: 2.6,
+      interval: 3,
+      repetitions: 1,
+    })
     // 写入 DB 的日志已去重：只追加 1 条
     const appended = mockAppendLogs.mock.calls.at(-1)[0]
     expect(appended.length).toBe(1)

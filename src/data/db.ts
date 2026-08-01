@@ -13,9 +13,9 @@ import { makeDiffKey } from '../utils/logKey'
 
 /** Database schema version and definition */
 class JihanziDB extends Dexie {
-  logs!: Table<AnyLogEntry, number>     // Auto-incrementing primary key
-  snapshot!: Table<Snapshot & { type: string; id?: number }, number>  // Snapshot table; type: 'current' | 'historical'
-  meta!: Table<{ key: string; value: unknown }, string>  // Key-value metadata
+  logs!: Table<LogRow, number> // Auto-incrementing primary key
+  snapshot!: Table<Snapshot & { type: string; id?: number }, number> // Snapshot table; type: 'current' | 'historical'
+  meta!: Table<{ key: string; value: unknown }, string> // Key-value metadata
 
   constructor() {
     super('jihanzi')
@@ -35,25 +35,33 @@ class JihanziDB extends Dexie {
 
     // v3: add [childId+character] index + snapshot type field for
     // incremental-materialization architecture
-    this.version(3).stores({
-      logs: '++id, timestamp, type, childId, wordBookId, character, dayKey, [childId+dayKey], [childId+character]',
-      snapshot: '++id, timestamp, type',
-      meta: 'key',
-    }).upgrade(async tx => {
-      // Stamp the 'type' field on existing v2 snapshot rows so that
-      // getLatestSnapshot() can find them via the new type index.
-      const count = await tx.table('snapshot').count()
-      if (count > 0) {
-        await tx.table('snapshot').toCollection().modify(row => {
-          row.type = 'current'
-        })
-      }
-      // Repair any UTF-8 corrupted log entries from the historical
-      // Drive encoding bug — iterate oldest-first, stop at first clean.
-      await repairCorruptedLogs()
-    })
+    this.version(3)
+      .stores({
+        logs: '++id, timestamp, type, childId, wordBookId, character, dayKey, [childId+dayKey], [childId+character]',
+        snapshot: '++id, timestamp, type',
+        meta: 'key',
+      })
+      .upgrade(async tx => {
+        // Stamp the 'type' field on existing v2 snapshot rows so that
+        // getLatestSnapshot() can find them via the new type index.
+        const count = await tx.table('snapshot').count()
+        if (count > 0) {
+          await tx
+            .table('snapshot')
+            .toCollection()
+            .modify(row => {
+              row.type = 'current'
+            })
+        }
+        // Repair any UTF-8 corrupted log entries from the historical
+        // Drive encoding bug — iterate oldest-first, stop at first clean.
+        await repairCorruptedLogs()
+      })
   }
 }
+
+/** IndexedDB 日志行：Dexie 自动附加的自增主键 id */
+type LogRow = AnyLogEntry & { id?: number }
 
 const db = new JihanziDB()
 
@@ -79,22 +87,22 @@ function filterReviews(entries: AnyLogEntry[]): ReviewEntry[] {
 export function isUTF8Corrupted(str: string): boolean {
   for (let i = 0; i < str.length; i++) {
     const code = str.charCodeAt(i)
-    if (code >= 0xD800 && code <= 0xDFFF) {
-      if (code >= 0xDC00) return true // Lone low surrogate
-      if (i + 1 >= str.length || str.charCodeAt(i + 1) < 0xDC00 || str.charCodeAt(i + 1) > 0xDFFF) {
+    if (code >= 0xd800 && code <= 0xdfff) {
+      if (code >= 0xdc00) return true // Lone low surrogate
+      if (i + 1 >= str.length || str.charCodeAt(i + 1) < 0xdc00 || str.charCodeAt(i + 1) > 0xdfff) {
         return true // Lone high surrogate
       }
       i++
       continue
     }
-    if (code >= 0x0080 && code <= 0x009F) return true
+    if (code >= 0x0080 && code <= 0x009f) return true
   }
   return false
 }
 
 /** Check if a log entry has a character field */
 function hasCharacter(entry: AnyLogEntry): entry is AnyLogEntry & { character: string } {
-  return 'character' in entry && typeof (entry as any).character === 'string'
+  return 'character' in entry && typeof entry.character === 'string'
 }
 
 /**
@@ -116,7 +124,7 @@ export async function repairCorruptedLogs(): Promise<number> {
     .until(() => foundClean)
     .each(entry => {
       if (hasCharacter(entry) && isUTF8Corrupted(entry.character)) {
-        const id = (entry as any).id
+        const id = entry.id
         if (typeof id === 'number') {
           toDelete.push(id)
         }
@@ -154,7 +162,7 @@ export async function dedupeLocalLogs(): Promise<number> {
   await db.logs.each(entry => {
     const key = makeDiffKey(entry)
     if (seen.has(key)) {
-      const id = (entry as any).id as number
+      const id = entry.id
       if (typeof id === 'number') toDelete.push(id)
     } else {
       seen.add(key)
@@ -193,13 +201,16 @@ export async function getLogsAfterPaginated(
     .toArray()
 
   if (afterId !== undefined) {
-    return results.filter(e => (e as any).id > afterId).slice(0, limit)
+    return results.filter(e => (e.id as number) > afterId).slice(0, limit)
   }
   return results.slice(0, limit)
 }
 
 /** Get the earliest and latest log timestamps in IndexedDB */
-export async function getLogTimestampRange(): Promise<{ earliest: number | null; latest: number | null }> {
+export async function getLogTimestampRange(): Promise<{
+  earliest: number | null
+  latest: number | null
+}> {
   const count = await db.logs.count()
   if (count === 0) return { earliest: null, latest: null }
 
@@ -227,11 +238,7 @@ export async function pruneOldestLogs(count: number): Promise<number> {
 
 /** Get reviews for a specific child — uses childId index, filterReviews 处理 type */
 export async function getReviewsForChild(childId: string): Promise<ReviewEntry[]> {
-  return db.logs
-    .where('childId')
-    .equals(childId)
-    .toArray()
-    .then(filterReviews)
+  return db.logs.where('childId').equals(childId).toArray().then(filterReviews)
 }
 
 /** Get all reviews for a specific child and character — uses [childId+character] index, filterReviews 处理 type */
@@ -239,10 +246,7 @@ export async function getReviewsForChildChar(
   childId: string,
   character: string,
 ): Promise<ReviewEntry[]> {
-  return db.logs
-    .where({ childId, character })
-    .toArray()
-    .then(filterReviews)
+  return db.logs.where({ childId, character }).toArray().then(filterReviews)
 }
 
 /**
@@ -262,20 +266,16 @@ export async function getReviewsForChildCharPaginated(
   limit: number = 51,
   afterId?: number,
 ): Promise<{ entries: ReviewEntry[]; hasMore: boolean; cursor: number | null }> {
-  let collection = db.logs
-    .where({ childId, character })
-    .filter(e => e.type === 'review')
+  let collection = db.logs.where({ childId, character }).filter(e => e.type === 'review')
 
   // 游标分页：reverse 下 id 从大到小，只取 id < afterId 的更早记录
   if (afterId !== undefined) {
-    collection = collection.filter(e => (e as any).id < afterId)
+    collection = collection.filter(e => (e.id as number) < afterId)
   }
 
-  const entries = await collection
-    .reverse()
-    .limit(limit)
-    .toArray() as (ReviewEntry & { id: number })[]
-
+  const entries = (await collection.reverse().limit(limit).toArray()) as (ReviewEntry & {
+    id: number
+  })[]
 
   const hasMore = entries.length === limit
   const result = entries.slice(0, limit - 1) as ReviewEntry[]
@@ -283,7 +283,8 @@ export async function getReviewsForChildCharPaginated(
   return {
     entries: result,
     hasMore,
-    cursor: result.length > 0 ? (result[result.length - 1] as any).id : null,
+    cursor:
+      result.length > 0 ? (result[result.length - 1] as ReviewEntry & { id: number }).id : null,
   }
 }
 
@@ -338,10 +339,7 @@ const SNAPSHOT_TYPE_HISTORICAL = 'historical'
 
 /** Get the current (latest) snapshot — the source of truth for app state */
 export async function getLatestSnapshot(): Promise<Snapshot | null> {
-  const result = await db.snapshot
-    .where('type')
-    .equals(SNAPSHOT_TYPE_CURRENT)
-    .first()
+  const result = await db.snapshot.where('type').equals(SNAPSHOT_TYPE_CURRENT).first()
   if (!result) return null
   // Strip the extra 'type' field before returning as Snapshot
   return { timestamp: result.timestamp, state: result.state }
@@ -349,10 +347,7 @@ export async function getLatestSnapshot(): Promise<Snapshot | null> {
 
 /** Get all historical snapshots, newest first */
 export async function getHistoricalSnapshots(): Promise<Snapshot[]> {
-  const rows = await db.snapshot
-    .where('type')
-    .equals(SNAPSHOT_TYPE_HISTORICAL)
-    .sortBy('timestamp')
+  const rows = await db.snapshot.where('type').equals(SNAPSHOT_TYPE_HISTORICAL).sortBy('timestamp')
   // Most recent first
   return rows.reverse().map(r => ({ timestamp: r.timestamp, state: r.state }))
 }

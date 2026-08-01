@@ -4,7 +4,11 @@ interface WordBookSwitcherProps {
   onSelect: (id: string) => void
 }
 
-export default function WordBookSwitcher({ wbList, selectedWBId, onSelect }: WordBookSwitcherProps) {
+export default function WordBookSwitcher({
+  wbList,
+  selectedWBId,
+  onSelect,
+}: WordBookSwitcherProps) {
   if (wbList.length <= 1) return null
 
   return (

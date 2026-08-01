@@ -16,18 +16,24 @@ describe('applyEntry — return value', () => {
     const state = makeState({
       children: [
         {
-          id: 'child_1', name: '小明', wordBookId: 'wb_1',
-          nextCharIndex: 0, progress: {},
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 0,
+          progress: {},
         },
       ],
-      wordBooks: [
-        { id: 'wb_1', name: '测试', characters: ['花'] },
-      ],
+      wordBooks: [{ id: 'wb_1', name: '测试', characters: ['花'] }],
     })
 
     const round2: ReviewEntry = {
-      timestamp: 1, type: 'review', childId: 'child_1',
-      character: '花', grade: 'c', round: 2, dayKey: '2026-07-01',
+      timestamp: 1,
+      type: 'review',
+      childId: 'child_1',
+      character: '花',
+      grade: 'c',
+      round: 2,
+      dayKey: '2026-07-01',
     }
     const changed = applyEntry(state, round2)
     expect(changed).toBe(false)
@@ -37,18 +43,24 @@ describe('applyEntry — return value', () => {
     const state = makeState({
       children: [
         {
-          id: 'child_1', name: '小明', wordBookId: 'wb_1',
-          nextCharIndex: 0, progress: {},
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 0,
+          progress: {},
         },
       ],
-      wordBooks: [
-        { id: 'wb_1', name: '测试', characters: ['花'] },
-      ],
+      wordBooks: [{ id: 'wb_1', name: '测试', characters: ['花'] }],
     })
 
     const round1: ReviewEntry = {
-      timestamp: 1, type: 'review', childId: 'child_1',
-      character: '花', grade: 'a', round: 1, dayKey: '2026-07-01',
+      timestamp: 1,
+      type: 'review',
+      childId: 'child_1',
+      character: '花',
+      grade: 'a',
+      round: 1,
+      dayKey: '2026-07-01',
     }
     const changed = applyEntry(state, round1)
     expect(changed).toBe(true)
@@ -61,21 +73,29 @@ describe('applyEntry — return value', () => {
     const state = makeState({
       children: [
         {
-          id: 'child_1', name: '小明', wordBookId: 'wb_1',
-          nextCharIndex: 0, progress: {},
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 0,
+          progress: {},
         },
       ],
     })
 
     const noop = {
-      timestamp: 1, type: 'update_child' as const,
-      childId: 'child_1', name: undefined, wordBookId: undefined,
+      timestamp: 1,
+      type: 'update_child' as const,
+      childId: 'child_1',
+      name: undefined,
+      wordBookId: undefined,
     }
     expect(applyEntry(state, noop)).toBe(false)
 
     const sameName = {
-      timestamp: 2, type: 'update_child' as const,
-      childId: 'child_1', name: '小明',
+      timestamp: 2,
+      type: 'update_child' as const,
+      childId: 'child_1',
+      name: '小明',
     }
     expect(applyEntry(state, sameName)).toBe(false)
   })
@@ -84,15 +104,20 @@ describe('applyEntry — return value', () => {
     const state = makeState({
       children: [
         {
-          id: 'child_1', name: '小明', wordBookId: 'wb_1',
-          nextCharIndex: 0, progress: {},
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 0,
+          progress: {},
         },
       ],
     })
 
     const change = {
-      timestamp: 1, type: 'update_child' as const,
-      childId: 'child_1', name: '大明',
+      timestamp: 1,
+      type: 'update_child' as const,
+      childId: 'child_1',
+      name: '大明',
     }
     expect(applyEntry(state, change)).toBe(true)
     expect(state.children[0].name).toBe('大明')
@@ -100,28 +125,28 @@ describe('applyEntry — return value', () => {
 
   it('returns false when reorder_chars has same order', () => {
     const state = makeState({
-      wordBooks: [
-        { id: 'wb_1', name: '测试', characters: ['花', '一', '二'] },
-      ],
+      wordBooks: [{ id: 'wb_1', name: '测试', characters: ['花', '一', '二'] }],
     })
 
     const noop = {
-      timestamp: 1, type: 'reorder_chars' as const,
-      wordBookId: 'wb_1', characters: ['花', '一', '二'],
+      timestamp: 1,
+      type: 'reorder_chars' as const,
+      wordBookId: 'wb_1',
+      characters: ['花', '一', '二'],
     }
     expect(applyEntry(state, noop)).toBe(false)
   })
 
   it('returns true when reorder_chars actually changes', () => {
     const state = makeState({
-      wordBooks: [
-        { id: 'wb_1', name: '测试', characters: ['花', '一', '二'] },
-      ],
+      wordBooks: [{ id: 'wb_1', name: '测试', characters: ['花', '一', '二'] }],
     })
 
     const change = {
-      timestamp: 1, type: 'reorder_chars' as const,
-      wordBookId: 'wb_1', characters: ['二', '一', '花'],
+      timestamp: 1,
+      type: 'reorder_chars' as const,
+      wordBookId: 'wb_1',
+      characters: ['二', '一', '花'],
     }
     expect(applyEntry(state, change)).toBe(true)
     expect(state.wordBooks[0].characters).toEqual(['二', '一', '花'])
@@ -131,7 +156,8 @@ describe('applyEntry — return value', () => {
     const state = makeState()
 
     const noop = {
-      timestamp: 1, type: 'update_settings' as const,
+      timestamp: 1,
+      type: 'update_settings' as const,
       settings: { dailyReviewLimit: 30 },
     }
     expect(applyEntry(state, noop)).toBe(false)
@@ -141,7 +167,8 @@ describe('applyEntry — return value', () => {
     const state = makeState()
 
     const change = {
-      timestamp: 1, type: 'update_settings' as const,
+      timestamp: 1,
+      type: 'update_settings' as const,
       settings: { dailyReviewLimit: 50 },
     }
     expect(applyEntry(state, change)).toBe(true)
@@ -154,8 +181,11 @@ describe('createSnapshot', () => {
     const state = makeState({
       children: [
         {
-          id: 'child_1', name: '小明', wordBookId: 'wb_1',
-          nextCharIndex: 3, progress: {},
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 3,
+          progress: {},
         },
       ],
     })
@@ -176,20 +206,26 @@ describe('replayLog', () => {
       state: makeState({
         children: [
           {
-            id: 'child_1', name: '小明', wordBookId: 'wb_1',
-            nextCharIndex: 0, progress: {},
+            id: 'child_1',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: 0,
+            progress: {},
           },
         ],
-        wordBooks: [
-          { id: 'wb_1', name: '测试', characters: ['花'] },
-        ],
+        wordBooks: [{ id: 'wb_1', name: '测试', characters: ['花'] }],
       }),
     }
 
     const logs: AnyLogEntry[] = [
       {
-        timestamp: 1, type: 'review', childId: 'child_1',
-        character: '花', grade: 'a', round: 1, dayKey: '2026-07-01',
+        timestamp: 1,
+        type: 'review',
+        childId: 'child_1',
+        character: '花',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-07-01',
       },
     ]
 
@@ -201,8 +237,11 @@ describe('replayLog', () => {
   it('handles null snapshot (fresh start)', () => {
     const logs: AnyLogEntry[] = [
       {
-        timestamp: 1, type: 'create_child',
-        childId: 'child_x', name: '大明', wordBookId: 'wb_x',
+        timestamp: 1,
+        type: 'create_child',
+        childId: 'child_x',
+        name: '大明',
+        wordBookId: 'wb_x',
       },
     ]
 

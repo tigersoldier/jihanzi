@@ -23,9 +23,11 @@ beforeEach(() => {
       drive: {
         files: {
           list: vi.fn().mockResolvedValue({ result: { files: [] } }),
-          create: vi.fn().mockImplementation(({ resource }) =>
-            Promise.resolve({ result: { id: `mock-id-${resource.name}` } }),
-          ),
+          create: vi
+            .fn()
+            .mockImplementation(({ resource }) =>
+              Promise.resolve({ result: { id: `mock-id-${resource.name}` } }),
+            ),
           get: vi.fn(),
         },
       },
@@ -37,8 +39,16 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-import { writeFile, pushLogs, readFile, logFileName, snapshotFileName, listFiles, pushSnapshot, repairLogFile } from './drive'
-import { makeDiffKey } from '../utils/logKey'
+import {
+  writeFile,
+  pushLogs,
+  readFile,
+  logFileName,
+  snapshotFileName,
+  listFiles,
+  pushSnapshot,
+  repairLogFile,
+} from './drive'
 
 describe('writeFile', () => {
   it('sends multipart body as a string (not FormData) so gapi can handle it', async () => {
@@ -202,9 +212,11 @@ describe('pushLogs', () => {
         drive: {
           files: {
             list: vi.fn().mockResolvedValue({ result: { files: [] } }),
-            create: vi.fn().mockImplementation(({ resource }) =>
-              Promise.resolve({ result: { id: `mock-id-${resource.name}` } }),
-            ),
+            create: vi
+              .fn()
+              .mockImplementation(({ resource }) =>
+                Promise.resolve({ result: { id: `mock-id-${resource.name}` } }),
+              ),
           },
         },
       },
@@ -215,7 +227,8 @@ describe('pushLogs', () => {
     // Existing log file with some content
     mockFetch.mockResolvedValue({
       ok: true,
-      arrayBuffer: () => Promise.resolve(new TextEncoder().encode('{"old":"entry"}\n').buffer.slice(0)),
+      arrayBuffer: () =>
+        Promise.resolve(new TextEncoder().encode('{"old":"entry"}\n').buffer.slice(0)),
     })
     mockGapiRequest.mockResolvedValue({ result: { id: 'existing-log-id' } })
 
@@ -298,9 +311,8 @@ describe('pushLogs', () => {
     const existingLines = [logEntries[0], logEntries[1]]
     mockFetch.mockResolvedValue({
       ok: true,
-      arrayBuffer: () => Promise.resolve(
-        new TextEncoder().encode(existingLines.join('\n') + '\n').buffer.slice(0),
-      ),
+      arrayBuffer: () =>
+        Promise.resolve(new TextEncoder().encode(existingLines.join('\n') + '\n').buffer.slice(0)),
     })
     mockGapiRequest.mockResolvedValue({ result: { id: 'existing-log-id' } })
 
@@ -328,9 +340,7 @@ describe('pushLogs', () => {
     const existingContent = logEntries.join('\n') + '\n'
     mockFetch.mockResolvedValue({
       ok: true,
-      arrayBuffer: () => Promise.resolve(
-        new TextEncoder().encode(existingContent).buffer.slice(0),
-      ),
+      arrayBuffer: () => Promise.resolve(new TextEncoder().encode(existingContent).buffer.slice(0)),
     })
     mockGapiRequest.mockResolvedValue({ result: { id: 'existing-log-id' } })
 
@@ -345,9 +355,7 @@ describe('pushLogs', () => {
     const existingContent = logEntries[0] + '\n' + logEntries[1] + '\n\n'
     mockFetch.mockResolvedValue({
       ok: true,
-      arrayBuffer: () => Promise.resolve(
-        new TextEncoder().encode(existingContent).buffer.slice(0),
-      ),
+      arrayBuffer: () => Promise.resolve(new TextEncoder().encode(existingContent).buffer.slice(0)),
     })
     mockGapiRequest.mockResolvedValue({ result: { id: 'existing-log-id' } })
 
@@ -428,9 +436,7 @@ describe('listFiles', () => {
   it('filters by modifiedTime when modifiedAfter is provided', async () => {
     const mockList = vi.fn().mockResolvedValue({
       result: {
-        files: [
-          { id: 'f1', name: 'snapshot_current.json', modifiedTime: '2026-07-05T12:00:00Z' },
-        ],
+        files: [{ id: 'f1', name: 'snapshot_current.json', modifiedTime: '2026-07-05T12:00:00Z' }],
       },
     })
     vi.stubGlobal('gapi', {
@@ -521,8 +527,10 @@ describe('pushLogs with interval filename', () => {
 })
 
 describe('repairLogFile', () => {
-  const lineA = '{"timestamp":1,"type":"review","childId":"c1","character":"花","grade":"a","round":1,"dayKey":"2026-01-01"}'
-  const lineB = '{"timestamp":2,"type":"review","childId":"c1","character":"山","grade":"b","round":1,"dayKey":"2026-01-01"}'
+  const lineA =
+    '{"timestamp":1,"type":"review","childId":"c1","character":"花","grade":"a","round":1,"dayKey":"2026-01-01"}'
+  const lineB =
+    '{"timestamp":2,"type":"review","childId":"c1","character":"山","grade":"b","round":1,"dayKey":"2026-01-01"}'
   const mockFetch = vi.fn()
   const mockGapiRequest = vi.fn()
 
@@ -537,9 +545,11 @@ describe('repairLogFile', () => {
         drive: {
           files: {
             list: vi.fn().mockResolvedValue({ result: { files: [] } }),
-            create: vi.fn().mockImplementation(({ resource }) =>
-              Promise.resolve({ result: { id: `mock-id-${resource.name}` } }),
-            ),
+            create: vi
+              .fn()
+              .mockImplementation(({ resource }) =>
+                Promise.resolve({ result: { id: `mock-id-${resource.name}` } }),
+              ),
           },
         },
       },
@@ -550,7 +560,12 @@ describe('repairLogFile', () => {
     // Drive 文件被历史同步 bug 重复追加：每条 ×3
     mockFetch.mockResolvedValue({
       ok: true,
-      arrayBuffer: () => Promise.resolve(new TextEncoder().encode([lineA, lineA, lineA, lineB, lineB].join('\n') + '\n').buffer.slice(0)),
+      arrayBuffer: () =>
+        Promise.resolve(
+          new TextEncoder()
+            .encode([lineA, lineA, lineA, lineB, lineB].join('\n') + '\n')
+            .buffer.slice(0),
+        ),
     })
     mockGapiRequest.mockResolvedValue({ result: { id: 'file-id' } })
 
@@ -573,7 +588,8 @@ describe('repairLogFile', () => {
   it('文件无重复时不写盘，返回 repaired=false', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      arrayBuffer: () => Promise.resolve(new TextEncoder().encode(lineA + '\n' + lineB + '\n').buffer.slice(0)),
+      arrayBuffer: () =>
+        Promise.resolve(new TextEncoder().encode(lineA + '\n' + lineB + '\n').buffer.slice(0)),
     })
 
     const result = await repairLogFile('folder-abc', 'log_2026-07-01.jsonl', 'file-id')
@@ -586,7 +602,10 @@ describe('repairLogFile', () => {
   it('解析失败的行保留但不参与去重', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      arrayBuffer: () => Promise.resolve(new TextEncoder().encode(lineA + '\n[broken-json\n' + lineA + '\n').buffer.slice(0)),
+      arrayBuffer: () =>
+        Promise.resolve(
+          new TextEncoder().encode(lineA + '\n[broken-json\n' + lineA + '\n').buffer.slice(0),
+        ),
     })
     mockGapiRequest.mockResolvedValue({ result: { id: 'file-id' } })
 

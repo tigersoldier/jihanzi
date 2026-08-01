@@ -6,7 +6,12 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { mockGetLogsAfter, mockGetLatestSnapshot, mockLastKnownRemoteTime, mockSetLastKnownRemoteTime } = vi.hoisted(() => ({
+const {
+  mockGetLogsAfter,
+  mockGetLatestSnapshot,
+  mockLastKnownRemoteTime,
+  mockSetLastKnownRemoteTime,
+} = vi.hoisted(() => ({
   mockGetLogsAfter: vi.fn(),
   mockGetLatestSnapshot: vi.fn(),
   mockLastKnownRemoteTime: vi.fn().mockResolvedValue(0),
@@ -38,12 +43,13 @@ const { mockHasValidToken } = vi.hoisted(() => ({
   mockHasValidToken: vi.fn().mockReturnValue(true),
 }))
 
-const { mockPullAllData, mockSaveCurrentSnapshot, mockAppendLogs, mockGetHistoricalSnapshots } = vi.hoisted(() => ({
-  mockPullAllData: vi.fn(),
-  mockSaveCurrentSnapshot: vi.fn(),
-  mockAppendLogs: vi.fn(),
-  mockGetHistoricalSnapshots: vi.fn().mockResolvedValue([]),
-}))
+const { mockPullAllData, mockSaveCurrentSnapshot, mockAppendLogs, mockGetHistoricalSnapshots } =
+  vi.hoisted(() => ({
+    mockPullAllData: vi.fn(),
+    mockSaveCurrentSnapshot: vi.fn(),
+    mockAppendLogs: vi.fn(),
+    mockGetHistoricalSnapshots: vi.fn().mockResolvedValue([]),
+  }))
 
 vi.mock('./drive', () => ({
   findOrCreateRootFolder: (...args: any[]) => mockFindOrCreateRootFolder(...args),
@@ -78,8 +84,24 @@ vi.mock('./db', () => ({
 }))
 
 const MOCK_LOG_ENTRIES = [
-  { timestamp: 1001, type: 'review', childId: 'child_a', character: '花', grade: 'a', round: 1, dayKey: '2026-01-01' },
-  { timestamp: 1002, type: 'review', childId: 'child_b', character: '山', grade: 'b', round: 1, dayKey: '2026-01-01' },
+  {
+    timestamp: 1001,
+    type: 'review',
+    childId: 'child_a',
+    character: '花',
+    grade: 'a',
+    round: 1,
+    dayKey: '2026-01-01',
+  },
+  {
+    timestamp: 1002,
+    type: 'review',
+    childId: 'child_b',
+    character: '山',
+    grade: 'b',
+    round: 1,
+    dayKey: '2026-01-01',
+  },
 ]
 
 const MOCK_SNAPSHOT = {
@@ -94,22 +116,58 @@ const MOCK_SNAPSHOT = {
   },
 }
 
-import { pushChanges, initialPull, syncOnce, diffEntries, isSnapshotPolluted, rebuildStateFromLogs, repairPollutedData } from './sync'
+import {
+  pushChanges,
+  initialPull,
+  syncOnce,
+  diffEntries,
+  isSnapshotPolluted,
+  rebuildStateFromLogs,
+  repairPollutedData,
+} from './sync'
 
 // ============================================================
 // diffEntries — content-based log dedup
 // ============================================================
 
 describe('diffEntries', () => {
-  const entryA = { timestamp: 1001, type: 'review', childId: 'c1', character: '花', grade: 'a', round: 1, dayKey: '2026-01-01' }
-  const entryB = { timestamp: 1002, type: 'review', childId: 'c1', character: '山', grade: 'b', round: 1, dayKey: '2026-01-01' }
-  const entryC = { timestamp: 1003, type: 'create_child', childId: 'c2', name: '大明', wordBookId: 'wb_1' }
-  const entryD = { timestamp: 1004, type: 'create_wordbook', wordBookId: 'wb_2', name: '新字本', characters: ['一', '二'] }
+  const entryA = {
+    timestamp: 1001,
+    type: 'review',
+    childId: 'c1',
+    character: '花',
+    grade: 'a',
+    round: 1,
+    dayKey: '2026-01-01',
+  }
+  const entryB = {
+    timestamp: 1002,
+    type: 'review',
+    childId: 'c1',
+    character: '山',
+    grade: 'b',
+    round: 1,
+    dayKey: '2026-01-01',
+  }
+  const entryC = {
+    timestamp: 1003,
+    type: 'create_child',
+    childId: 'c2',
+    name: '大明',
+    wordBookId: 'wb_1',
+  }
+  const entryD = {
+    timestamp: 1004,
+    type: 'create_wordbook',
+    wordBookId: 'wb_2',
+    name: '新字本',
+    characters: ['一', '二'],
+  }
 
   it('finds entries only in remote (remoteOnly)', () => {
     const { remoteOnly, localOnly } = diffEntries(
-      [entryA],           // local
-      [entryA, entryB],   // remote
+      [entryA], // local
+      [entryA, entryB], // remote
     )
     expect(remoteOnly).toEqual([entryB])
     expect(localOnly).toEqual([])
@@ -117,8 +175,8 @@ describe('diffEntries', () => {
 
   it('finds entries only in local (localOnly)', () => {
     const { remoteOnly, localOnly } = diffEntries(
-      [entryA, entryB],   // local
-      [entryA],           // remote
+      [entryA, entryB], // local
+      [entryA], // remote
     )
     expect(remoteOnly).toEqual([])
     expect(localOnly).toEqual([entryB])
@@ -126,18 +184,15 @@ describe('diffEntries', () => {
 
   it('finds both directions when partial overlap', () => {
     const { remoteOnly, localOnly } = diffEntries(
-      [entryA, entryB],           // local
-      [entryA, entryC, entryD],   // remote
+      [entryA, entryB], // local
+      [entryA, entryC, entryD], // remote
     )
     expect(remoteOnly).toEqual([entryC, entryD])
     expect(localOnly).toEqual([entryB])
   })
 
   it('returns empty when collections are identical', () => {
-    const { remoteOnly, localOnly } = diffEntries(
-      [entryA, entryB],
-      [entryA, entryB],
-    )
+    const { remoteOnly, localOnly } = diffEntries([entryA, entryB], [entryA, entryB])
     expect(remoteOnly).toEqual([])
     expect(localOnly).toEqual([])
   })
@@ -149,21 +204,34 @@ describe('diffEntries', () => {
   })
 
   it('all local entries are localOnly when remote is empty', () => {
-    const { remoteOnly, localOnly } = diffEntries(
-      [entryA, entryB, entryC],
-      [],
-    )
+    const { remoteOnly, localOnly } = diffEntries([entryA, entryB, entryC], [])
     expect(remoteOnly).toEqual([])
     expect(localOnly).toEqual([entryA, entryB, entryC])
   })
 
   it('treats review entries with same timestamp+childId but different characters as different', () => {
     // 同一个孩子在同一毫秒评了两个不同的字 → 应该是两条不同的日志
-    const reviewA = { timestamp: 1001, type: 'review', childId: 'c1', character: '花', grade: 'a', round: 1, dayKey: '2026-01-01' }
-    const reviewB = { timestamp: 1001, type: 'review', childId: 'c1', character: '山', grade: 'b', round: 1, dayKey: '2026-01-01' }
+    const reviewA = {
+      timestamp: 1001,
+      type: 'review',
+      childId: 'c1',
+      character: '花',
+      grade: 'a',
+      round: 1,
+      dayKey: '2026-01-01',
+    }
+    const reviewB = {
+      timestamp: 1001,
+      type: 'review',
+      childId: 'c1',
+      character: '山',
+      grade: 'b',
+      round: 1,
+      dayKey: '2026-01-01',
+    }
 
     const { remoteOnly, localOnly } = diffEntries(
-      [reviewA],        // 本地只有「花」
+      [reviewA], // 本地只有「花」
       [reviewA, reviewB], // 远程有「花」和「山」
     )
     // 「山」在本地不存在 → 应出现在 remoteOnly
@@ -173,12 +241,17 @@ describe('diffEntries', () => {
 
   it('treats review entries with same timestamp+childId+character as duplicates', () => {
     // 完全相同的复习记录 → 应去重
-    const review = { timestamp: 1001, type: 'review', childId: 'c1', character: '花', grade: 'a', round: 1, dayKey: '2026-01-01' }
+    const review = {
+      timestamp: 1001,
+      type: 'review',
+      childId: 'c1',
+      character: '花',
+      grade: 'a',
+      round: 1,
+      dayKey: '2026-01-01',
+    }
 
-    const { remoteOnly, localOnly } = diffEntries(
-      [review],
-      [review],
-    )
+    const { remoteOnly, localOnly } = diffEntries([review], [review])
     expect(remoteOnly).toEqual([])
     expect(localOnly).toEqual([])
   })
@@ -233,8 +306,9 @@ describe('pushChanges', () => {
   it('pushes snapshot to snapshot_current.json', async () => {
     await pushChanges(MOCK_LOG_ENTRIES, MOCK_SNAPSHOT as any)
 
-    const findFileCalls = mockFindFile.mock.calls
-      .filter((c: any[]) => c[1] === 'snapshot_current.json')
+    const findFileCalls = mockFindFile.mock.calls.filter(
+      (c: any[]) => c[1] === 'snapshot_current.json',
+    )
     expect(findFileCalls.length).toBeGreaterThanOrEqual(2)
   })
 
@@ -257,8 +331,9 @@ describe('pushChanges', () => {
 
     await pushChanges(MOCK_LOG_ENTRIES, MOCK_SNAPSHOT as any)
 
-    const histPushCalls = mockPushSnapshot.mock.calls
-      .filter((c: any[]) => c[3] === 'snapshot_2026-06-21.json')
+    const histPushCalls = mockPushSnapshot.mock.calls.filter(
+      (c: any[]) => c[3] === 'snapshot_2026-06-21.json',
+    )
     expect(histPushCalls.length).toBeGreaterThanOrEqual(2)
   })
 
@@ -270,8 +345,9 @@ describe('pushChanges', () => {
 
     await pushChanges(MOCK_LOG_ENTRIES, MOCK_SNAPSHOT as any)
 
-    const histPushCalls = mockPushSnapshot.mock.calls
-      .filter((c: any[]) => c[3] === 'snapshot_2026-06-21.json')
+    const histPushCalls = mockPushSnapshot.mock.calls.filter(
+      (c: any[]) => c[3] === 'snapshot_2026-06-21.json',
+    )
     expect(histPushCalls.length).toBe(0)
   })
 
@@ -298,9 +374,7 @@ describe('pushChanges', () => {
 const MOCK_REMOTE_SNAPSHOT = {
   timestamp: 2000,
   state: {
-    children: [
-      { id: 'child_x', name: '小明', wordBookId: 'wb_1', nextCharIndex: 5, progress: {} },
-    ],
+    children: [{ id: 'child_x', name: '小明', wordBookId: 'wb_1', nextCharIndex: 5, progress: {} }],
     wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '二', '三', '四', '五'] }],
     settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
   },
@@ -312,7 +386,7 @@ const MOCK_REMOTE_LOG_LINES = [
 ]
 
 const MOCK_REMOTE_CHILD_DATA = {
-  '小明': {
+  小明: {
     snapshot: JSON.stringify(MOCK_REMOTE_SNAPSHOT),
     logs: MOCK_REMOTE_LOG_LINES,
   },
@@ -386,7 +460,11 @@ describe('initialPull', () => {
     // Local snapshot at timestamp 2000 — remote entries before this are skipped
     mockGetLatestSnapshot.mockResolvedValue({
       timestamp: 2000,
-      state: { children: [], wordBooks: [], settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 } },
+      state: {
+        children: [],
+        wordBooks: [],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
     })
 
     await initialPull()
@@ -424,7 +502,7 @@ describe('initialPull', () => {
     mockPullAllData.mockResolvedValue({
       meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
       childData: {
-        '小明': {
+        小明: {
           snapshot: JSON.stringify(MOCK_REMOTE_SNAPSHOT),
           logs: remoteLogLinesWithReviews,
         },
@@ -435,9 +513,8 @@ describe('initialPull', () => {
 
     // 验证 saveCurrentSnapshot 被调用时，state 包含物化后的 progress
     expect(mockSaveCurrentSnapshot).toHaveBeenCalled()
-    const savedSnapshot = mockSaveCurrentSnapshot.mock.calls[
-      mockSaveCurrentSnapshot.mock.calls.length - 1
-    ][0]
+    const savedSnapshot =
+      mockSaveCurrentSnapshot.mock.calls[mockSaveCurrentSnapshot.mock.calls.length - 1][0]
     const savedChild = savedSnapshot.state.children[0]
     expect(savedChild.progress['一']).toBeDefined()
     expect(savedChild.progress['一'].lastGrade).toBe('a')
@@ -456,16 +533,28 @@ describe('initialPull', () => {
     mockPullAllData.mockResolvedValue({
       meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
       childData: {
-        '小明': {
+        小明: {
           snapshot: JSON.stringify({
             timestamp: 1785564867246,
             state: {
-              children: [{
-                id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 2,
-                progress: {
-                  '途': { ease: 2.8, interval: 22, repetitions: 3, nextReview: '2026-08-18', lastGrade: 'a', firstReviewDay: '2026-07-08' },
+              children: [
+                {
+                  id: 'child_1',
+                  name: '小明',
+                  wordBookId: 'wb_1',
+                  nextCharIndex: 2,
+                  progress: {
+                    途: {
+                      ease: 2.8,
+                      interval: 22,
+                      repetitions: 3,
+                      nextReview: '2026-08-18',
+                      lastGrade: 'a',
+                      firstReviewDay: '2026-07-08',
+                    },
+                  },
                 },
-              }],
+              ],
               wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '途'] }],
               settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
             },
@@ -496,10 +585,27 @@ describe('initialPull', () => {
         children: [
           // 本地已学了「一」和「二」；「三」尚未学
           {
-            id: 'child_x', name: '小明', wordBookId: 'wb_1', nextCharIndex: 2,
+            id: 'child_x',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: 2,
             progress: {
-              '一': { ease: 2.5, interval: 1, repetitions: 1, nextReview: '2026-07-02', lastGrade: 'a', firstReviewDay: '2026-07-01' },
-              '二': { ease: 2.5, interval: 1, repetitions: 1, nextReview: '2026-07-02', lastGrade: 'b', firstReviewDay: '2026-07-01' },
+              一: {
+                ease: 2.5,
+                interval: 1,
+                repetitions: 1,
+                nextReview: '2026-07-02',
+                lastGrade: 'a',
+                firstReviewDay: '2026-07-01',
+              },
+              二: {
+                ease: 2.5,
+                interval: 1,
+                repetitions: 1,
+                nextReview: '2026-07-02',
+                lastGrade: 'b',
+                firstReviewDay: '2026-07-01',
+              },
             },
           },
         ],
@@ -516,7 +622,7 @@ describe('initialPull', () => {
     mockPullAllData.mockResolvedValue({
       meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
       childData: {
-        '小明': {
+        小明: {
           snapshot: null, // 远程 snapshot 可能不存在或更旧
           logs: remoteLogLinesWithNewReview,
         },
@@ -527,9 +633,8 @@ describe('initialPull', () => {
 
     // 验证 saveCurrentSnapshot 被调用来物化远程复习数据
     expect(mockSaveCurrentSnapshot).toHaveBeenCalled()
-    const savedSnapshot = mockSaveCurrentSnapshot.mock.calls[
-      mockSaveCurrentSnapshot.mock.calls.length - 1
-    ][0]
+    const savedSnapshot =
+      mockSaveCurrentSnapshot.mock.calls[mockSaveCurrentSnapshot.mock.calls.length - 1][0]
     const savedChild = savedSnapshot.state.children[0]
     // 原有的 progress 保留
     expect(savedChild.progress['一']).toBeDefined()
@@ -548,9 +653,19 @@ describe('initialPull', () => {
       state: {
         children: [
           {
-            id: 'child_y', name: '小红', wordBookId: 'wb_2', nextCharIndex: 3,
+            id: 'child_y',
+            name: '小红',
+            wordBookId: 'wb_2',
+            nextCharIndex: 3,
             progress: {
-              '山': { ease: 2.5, interval: 3, repetitions: 3, nextReview: '2026-07-04', lastGrade: 'a', firstReviewDay: '2026-07-01' },
+              山: {
+                ease: 2.5,
+                interval: 3,
+                repetitions: 3,
+                nextReview: '2026-07-04',
+                lastGrade: 'a',
+                firstReviewDay: '2026-07-01',
+              },
             },
           },
         ],
@@ -563,7 +678,7 @@ describe('initialPull', () => {
     mockPullAllData.mockResolvedValue({
       meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
       childData: {
-        '小明': {
+        小明: {
           snapshot: JSON.stringify(MOCK_REMOTE_SNAPSHOT),
           logs: MOCK_REMOTE_LOG_LINES,
         },
@@ -641,7 +756,7 @@ describe('initialPull', () => {
     mockPullAllData.mockResolvedValue({
       meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
       childData: {
-        '小明': {
+        小明: {
           snapshot: JSON.stringify(MOCK_REMOTE_SNAPSHOT),
           logs: dupLogLines,
         },
@@ -668,7 +783,7 @@ describe('initialPull', () => {
     mockPullAllData.mockResolvedValue({
       meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
       childData: {
-        '小明': {
+        小明: {
           snapshot: JSON.stringify({ ...MOCK_REMOTE_SNAPSHOT, timestamp: 6000 }),
           logs: wideRangeLogLines,
         },
@@ -695,10 +810,10 @@ describe('initialPull', () => {
     mockPullAllData.mockResolvedValue({
       meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
       childData: {
-        '小明': {
-          snapshot: null,    // 快照文件不在过滤范围内
+        小明: {
+          snapshot: null, // 快照文件不在过滤范围内
           historicalSnapshots: [],
-          logs: [],          // 日志文件不在过滤范围内
+          logs: [], // 日志文件不在过滤范围内
         },
       },
     })
@@ -734,7 +849,7 @@ describe('syncOnce', () => {
     mockPullAllData.mockResolvedValue({
       meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
       childData: {
-        '小明': { snapshot: null, historicalSnapshots: [], logs: [] },
+        小明: { snapshot: null, historicalSnapshots: [], logs: [] },
       },
     })
     mockFindOrCreateRootFolder.mockResolvedValue('root-id')
@@ -780,7 +895,14 @@ describe('isSnapshotPolluted', () => {
         wordBookId: 'wb_1',
         nextCharIndex: 2,
         progress: {
-          '花': { ease: 2.6, interval: 3, repetitions: 1, nextReview: '2026-07-04', lastGrade: 'a', firstReviewDay: '2026-07-01' },
+          花: {
+            ease: 2.6,
+            interval: 3,
+            repetitions: 1,
+            nextReview: '2026-07-04',
+            lastGrade: 'a',
+            firstReviewDay: '2026-07-01',
+          },
         },
       },
     ],
@@ -831,7 +953,14 @@ describe('rebuildStateFromLogs', () => {
         // 污染的 nextCharIndex 和 progress
         nextCharIndex: 100,
         progress: {
-          '花': { ease: 6.8, interval: 1.79e28, repetitions: 43, nextReview: 'NaN-NaN-NaN', lastGrade: 'a', firstReviewDay: '2026-05-30' },
+          花: {
+            ease: 6.8,
+            interval: 1.79e28,
+            repetitions: 43,
+            nextReview: 'NaN-NaN-NaN',
+            lastGrade: 'a',
+            firstReviewDay: '2026-05-30',
+          },
         },
       },
     ],
@@ -841,15 +970,24 @@ describe('rebuildStateFromLogs', () => {
 
   // 真实污染模式：同一条 review 被同步重复追加 14 次
   const reviewOnce = {
-    timestamp: 100, type: 'review', childId: 'child_a', character: '花', grade: 'a', round: 1, dayKey: '2026-07-01',
+    timestamp: 100,
+    type: 'review',
+    childId: 'child_a',
+    character: '花',
+    grade: 'a',
+    round: 1,
+    dayKey: '2026-07-01',
   }
   const reviewTwice = {
-    timestamp: 200, type: 'review', childId: 'child_a', character: '山', grade: 'b', round: 1, dayKey: '2026-07-01',
+    timestamp: 200,
+    type: 'review',
+    childId: 'child_a',
+    character: '山',
+    grade: 'b',
+    round: 1,
+    dayKey: '2026-07-01',
   }
-  const duplicatedLog = [
-    ...Array(14).fill(reviewOnce),
-    ...Array(14).fill(reviewTwice),
-  ]
+  const duplicatedLog = [...Array(14).fill(reviewOnce), ...Array(14).fill(reviewTwice)]
 
   it('重建后 interval/ease 恢复为去重日志的正确值，结构与 nextCharIndex 保留', () => {
     const rebuilt = rebuildStateFromLogs(pollutedState, duplicatedLog)
@@ -916,8 +1054,24 @@ describe('pushChanges dedup', () => {
   })
 
   it('不同 key 的条目全部保留', async () => {
-    const e1 = { timestamp: 1001, type: 'review', childId: 'child_a', character: '花', grade: 'a', round: 1, dayKey: '2026-01-01' }
-    const e2 = { timestamp: 1002, type: 'review', childId: 'child_a', character: '山', grade: 'b', round: 1, dayKey: '2026-01-01' }
+    const e1 = {
+      timestamp: 1001,
+      type: 'review',
+      childId: 'child_a',
+      character: '花',
+      grade: 'a',
+      round: 1,
+      dayKey: '2026-01-01',
+    }
+    const e2 = {
+      timestamp: 1002,
+      type: 'review',
+      childId: 'child_a',
+      character: '山',
+      grade: 'b',
+      round: 1,
+      dayKey: '2026-01-01',
+    }
     await pushChanges([e1, e2, e1] as any, MOCK_SNAPSHOT as any)
 
     const logLines = mockPushLogs.mock.calls[0][1] as string[]
@@ -940,7 +1094,14 @@ describe('repairPollutedData', () => {
           wordBookId: 'wb_1',
           nextCharIndex: 1,
           progress: {
-            '花': { ease: 6.8, interval: 1.79e28, repetitions: 43, nextReview: 'NaN-NaN-NaN', lastGrade: 'a', firstReviewDay: '2026-05-30' },
+            花: {
+              ease: 6.8,
+              interval: 1.79e28,
+              repetitions: 43,
+              nextReview: 'NaN-NaN-NaN',
+              lastGrade: 'a',
+              firstReviewDay: '2026-05-30',
+            },
           },
         },
       ],
@@ -949,7 +1110,13 @@ describe('repairPollutedData', () => {
     },
   }
   const reviewEntry = {
-    timestamp: 100, type: 'review', childId: 'child_a', character: '花', grade: 'a', round: 1, dayKey: '2026-07-01',
+    timestamp: 100,
+    type: 'review',
+    childId: 'child_a',
+    character: '花',
+    grade: 'a',
+    round: 1,
+    dayKey: '2026-07-01',
   }
 
   beforeEach(() => {
@@ -965,7 +1132,10 @@ describe('repairPollutedData', () => {
   })
 
   it('污染快照被重建为去重日志的正确进度，并推送修复后的快照', async () => {
-    mockFindFile.mockResolvedValue({ id: 'snapshot-file-id', modifiedTime: '2026-07-02T00:00:00.000Z' })
+    mockFindFile.mockResolvedValue({
+      id: 'snapshot-file-id',
+      modifiedTime: '2026-07-02T00:00:00.000Z',
+    })
 
     const result = await repairPollutedData()
 
@@ -997,7 +1167,12 @@ describe('repairPollutedData', () => {
   it('数据干净时不做任何修改', async () => {
     const cleanSnapshot = JSON.parse(JSON.stringify(pollutedSnapshot))
     cleanSnapshot.state.children[0].progress['花'] = {
-      ease: 2.6, interval: 3, repetitions: 1, nextReview: '2026-07-04', lastGrade: 'a', firstReviewDay: '2026-07-01',
+      ease: 2.6,
+      interval: 3,
+      repetitions: 1,
+      nextReview: '2026-07-04',
+      lastGrade: 'a',
+      firstReviewDay: '2026-07-01',
     }
     mockGetLatestSnapshot.mockResolvedValue(cleanSnapshot)
     mockRepairLogFile.mockResolvedValue({ repaired: false, entries: [reviewEntry] })
@@ -1017,9 +1192,19 @@ describe('initialPull pollution guard', () => {
     state: {
       children: [
         {
-          id: 'child_a', name: '小明', wordBookId: 'wb_1', nextCharIndex: 1,
+          id: 'child_a',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 1,
           progress: {
-            '花': { ease: 6.8, interval: 1.79e28, repetitions: 43, nextReview: 'NaN-NaN-NaN', lastGrade: 'a', firstReviewDay: '2026-05-30' },
+            花: {
+              ease: 6.8,
+              interval: 1.79e28,
+              repetitions: 43,
+              nextReview: 'NaN-NaN-NaN',
+              lastGrade: 'a',
+              firstReviewDay: '2026-05-30',
+            },
           },
         },
       ],
@@ -1032,9 +1217,19 @@ describe('initialPull pollution guard', () => {
     state: {
       children: [
         {
-          id: 'child_a', name: '小明', wordBookId: 'wb_1', nextCharIndex: 1,
+          id: 'child_a',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 1,
           progress: {
-            '花': { ease: 2.6, interval: 3, repetitions: 1, nextReview: '2026-07-04', lastGrade: 'a', firstReviewDay: '2026-07-01' },
+            花: {
+              ease: 2.6,
+              interval: 3,
+              repetitions: 1,
+              nextReview: '2026-07-04',
+              lastGrade: 'a',
+              firstReviewDay: '2026-07-01',
+            },
           },
         },
       ],
@@ -1054,7 +1249,7 @@ describe('initialPull pollution guard', () => {
     mockPullAllData.mockResolvedValue({
       meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
       childData: {
-        '小明': {
+        小明: {
           snapshot: JSON.stringify(pollutedRemoteSnapshot),
           logs: [],
         },

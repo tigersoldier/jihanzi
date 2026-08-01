@@ -117,7 +117,7 @@ describe('replayLog', () => {
           wordBookId: 'wb_1',
           nextCharIndex: 1,
           progress: {
-            '花': {
+            花: {
               ease: 2.5,
               interval: 3,
               repetitions: 2,

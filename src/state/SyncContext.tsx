@@ -1,13 +1,6 @@
-import {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  type ReactNode,
-} from 'react'
+import { createContext, useContext, useState, useEffect, type ReactNode } from 'react'
 import type { SyncStatus } from '../data/sync'
 import {
-  getSyncStatus,
   onSyncStatusChange,
   startBackgroundSync,
   stopBackgroundSync,
@@ -46,20 +39,22 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     // Initial pull from Drive — if remote data was merged into
     // IndexedDB, tell AppContext to reload so the UI picks it up.
     // 先获取 lastKnownRemoteTime 做增量拉取（0 或 undefined → 全量）
-    getLastKnownRemoteTime().then(remoteTime =>
-      initialPull(remoteTime)
-    ).then((pullResult) => {
-      setLastSyncTime(Date.now())
-      if (pullResult.didMerge) {
-        reloadState()
-      }
-      // Ensure Drive has all local interval files (startup check only)
-      ensureIntervalFilesOnDrive().catch(() => {})
-      // 修复历史同步 bug 遗留的日志重复与快照污染（启动时执行一次）
-      repairPollutedData().then(r => {
-        if (r.snapshotRepaired) reloadState()
-      }).catch(() => {})
-    })
+    getLastKnownRemoteTime()
+      .then(remoteTime => initialPull(remoteTime))
+      .then(pullResult => {
+        setLastSyncTime(Date.now())
+        if (pullResult.didMerge) {
+          reloadState()
+        }
+        // Ensure Drive has all local interval files (startup check only)
+        ensureIntervalFilesOnDrive().catch(() => {})
+        // 修复历史同步 bug 遗留的日志重复与快照污染（启动时执行一次）
+        repairPollutedData()
+          .then(r => {
+            if (r.snapshotRepaired) reloadState()
+          })
+          .catch(() => {})
+      })
 
     // Start background sync
     startBackgroundSync(() => {

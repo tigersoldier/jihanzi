@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
-import type { TaskItem, Grade, ReviewEntry, AppState, DayType } from '../core/types'
+import type { TaskItem, Grade, ReviewEntry, DayType } from '../core/types'
 import { useApp } from '../state/AppContext'
 import { generateTodayTasks, getEffectiveDayType } from '../core/scheduler'
 import { todayKey as getTodayKey, addDays, getDayTypeLabel, formatDateLabel } from '../utils/date'
@@ -45,17 +45,19 @@ export function useDayType(): DayTypeInfo {
     }
 
     setDayTypeLoading(true)
-    getLastStudyDayForChild(selectedChildId).then(lastStudyDay => {
-      const child = state.children.find(c => c.id === selectedChildId)
-      if (!child) return
-      const dt = getEffectiveDayType(lastStudyDay, child.progress)
-      setEffectiveDayType(dt)
-      dayTypeResolvedRef.current = cacheKey
-      setDayTypeLoading(false)
-    }).catch(() => {
-      setEffectiveDayType(null)
-      setDayTypeLoading(false)
-    })
+    getLastStudyDayForChild(selectedChildId)
+      .then(lastStudyDay => {
+        const child = state.children.find(c => c.id === selectedChildId)
+        if (!child) return
+        const dt = getEffectiveDayType(lastStudyDay, child.progress)
+        setEffectiveDayType(dt)
+        dayTypeResolvedRef.current = cacheKey
+        setDayTypeLoading(false)
+      })
+      .catch(() => {
+        setEffectiveDayType(null)
+        setDayTypeLoading(false)
+      })
   }, [selectedChildId, todayKey, state.children])
 
   const dayType: DayType = effectiveDayType ?? 'learn'
@@ -167,8 +169,16 @@ interface UseTodayReturn {
 }
 
 export function useToday(): UseTodayReturn {
-  const { state, submitReview, submitPresentChars, selectedChildId, setSelectedChildId, dataVersion } = useApp()
-  const { dayType, dayTypeLabel, dateLabel, effectiveDayType, dayTypeLoading, todayKey } = useDayType()
+  const {
+    state,
+    submitReview,
+    submitPresentChars,
+    selectedChildId,
+    setSelectedChildId,
+    dataVersion,
+  } = useApp()
+  const { dayType, dayTypeLabel, dateLabel, effectiveDayType, dayTypeLoading, todayKey } =
+    useDayType()
   const tomorrowKey = addDays(todayKey, 1)
 
   const [phase, setPhase] = useState<SessionPhase>('idle')
@@ -253,7 +263,18 @@ export function useToday(): UseTodayReturn {
       sessionStats,
       queuedReviewTasks,
     })
-  }, [phase, taskIndex, round, sessionTasks, sessionReviews, sessionStats, queuedReviewTasks, selectedChildId, todayKey, state.children])
+  }, [
+    phase,
+    taskIndex,
+    round,
+    sessionTasks,
+    sessionReviews,
+    sessionStats,
+    queuedReviewTasks,
+    selectedChildId,
+    todayKey,
+    state.children,
+  ])
 
   // ---- Sync-driven doneToday check ----
 
@@ -347,9 +368,7 @@ export function useToday(): UseTodayReturn {
     if (!doneToday || !selectedChildId) return ''
     const child = state.children.find(c => c.id === selectedChildId)
     if (!child) return ''
-    const todayHadNewChars = Object.values(child.progress).some(
-      s => s.firstReviewDay === todayKey,
-    )
+    const todayHadNewChars = Object.values(child.progress).some(s => s.firstReviewDay === todayKey)
     return todayHadNewChars ? '纯复习日' : '学新日'
   }, [doneToday, selectedChildId, state.children, todayKey])
 
@@ -394,64 +413,70 @@ export function useToday(): UseTodayReturn {
   }, [queuedReviewTasks, sessionTasks, selectedChildId, todayKey, submitPresentChars])
 
   // 展示阶段导航：上一个 / 下一个（末尾字触发 handlePresentComplete）
-  const handlePresentNav = useCallback((direction: 'prev' | 'next') => {
-    // 仅在展示阶段有效，防止在其他阶段被误调用
-    if (phase !== 'presenting') return
-    if (direction === 'prev' && taskIndex > 0) {
-      setTaskIndex(prev => prev - 1)
-    } else if (direction === 'next') {
-      if (taskIndex + 1 < totalTasks) {
-        setTaskIndex(prev => prev + 1)
-      } else {
-        handlePresentComplete()
-      }
-    }
-  }, [taskIndex, totalTasks, handlePresentComplete, phase])
-
-  const handleRate = useCallback((grade: Grade) => {
-    if (!currentTask || !selectedChildId) return
-    // Guard against rapid double-clicks — advancingRef is true while
-    // a previous rating's task-advancement timeout is still pending.
-    if (advancingRef.current) return
-
-    // Show rating animation
-    setRatingAnimation(grade)
-    setTimeout(() => setRatingAnimation(null), 300)
-
-    // Update session stats
-    setSessionStats(prev => ({ ...prev, [grade]: prev[grade] + 1 }))
-
-    // Record review
-    const review: ReviewEntry = {
-      timestamp: Date.now(),
-      type: 'review',
-      childId: selectedChildId,
-      character: currentTask.character,
-      grade,
-      round,
-      dayKey: todayKey,
-    }
-    setSessionReviews(prev => [...prev, review])
-
-    // Submit to backend (only round 1 affects SM-2).
-    // Errors are handled inside submitReview via try/catch.
-    submitReview(selectedChildId, currentTask.character, grade, round, todayKey)
-
-    // Advance to next task or complete round.
-    // Guard with advancingRef so rapid clicks don't schedule multiple
-    // concurrent timeouts (which would skip tasks).
-    if (!advancingRef.current) {
-      advancingRef.current = true
-      setTimeout(() => {
-        advancingRef.current = false
+  const handlePresentNav = useCallback(
+    (direction: 'prev' | 'next') => {
+      // 仅在展示阶段有效，防止在其他阶段被误调用
+      if (phase !== 'presenting') return
+      if (direction === 'prev' && taskIndex > 0) {
+        setTaskIndex(prev => prev - 1)
+      } else if (direction === 'next') {
         if (taskIndex + 1 < totalTasks) {
           setTaskIndex(prev => prev + 1)
         } else {
-          setPhase('roundComplete')
+          handlePresentComplete()
         }
-      }, 350)
-    }
-  }, [currentTask, selectedChildId, round, taskIndex, totalTasks, todayKey, submitReview])
+      }
+    },
+    [taskIndex, totalTasks, handlePresentComplete, phase],
+  )
+
+  const handleRate = useCallback(
+    (grade: Grade) => {
+      if (!currentTask || !selectedChildId) return
+      // Guard against rapid double-clicks — advancingRef is true while
+      // a previous rating's task-advancement timeout is still pending.
+      if (advancingRef.current) return
+
+      // Show rating animation
+      setRatingAnimation(grade)
+      setTimeout(() => setRatingAnimation(null), 300)
+
+      // Update session stats
+      setSessionStats(prev => ({ ...prev, [grade]: prev[grade] + 1 }))
+
+      // Record review
+      const review: ReviewEntry = {
+        timestamp: Date.now(),
+        type: 'review',
+        childId: selectedChildId,
+        character: currentTask.character,
+        grade,
+        round,
+        dayKey: todayKey,
+      }
+      setSessionReviews(prev => [...prev, review])
+
+      // Submit to backend (only round 1 affects SM-2).
+      // Errors are handled inside submitReview via try/catch.
+      submitReview(selectedChildId, currentTask.character, grade, round, todayKey)
+
+      // Advance to next task or complete round.
+      // Guard with advancingRef so rapid clicks don't schedule multiple
+      // concurrent timeouts (which would skip tasks).
+      if (!advancingRef.current) {
+        advancingRef.current = true
+        setTimeout(() => {
+          advancingRef.current = false
+          if (taskIndex + 1 < totalTasks) {
+            setTaskIndex(prev => prev + 1)
+          } else {
+            setPhase('roundComplete')
+          }
+        }, 350)
+      }
+    },
+    [currentTask, selectedChildId, round, taskIndex, totalTasks, todayKey, submitReview],
+  )
 
   const handleContinueRound = useCallback(() => {
     // Guard against rapid double-clicks
@@ -488,7 +513,7 @@ export function useToday(): UseTodayReturn {
     setPhase('idle')
     setTaskIndex(0)
     setRound(1)
-    setSessionTasks(null)  // clear session snapshot
+    setSessionTasks(null) // clear session snapshot
     setQueuedReviewTasks([])
     setSessionReviews([])
     setSessionStats({ a: 0, b: 0, c: 0, d: 0 })

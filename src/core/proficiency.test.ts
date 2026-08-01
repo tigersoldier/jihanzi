@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getProficiency, type Proficiency } from './proficiency'
+import { getProficiency } from './proficiency'
 import type { SM2State } from './types'
 
 function sm2(overrides?: Partial<SM2State>): SM2State {

@@ -26,9 +26,7 @@ export default function SyncIndicator() {
 
   return (
     <span className={`text-xs ${config.color} flex items-center gap-1`}>
-      <span className={status === 'syncing' ? 'animate-spin inline-block' : ''}>
-        {config.icon}
-      </span>
+      <span className={status === 'syncing' ? 'animate-spin inline-block' : ''}>{config.icon}</span>
       <span className="hidden sm:inline">{config.label}</span>
     </span>
   )

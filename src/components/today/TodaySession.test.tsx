@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
-import React, { useState, type ReactNode } from 'react'
+import React, { type ReactNode } from 'react'
 import type { AppState } from '../../core/types'
 import { AppContext, type AppContextState } from '../../state/AppContext'
 
@@ -14,8 +14,12 @@ import { AppContext, type AppContextState } from '../../state/AppContext'
 const localStorageStore = new Map<string, string>()
 vi.stubGlobal('localStorage', {
   getItem: vi.fn((key: string) => localStorageStore.get(key) ?? null),
-  setItem: vi.fn((key: string, value: string) => { localStorageStore.set(key, value) }),
-  removeItem: vi.fn((key: string) => { localStorageStore.delete(key) }),
+  setItem: vi.fn((key: string, value: string) => {
+    localStorageStore.set(key, value)
+  }),
+  removeItem: vi.fn((key: string) => {
+    localStorageStore.delete(key)
+  }),
 })
 
 // Mock date to a known learn-day
@@ -73,13 +77,22 @@ describe('TodaySession', () => {
 
   it('renders idle state with task count and character preview for the selected child', async () => {
     const state = makeState({
-      children: [{
-        id: 'child_1', name: '小明', wordBookId: 'wb_1',
-        nextCharIndex: 0, progress: {},
-      }],
-      wordBooks: [{
-        id: 'wb_1', name: '测试', characters: ['一', '二', '三'],
-      }],
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 0,
+          progress: {},
+        },
+      ],
+      wordBooks: [
+        {
+          id: 'wb_1',
+          name: '测试',
+          characters: ['一', '二', '三'],
+        },
+      ],
     })
 
     render(<TodaySession />, { wrapper: wrapperWith(state, 'child_1') })
@@ -96,13 +109,22 @@ describe('TodaySession', () => {
 
   it('shows after-session preview with tomorrow tasks when day is done', async () => {
     const state = makeState({
-      children: [{
-        id: 'child_1', name: '小明', wordBookId: 'wb_1',
-        nextCharIndex: 0, progress: {},
-      }],
-      wordBooks: [{
-        id: 'wb_1', name: '测试', characters: ['一', '二', '三'],
-      }],
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 0,
+          progress: {},
+        },
+      ],
+      wordBooks: [
+        {
+          id: 'wb_1',
+          name: '测试',
+          characters: ['一', '二', '三'],
+        },
+      ],
     })
 
     // 预设 doneToday 标记

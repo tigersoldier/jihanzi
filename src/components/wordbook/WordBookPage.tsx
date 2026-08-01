@@ -20,7 +20,6 @@ export default function WordBookPage() {
     removeCharacter,
     reorderCharacters,
     createWB,
-    deleteWB,
   } = useWordBook()
 
   const [newCharInput, setNewCharInput] = useState('')
@@ -159,7 +158,9 @@ export default function WordBookPage() {
             className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white flex-1"
           >
             {state.children.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
             ))}
           </select>
         </div>
@@ -205,11 +206,13 @@ export default function WordBookPage() {
       {currentWB && (
         <div className="flex items-center justify-between">
           <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-            {([
-              ['all', '全部'],
-              ['learned', `已学 ${learnedCount}`],
-              ['unlearned', `未学 ${allChars.length - learnedCount}`],
-            ] as const).map(([key, label]) => (
+            {(
+              [
+                ['all', '全部'],
+                ['learned', `已学 ${learnedCount}`],
+                ['unlearned', `未学 ${allChars.length - learnedCount}`],
+              ] as const
+            ).map(([key, label]) => (
               <button
                 key={key}
                 onClick={() => setFilterMode(key)}
@@ -234,7 +237,7 @@ export default function WordBookPage() {
           onReorder={handleReorder}
           onRemove={handleRemove}
           proficiencyMap={proficiencyMap}
-          onCharClick={selectedChildId ? (char => setDetailChar(char)) : undefined}
+          onCharClick={selectedChildId ? char => setDetailChar(char) : undefined}
         />
       ) : (
         <div className="text-center py-12 text-gray-400 text-sm">

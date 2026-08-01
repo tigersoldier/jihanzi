@@ -9,14 +9,17 @@ export default function Celebration({ total, stats, onDone }: CelebrationProps) 
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
       {/* Checkmark */}
       <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-        <svg className="w-8 h-8 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg
+          className="w-8 h-8 text-green-500"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
         </svg>
       </div>
 
-      <h2 className="text-xl font-bold text-gray-800 mb-2">
-        今天完成 {total} 个字
-      </h2>
+      <h2 className="text-xl font-bold text-gray-800 mb-2">今天完成 {total} 个字</h2>
 
       {/* Stats breakdown */}
       <div className="grid grid-cols-2 gap-2 my-6">
@@ -36,7 +39,17 @@ export default function Celebration({ total, stats, onDone }: CelebrationProps) 
   )
 }
 
-function StatItem({ color, bg, label, count }: { color: string; bg: string; label: string; count: number }) {
+function StatItem({
+  color,
+  bg,
+  label,
+  count,
+}: {
+  color: string
+  bg: string
+  label: string
+  count: number
+}) {
   return (
     <div className={`${bg} rounded-xl p-3`}>
       <div className={`text-2xl font-bold ${color}`}>{count}</div>

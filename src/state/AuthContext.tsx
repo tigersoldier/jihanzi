@@ -1,4 +1,12 @@
-import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type ReactNode,
+} from 'react'
 import {
   initGoogleLibraries,
   initGapiClient,
@@ -65,7 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (restoreToken(REFRESH_THRESHOLD_MS)) {
           setIsLoggedIn(true)
           return getUserProfile()
-            .then((profile) => {
+            .then(profile => {
               setUser(profile)
               saveUserToStorage(profile)
             })
@@ -84,17 +92,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!storedUser) return
 
         // (won't show popup if user has Google session)
-        return trySilentLogin().then((silentToken) => {
+        return trySilentLogin().then(silentToken => {
           if (silentToken) {
             setIsLoggedIn(true)
-            return getUserProfile().then((profile) => {
+            return getUserProfile().then(profile => {
               setUser(profile)
               saveUserToStorage(profile)
             })
           }
         })
       })
-      .catch((err) => {
+      .catch(err => {
         // Auth restore failed — user will need to login manually
         setError(err instanceof Error ? err.message : String(err))
         console.error('Auth restore failed:', err)

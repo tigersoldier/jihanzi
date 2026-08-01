@@ -20,9 +20,7 @@ export default function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
             key={tab.key}
             onClick={() => onTabChange(tab.key)}
             className={`flex-1 flex flex-col items-center py-2 text-xs font-medium transition-colors ${
-              activeTab === tab.key
-                ? 'text-indigo-600'
-                : 'text-gray-400 hover:text-gray-600'
+              activeTab === tab.key ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'
             }`}
           >
             <span className="text-xl mb-0.5">{tab.icon}</span>

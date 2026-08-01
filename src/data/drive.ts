@@ -53,7 +53,7 @@ function handleDriveError(err: unknown): never {
   }
   // Check the body for scope-related errors (gapi wraps Drive errors in the message)
   if (typeof err === 'object' && err !== null) {
-    const body = String((err as any).body || '')
+    const body = String((err as { body?: string }).body || '')
     if (body.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT')) {
       clearTokenStorage()
     }
@@ -118,10 +118,7 @@ export async function findOrCreateRootFolder(): Promise<string> {
 /**
  * Find or create a subfolder within a parent folder.
  */
-export async function findOrCreateFolder(
-  parentId: string,
-  folderName: string,
-): Promise<string> {
+export async function findOrCreateFolder(parentId: string, folderName: string): Promise<string> {
   const token = await getAccessToken()
   setGapiToken(token)
 
@@ -214,10 +211,9 @@ export async function listFiles(
 export async function readFile(fileId: string): Promise<string> {
   const token = await getAccessToken()
 
-  const response = await fetch(
-    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  )
+  const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
 
   if (!response.ok) {
     throw new Error(`Failed to read file ${fileId}: HTTP ${response.status}`)
@@ -243,7 +239,7 @@ export async function writeFile(
 
   if (existingFileId) {
     // Update existing file — simple media upload
-    const response = await gapi.client.request({
+    await gapi.client.request({
       path: `/upload/drive/v3/files/${existingFileId}`,
       method: 'PATCH',
       params: { uploadType: 'media' },
@@ -293,11 +289,14 @@ export async function writeFile(
  */
 export async function pullAllData(modifiedAfter?: string): Promise<{
   meta: Record<string, unknown> | null
-  childData: Record<string, {
-    snapshot: string | null
-    historicalSnapshots: Array<{ key: string; data: string }>
-    logs: string[]
-  }>
+  childData: Record<
+    string,
+    {
+      snapshot: string | null
+      historicalSnapshots: Array<{ key: string; data: string }>
+      logs: string[]
+    }
+  >
 }> {
   try {
     const rootId = await findOrCreateRootFolder()
@@ -325,11 +324,14 @@ export async function pullAllData(modifiedAfter?: string): Promise<{
     })
 
     const folders = childrenResponse.result.files || []
-    const childData: Record<string, {
-      snapshot: string | null
-      historicalSnapshots: Array<{ key: string; data: string }>
-      logs: string[]
-    }> = {}
+    const childData: Record<
+      string,
+      {
+        snapshot: string | null
+        historicalSnapshots: Array<{ key: string; data: string }>
+        logs: string[]
+      }
+    > = {}
 
     for (const folder of folders) {
       const folderName = folder.name!
@@ -418,7 +420,13 @@ export async function pushSnapshot(
   existingFileId?: string | null,
   fileName?: string,
 ): Promise<string> {
-  return writeFile(childFolderId, fileName || SNAPSHOT_CURRENT_FILE_NAME, snapshotData, JSON_MIME, existingFileId)
+  return writeFile(
+    childFolderId,
+    fileName || SNAPSHOT_CURRENT_FILE_NAME,
+    snapshotData,
+    JSON_MIME,
+    existingFileId,
+  )
 }
 
 /**

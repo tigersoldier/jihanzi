@@ -11,7 +11,8 @@ interface CharacterDetailProps {
 }
 
 export default function CharacterDetail({ childId, character, onBack }: CharacterDetailProps) {
-  const { sm2State, totalReviews, gradeCounts, timeline, loading, hasMore, loadingMore, loadMore } = useCharacterStats(childId, character)
+  const { sm2State, totalReviews, gradeCounts, timeline, loading, hasMore, loadingMore, loadMore } =
+    useCharacterStats(childId, character)
   const { pinyin, words } = getCharInfo(character)
 
   // 滚动到底时触发 loadMore
@@ -21,7 +22,7 @@ export default function CharacterDetail({ childId, character, onBack }: Characte
     if (!sentinel || !hasMore) return
 
     const observer = new IntersectionObserver(
-      (entries) => {
+      entries => {
         if (entries[0].isIntersecting && hasMore && !loadingMore) {
           loadMore()
         }
@@ -46,9 +47,7 @@ export default function CharacterDetail({ childId, character, onBack }: Characte
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 text-center">
         <div className="text-7xl font-bold text-gray-800 mb-2">{character}</div>
         <div className="text-lg text-gray-500 mb-1">{pinyin}</div>
-        {words.length > 0 && (
-          <div className="text-sm text-gray-400">{words.join(' · ')}</div>
-        )}
+        {words.length > 0 && <div className="text-sm text-gray-400">{words.join(' · ')}</div>}
       </div>
 
       {/* Stats summary */}
@@ -59,7 +58,11 @@ export default function CharacterDetail({ childId, character, onBack }: Characte
             {Array.from({ length: 5 }).map((_, i) => (
               <div key={i}>
                 <div className="inline-block h-7 w-10 bg-gray-200 animate-pulse rounded mb-1" />
-                <div className="text-xs text-gray-400">{i === 0 ? '总次数' : `${['a','b','c','d'][i-1]} · ${['完全掌握','部分正确','需提示','遗忘'][i-1]}`}</div>
+                <div className="text-xs text-gray-400">
+                  {i === 0
+                    ? '总次数'
+                    : `${['a', 'b', 'c', 'd'][i - 1]} · ${['完全掌握', '部分正确', '需提示', '遗忘'][i - 1]}`}
+                </div>
               </div>
             ))}
           </div>
@@ -71,10 +74,10 @@ export default function CharacterDetail({ childId, character, onBack }: Characte
             </div>
             {(['a', 'b', 'c', 'd'] as const).map(g => (
               <div key={g}>
-                <div className={`text-2xl font-bold ${GRADE_COLORS[g]}`}>
-                  {gradeCounts[g]}
+                <div className={`text-2xl font-bold ${GRADE_COLORS[g]}`}>{gradeCounts[g]}</div>
+                <div className="text-xs text-gray-400">
+                  {g} · {GRADE_LABELS[g]}
                 </div>
-                <div className="text-xs text-gray-400">{g} · {GRADE_LABELS[g]}</div>
               </div>
             ))}
           </div>
@@ -130,7 +133,10 @@ export default function CharacterDetail({ childId, character, onBack }: Characte
         ) : (
           <div className="space-y-2">
             {timeline.map(({ dayKey, rounds }) => (
-              <div key={dayKey} className="flex items-start gap-3 py-2 border-b border-gray-50 last:border-b-0">
+              <div
+                key={dayKey}
+                className="flex items-start gap-3 py-2 border-b border-gray-50 last:border-b-0"
+              >
                 <div className="flex-shrink-0 min-w-0">
                   <div className="text-xs text-gray-500">{formatDateLabel(dayKey)}</div>
                 </div>

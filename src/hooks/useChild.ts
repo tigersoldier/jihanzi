@@ -6,7 +6,12 @@ interface UseChildReturn {
   selectedChildId: string | null
   setSelectedChildId: (id: string) => void
   childList: { id: string; name: string }[]
-  currentChild: { id: string; name: string; stats: ReturnType<typeof getChildStats>; wordBookName: string } | null
+  currentChild: {
+    id: string
+    name: string
+    stats: ReturnType<typeof getChildStats>
+    wordBookName: string
+  } | null
   hasPrevChild: boolean
   hasNextChild: boolean
   goToPrevChild: () => void
@@ -18,13 +23,13 @@ interface UseChildReturn {
 export function useChild(): UseChildReturn {
   const { state, createChild: createChildFn, deleteChild: deleteChildFn } = useApp()
 
-  const childList = useMemo(() =>
-    state.children.map(c => ({ id: c.id, name: c.name })),
-    [state.children]
+  const childList = useMemo(
+    () => state.children.map(c => ({ id: c.id, name: c.name })),
+    [state.children],
   )
 
   const [selectedChildId, setSelectedChildId] = useState<string | null>(
-    () => state.children[0]?.id || null
+    () => state.children[0]?.id || null,
   )
 
   const currentIndex = childList.findIndex(c => c.id === selectedChildId)

@@ -193,9 +193,10 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
   try {
     // 增量拉取：只读取 modifiedTime > lastKnownRemoteTime 的文件
     // lastKnownRemoteTime 为 0 或 undefined 时走全量拉取（首次同步/清除数据）
-    const modifiedAfter = lastKnownRemoteTime && lastKnownRemoteTime > 0
-      ? new Date(lastKnownRemoteTime).toISOString()
-      : undefined
+    const modifiedAfter =
+      lastKnownRemoteTime && lastKnownRemoteTime > 0
+        ? new Date(lastKnownRemoteTime).toISOString()
+        : undefined
     const { childData } = await pullAllData(modifiedAfter)
 
     // Parse remote snapshots and log entries from all child folders
@@ -219,7 +220,7 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
         for (const line of data.logs) {
           try {
             const parsed = JSON.parse(line)
-            delete parsed.id  // Strip Dexie auto-increment id
+            delete parsed.id // Strip Dexie auto-increment id
             remoteLogEntries.push(parsed as AnyLogEntry)
           } catch {
             console.warn('Failed to parse remote log line')
@@ -264,9 +265,8 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
       (min, e) => Math.min(min, e.timestamp),
       remoteSnapshot?.timestamp ?? Infinity,
     )
-    const candidateLowerBound = remoteTMin === Infinity
-      ? 0
-      : Math.max(0, remoteTMin - CLOCK_SKEW_BUFFER)
+    const candidateLowerBound =
+      remoteTMin === Infinity ? 0 : Math.max(0, remoteTMin - CLOCK_SKEW_BUFFER)
     const localCandidateLogs = await getLogsAfter(candidateLowerBound)
 
     const { remoteOnly } = diffEntries(localCandidateLogs, remoteLogEntries)
@@ -313,7 +313,7 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
 
     setSyncStatus('online')
     return {
-      didMerge: dedupedRemoteOnly.length > 0 || (bestSnapshot !== localSnapshot),
+      didMerge: dedupedRemoteOnly.length > 0 || bestSnapshot !== localSnapshot,
       driveIsEmpty: false,
       remoteSnapshot,
       remoteLogEntries,
@@ -333,18 +333,19 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
  * Push log entries + current snapshot to Drive.
  * Exported for direct use by syncOnce and for testing.
  */
-export async function pushChanges(
-  logEntries: AnyLogEntry[],
-  snapshot: Snapshot,
-): Promise<void> {
+export async function pushChanges(logEntries: AnyLogEntry[], snapshot: Snapshot): Promise<void> {
   const rootId = await findOrCreateRootFolder()
 
   // Push metadata
   const metaFile = await findFile(rootId, 'app_meta.json')
-  await pushMeta(rootId, {
-    lastKnownRemoteTime: Date.now(),
-    version: '0.1.0',
-  }, metaFile?.id)
+  await pushMeta(
+    rootId,
+    {
+      lastKnownRemoteTime: Date.now(),
+      version: '0.1.0',
+    },
+    metaFile?.id,
+  )
 
   const snapshotData = JSON.stringify(snapshot)
 
@@ -365,9 +366,7 @@ export async function pushChanges(
   }
 
   // Load historical snapshots for push
-  const historical = uniqueEntries.length > 0
-    ? await getHistoricalSnapshots()
-    : []
+  const historical = uniqueEntries.length > 0 ? await getHistoricalSnapshots() : []
 
   // ---- Push per-child data ----
   for (const child of snapshot.state.children) {
@@ -381,7 +380,7 @@ export async function pushChanges(
     for (const [intervalKey, entries] of logsByInterval) {
       const fileName = logFileName(intervalKey)
       const existing = await findFile(childFolderId, fileName)
-      const logLines = entries.map((l: any) => {
+      const logLines = entries.map((l: AnyLogEntry & { id?: number }) => {
         // 去掉 IndexedDB 自增 id → Drive 上不需要存储这个无用的本地 ID
         const { id: _id, ...rest } = l
         return JSON.stringify(rest)
@@ -395,12 +394,7 @@ export async function pushChanges(
       const histFileName = snapshotFileName(histKey)
       const existing = await findFile(childFolderId, histFileName)
       if (!existing) {
-        await pushSnapshot(
-          childFolderId,
-          JSON.stringify(histSnap),
-          null,
-          histFileName,
-        )
+        await pushSnapshot(childFolderId, JSON.stringify(histSnap), null, histFileName)
       }
     }
   }
@@ -615,7 +609,7 @@ export async function ensureIntervalFilesOnDrive(): Promise<void> {
       const lastEntry = batch[batch.length - 1]
       if (lastEntry.timestamp >= latest) break
       cursor = lastEntry.timestamp
-      afterId = (lastEntry as any).id as number
+      afterId = (lastEntry as AnyLogEntry & { id: number }).id
     }
 
     // 6. Push missing interval files
@@ -706,12 +700,15 @@ export async function repairPollutedData(): Promise<RepairResult> {
  */
 export function startBackgroundSync(onMerged?: () => void): void {
   if (syncInterval) return
-  syncInterval = setInterval(async () => {
-    if (navigator.onLine && hasValidToken()) {
-      const didMerge = await syncOnce()
-      if (didMerge) onMerged?.()
-    }
-  }, 5 * 60 * 1000)
+  syncInterval = setInterval(
+    async () => {
+      if (navigator.onLine && hasValidToken()) {
+        const didMerge = await syncOnce()
+        if (didMerge) onMerged?.()
+      }
+    },
+    5 * 60 * 1000,
+  )
 }
 
 /**

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useCallback, useRef } from 'react'
 import {
   DndContext,
   closestCenter,
@@ -29,7 +29,13 @@ interface CharacterListProps {
   onCharClick?: (char: string) => void
 }
 
-export default function CharacterList({ characters, onReorder, onRemove, proficiencyMap, onCharClick }: CharacterListProps) {
+export default function CharacterList({
+  characters,
+  onReorder,
+  onRemove,
+  proficiencyMap,
+  onCharClick,
+}: CharacterListProps) {
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 5 },
@@ -60,7 +66,10 @@ export default function CharacterList({ characters, onReorder, onRemove, profici
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-      <SortableContext items={characters.map((_, i) => `char-${i}`)} strategy={verticalListSortingStrategy}>
+      <SortableContext
+        items={characters.map((_, i) => `char-${i}`)}
+        strategy={verticalListSortingStrategy}
+      >
         <div className="space-y-1">
           {characters.map((char, index) => (
             <SortableCharItem
@@ -94,7 +103,9 @@ function SortableCharItem({
   proficiency?: Proficiency
   onClick?: () => void
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+  })
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -144,12 +155,20 @@ function SortableCharItem({
 
       {/* Remove button */}
       <button
-        onClick={e => { e.stopPropagation(); onRemove() }}
+        onClick={e => {
+          e.stopPropagation()
+          onRemove()
+        }}
         className="text-gray-300 hover:text-red-400 transition-colors p-1"
         aria-label={`删除 ${char}`}
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M6 18L18 6M6 6l12 12"
+          />
         </svg>
       </button>
     </div>

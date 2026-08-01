@@ -7,35 +7,35 @@ export type Grade = 'a' | 'b' | 'c' | 'd'
 
 /** SM-2 algorithm state for a single character for a single child */
 export interface SM2State {
-  ease: number       // Ease factor (start 2.5, min 1.3)
-  interval: number   // Current interval in days
+  ease: number // Ease factor (start 2.5, min 1.3)
+  interval: number // Current interval in days
   repetitions: number // Number of successful repetitions
-  nextReview: string  // ISO date string for next review
-  lastGrade: Grade    // The most recent review grade
-  firstReviewDay: string  // DayKey of the first review — materialised in snapshot
+  nextReview: string // ISO date string for next review
+  lastGrade: Grade // The most recent review grade
+  firstReviewDay: string // DayKey of the first review — materialised in snapshot
 }
 
 /** A word book — ordered list of characters to learn */
 export interface WordBook {
   id: string
   name: string
-  characters: string[]  // Ordered list of characters
+  characters: string[] // Ordered list of characters
 }
 
 /** A child/learner */
 export interface Child {
   id: string
   name: string
-  wordBookId: string     // Reference to the word book
-  nextCharIndex: number  // Next character index to learn from the word book
-  progress: Record<string, SM2State>  // char → SM-2 state
+  wordBookId: string // Reference to the word book
+  nextCharIndex: number // Next character index to learn from the word book
+  progress: Record<string, SM2State> // char → SM-2 state
 }
 
 /** App-level settings */
 export interface Settings {
-  dailyReviewLimit: number   // Default 30
-  dailyNewChars: number      // Default 5
-  maxRounds: number          // Default 3
+  dailyReviewLimit: number // Default 30
+  dailyNewChars: number // Default 5
+  maxRounds: number // Default 3
 }
 
 /** Types of log entries */
@@ -55,7 +55,7 @@ export type LogEntryType =
 
 /** Base log entry */
 export interface LogEntry {
-  timestamp: number   // Unix ms
+  timestamp: number // Unix ms
   type: LogEntryType
 }
 
@@ -107,7 +107,7 @@ export interface AddCharEntry extends LogEntry {
   type: 'add_char'
   wordBookId: string
   character: string
-  index: number  // position in the list
+  index: number // position in the list
 }
 
 /** Remove a character from a word book */
@@ -122,7 +122,7 @@ export interface RemoveCharEntry extends LogEntry {
 export interface ReorderCharsEntry extends LogEntry {
   type: 'reorder_chars'
   wordBookId: string
-  characters: string[]  // new full order
+  characters: string[] // new full order
 }
 
 /** Review a character */
@@ -131,15 +131,15 @@ export interface ReviewEntry extends LogEntry {
   childId: string
   character: string
   grade: Grade
-  round: number       // 1, 2, or 3
-  dayKey: string      // "YYYY-MM-DD" — the day this review belongs to
+  round: number // 1, 2, or 3
+  dayKey: string // "YYYY-MM-DD" — the day this review belongs to
 }
 
 /** Batch-present new characters (learn day presenting phase) */
 export interface PresentCharsEntry extends LogEntry {
   type: 'present_chars'
   childId: string
-  characters: string[]   // All new chars shown in one presenting session
+  characters: string[] // All new chars shown in one presenting session
   dayKey: string
 }
 
@@ -173,7 +173,7 @@ export interface AppState {
 
 /** Snapshot of app state at a point in time */
 export interface Snapshot {
-  timestamp: number      // Unix ms — logs before this are covered
+  timestamp: number // Unix ms — logs before this are covered
   state: AppState
 }
 
@@ -182,9 +182,9 @@ export interface TaskItem {
   character: string
   pinyin: string
   words: string[]
-  isNew: boolean         // Is this a new character (first time)?
-  isReview: boolean      // Is this a review character?
-  sm2State?: SM2State    // Current SM-2 state (undefined for new chars)
+  isNew: boolean // Is this a new character (first time)?
+  isReview: boolean // Is this a review character?
+  sm2State?: SM2State // Current SM-2 state (undefined for new chars)
 }
 
 /** Day type */

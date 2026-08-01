@@ -5,7 +5,7 @@ interface CharacterCardProps {
   character: string
   isNew: boolean
   sm2State?: SM2State
-  ratingAnimation?: string | null  // 'a' | 'b' | 'c' | 'd' | null
+  ratingAnimation?: string | null // 'a' | 'b' | 'c' | 'd' | null
   slideDirection?: 'in' | 'out' | null
 }
 
@@ -66,21 +66,19 @@ export default function CharacterCard({
         </div>
 
         {/* Pinyin */}
-        <p className="text-lg text-gray-500 mb-2 font-medium tracking-wide">
-          {pinyin}
-        </p>
+        <p className="text-lg text-gray-500 mb-2 font-medium tracking-wide">{pinyin}</p>
 
         {/* Example words */}
-        {words.length > 0 && (
-          <p className="text-sm text-gray-400">
-            {words.join(' · ')}
-          </p>
-        )}
+        {words.length > 0 && <p className="text-sm text-gray-400">{words.join(' · ')}</p>}
 
         {/* Rating animation overlay */}
         {ratingAnimation && (
-          <div className={`absolute inset-0 rounded-2xl flex items-center justify-center bg-white/80 backdrop-blur-sm transition-opacity duration-200`}>
-            <div className={`w-20 h-20 ${gradeColors[ratingAnimation]} rounded-full flex items-center justify-center text-white text-3xl font-bold shadow-lg animate-pop`}>
+          <div
+            className={`absolute inset-0 rounded-2xl flex items-center justify-center bg-white/80 backdrop-blur-sm transition-opacity duration-200`}
+          >
+            <div
+              className={`w-20 h-20 ${gradeColors[ratingAnimation]} rounded-full flex items-center justify-center text-white text-3xl font-bold shadow-lg animate-pop`}
+            >
               {gradeIcons[ratingAnimation]}
             </div>
           </div>

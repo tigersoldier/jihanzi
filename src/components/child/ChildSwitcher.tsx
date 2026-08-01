@@ -6,7 +6,13 @@ interface ChildSwitcherProps {
   onNext: () => void
 }
 
-export default function ChildSwitcher({ name, hasPrev, hasNext, onPrev, onNext }: ChildSwitcherProps) {
+export default function ChildSwitcher({
+  name,
+  hasPrev,
+  hasNext,
+  onPrev,
+  onNext,
+}: ChildSwitcherProps) {
   return (
     <div className="flex items-center justify-center gap-4">
       <button

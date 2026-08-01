@@ -41,7 +41,7 @@ export default function SettingsPage({ onClose }: SettingsPageProps) {
     input.type = 'file'
     input.accept = '.json,.jsonl'
     input.multiple = true
-    input.onchange = async (e) => {
+    input.onchange = async e => {
       const files = (e.target as HTMLInputElement).files
       if (!files || files.length === 0) return
 
@@ -58,7 +58,9 @@ export default function SettingsPage({ onClose }: SettingsPageProps) {
         }
 
         await bulkImport(snapshotData, logEntries)
-        alert(`导入成功：${snapshotData.state.children?.length || 0} 个孩子，${snapshotData.state.wordBooks?.length || 0} 个生字本，${logEntries.length} 条日志`)
+        alert(
+          `导入成功：${snapshotData.state.children?.length || 0} 个孩子，${snapshotData.state.wordBooks?.length || 0} 个生字本，${logEntries.length} 条日志`,
+        )
       } catch (err) {
         console.error('Import failed:', err)
         alert('导入失败：' + (err as Error).message)
@@ -86,7 +88,12 @@ export default function SettingsPage({ onClose }: SettingsPageProps) {
             className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-200 transition-colors text-gray-500"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </div>
@@ -95,9 +102,7 @@ export default function SettingsPage({ onClose }: SettingsPageProps) {
           {/* User info */}
           {user && (
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex items-center gap-3">
-              {user.picture && (
-                <img src={user.picture} alt="" className="w-10 h-10 rounded-full" />
-              )}
+              {user.picture && <img src={user.picture} alt="" className="w-10 h-10 rounded-full" />}
               <div>
                 <p className="font-medium text-gray-800 text-sm">{user.name}</p>
                 <p className="text-xs text-gray-400">{user.email}</p>
@@ -120,13 +125,13 @@ export default function SettingsPage({ onClose }: SettingsPageProps) {
               <SettingRow
                 label="每日复习上限"
                 value={state.settings.dailyReviewLimit}
-                onChange={(v) => updateSettings({ dailyReviewLimit: v })}
+                onChange={v => updateSettings({ dailyReviewLimit: v })}
                 options={[10, 20, 25, 30, 35, 40]}
               />
               <SettingRow
                 label="每次新字数量"
                 value={state.settings.dailyNewChars}
-                onChange={(v) => updateSettings({ dailyNewChars: v })}
+                onChange={v => updateSettings({ dailyNewChars: v })}
                 options={[3, 5, 8, 10]}
               />
             </div>
@@ -154,16 +159,17 @@ export default function SettingsPage({ onClose }: SettingsPageProps) {
             <div className="mt-4 p-3 bg-indigo-50 rounded-xl text-xs text-indigo-700 flex items-start gap-2">
               <span>ℹ</span>
               <span>
-                数据已自动保存在你的 Google Drive 上，随时可以恢复。同步状态：{syncStatusLabels[status] || status}
-                <button onClick={syncNow} className="ml-2 underline hover:text-indigo-800">立即同步</button>
+                数据已自动保存在你的 Google Drive 上，随时可以恢复。同步状态：
+                {syncStatusLabels[status] || status}
+                <button onClick={syncNow} className="ml-2 underline hover:text-indigo-800">
+                  立即同步
+                </button>
               </span>
             </div>
           </div>
 
           {/* About */}
-          <div className="text-center text-xs text-gray-400 py-4">
-            记汉字 v0.1.0
-          </div>
+          <div className="text-center text-xs text-gray-400 py-4">记汉字 v0.1.0</div>
         </div>
       </div>
     </div>
@@ -190,7 +196,9 @@ function SettingRow({
         className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white"
       >
         {options.map(opt => (
-          <option key={opt} value={opt}>{opt} 字</option>
+          <option key={opt} value={opt}>
+            {opt} 字
+          </option>
         ))}
       </select>
     </div>

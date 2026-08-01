@@ -14,8 +14,12 @@ import { AppContext, type AppContextState } from '../state/AppContext'
 let localStorageStore = new Map<string, string>()
 vi.stubGlobal('localStorage', {
   getItem: vi.fn((key: string) => localStorageStore.get(key) ?? null),
-  setItem: vi.fn((key: string, value: string) => { localStorageStore.set(key, value) }),
-  removeItem: vi.fn((key: string) => { localStorageStore.delete(key) }),
+  setItem: vi.fn((key: string, value: string) => {
+    localStorageStore.set(key, value)
+  }),
+  removeItem: vi.fn((key: string) => {
+    localStorageStore.delete(key)
+  }),
 })
 
 // Mock the date module to use a known "learn" day
@@ -92,7 +96,7 @@ function createStatefulWrapper(initialState: AppState) {
   function StatefulWrapper({ children }: { children: ReactNode }) {
     const [state, setState] = useState<AppState>(initialState)
     const [selectedChildId, setSelectedChildId] = useState<string>(
-      () => state.children[0]?.id || ''
+      () => state.children[0]?.id || '',
     )
 
     const submitReview = useCallback(
@@ -192,7 +196,9 @@ describe('useToday', () => {
 
     // 推进展示阶段（5 个新字逐个展示，最后一个触发进入复习阶段）
     for (let i = 0; i < 5; i++) {
-      act(() => { result.current.handlePresentNav('next') })
+      act(() => {
+        result.current.handlePresentNav('next')
+      })
     }
     expect(result.current.phase).toBe('reviewing')
     expect(result.current.taskIndex).toBe(0)
@@ -216,7 +222,7 @@ describe('useToday', () => {
     const afterRefreshState = freshStateWithChars(['一', '二', '三', '四', '五'])
     afterRefreshState.children[0].nextCharIndex = 1
     afterRefreshState.children[0].progress = {
-      '一': {
+      一: {
         ease: 2.6,
         interval: 1,
         repetitions: 1,
@@ -251,7 +257,9 @@ describe('useToday', () => {
     expect(result.current.phase).toBe('presenting')
 
     // 推进展示阶段（1 个新字，点击即进入复习阶段）
-    act(() => { result.current.handlePresentNav('next') })
+    act(() => {
+      result.current.handlePresentNav('next')
+    })
     expect(result.current.phase).toBe('reviewing')
 
     // 评完所有字（只有「一」）
@@ -300,7 +308,9 @@ describe('useToday', () => {
 
     // 推进展示阶段（5 个新字逐个展示，最后一个触发进入复习阶段）
     for (let i = 0; i < 5; i++) {
-      act(() => { result.current.handlePresentNav('next') })
+      act(() => {
+        result.current.handlePresentNav('next')
+      })
     }
     expect(result.current.phase).toBe('reviewing')
     expect(result.current.taskIndex).toBe(0)
@@ -332,13 +342,15 @@ describe('useToday', () => {
       result.current.startSession()
     })
     // 走完展示阶段（1 个新字 → 直接进入复习阶段）
-    act(() => { result.current.handlePresentNav('next') })
+    act(() => {
+      result.current.handlePresentNav('next')
+    })
     expect(result.current.phase).toBe('reviewing')
 
     // When: 在 350ms 内快速双击「a」按钮
     await act(async () => {
-      result.current.handleRate('a')  // 第一次点击
-      result.current.handleRate('a')  // 第二次点击（双击）
+      result.current.handleRate('a') // 第一次点击
+      result.current.handleRate('a') // 第二次点击（双击）
       // 等待 setTimeout 推进 taskIndex
       await new Promise(resolve => setTimeout(resolve, 400))
     })
@@ -356,10 +368,8 @@ describe('useToday', () => {
       const [state, setState] = useState<AppState>(
         makeState({
           children: [],
-          wordBooks: [
-            { id: 'wb_1', name: '测试生字本', characters: ['一', '二', '三'] },
-          ],
-        })
+          wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: ['一', '二', '三'] }],
+        }),
       )
       const [selectedChildId, setSelectedChildId] = useState('')
 
@@ -367,14 +377,14 @@ describe('useToday', () => {
       React.useEffect(() => {
         // 使用 queueMicrotask 确保在本次渲染提交之后执行
         queueMicrotask(() => {
-          setState(makeState({
-            children: [
-              { id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} },
-            ],
-            wordBooks: [
-              { id: 'wb_1', name: '测试生字本', characters: ['一', '二', '三'] },
-            ],
-          }))
+          setState(
+            makeState({
+              children: [
+                { id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} },
+              ],
+              wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: ['一', '二', '三'] }],
+            }),
+          )
         })
       }, [])
 
@@ -412,7 +422,7 @@ describe('useToday', () => {
     }
     AsyncLoadingWrapper.displayName = 'AsyncLoadingWrapper'
 
-    const { result, rerender } = renderHook(() => useToday(), { wrapper: AsyncLoadingWrapper })
+    const { result } = renderHook(() => useToday(), { wrapper: AsyncLoadingWrapper })
 
     // 首次渲染：还没有 children
     expect(result.current.selectedChildId).toBe('')
@@ -459,9 +469,13 @@ describe('useToday', () => {
     expect(result.current.currentTask?.character).toBe('花')
 
     // 推进展示阶段（2 个新字，最后一个触发进入复习阶段）
-    act(() => { result.current.handlePresentNav('next') })
+    act(() => {
+      result.current.handlePresentNav('next')
+    })
     expect(result.current.phase).toBe('presenting')
-    act(() => { result.current.handlePresentNav('next') })
+    act(() => {
+      result.current.handlePresentNav('next')
+    })
     expect(result.current.phase).toBe('reviewing')
     expect(result.current.currentTask?.character).toBe('花')
 
@@ -487,7 +501,14 @@ describe('useToday', () => {
           wordBookId: 'wb_2',
           nextCharIndex: 1,
           progress: {
-            '花': { ease: 2.6, interval: 1, repetitions: 1, nextReview: '2026-01-02', lastGrade: 'a', firstReviewDay: '2026-01-01' },
+            花: {
+              ease: 2.6,
+              interval: 1,
+              repetitions: 1,
+              nextReview: '2026-01-02',
+              lastGrade: 'a',
+              firstReviewDay: '2026-01-01',
+            },
           },
         },
       ],
@@ -518,7 +539,16 @@ describe('useToday', () => {
     //
     // Given: 一个孩子有一个包含 10 个生字的生字本（超过 dailyNewChars=5）
     const initialState = freshStateWithChars([
-      '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+      '一',
+      '二',
+      '三',
+      '四',
+      '五',
+      '六',
+      '七',
+      '八',
+      '九',
+      '十',
     ])
     const wrapper = createStatefulWrapper(initialState)
 
@@ -534,7 +564,9 @@ describe('useToday', () => {
 
     // 推进展示阶段（5 个新字逐个展示，最后一个触发进入复习阶段）
     for (let i = 0; i < 5; i++) {
-      act(() => { result.current.handlePresentNav('next') })
+      act(() => {
+        result.current.handlePresentNav('next')
+      })
     }
     expect(result.current.phase).toBe('reviewing')
 
@@ -585,18 +617,47 @@ describe('useToday', () => {
 
   it('idle 状态下暴露今日复习任务预览（有到期复习字时）', () => {
     const state = makeState({
-      children: [{
-        id: 'child_1', name: '小明', wordBookId: 'wb_1',
-        nextCharIndex: 3,
-        progress: {
-          '一': { ease: 2.5, interval: 1, repetitions: 1, nextReview: '2026-01-01', lastGrade: 'a', firstReviewDay: '2026-01-01' },
-          '二': { ease: 2.5, interval: 1, repetitions: 1, nextReview: '2026-01-01', lastGrade: 'b', firstReviewDay: '2026-01-01' },
-          '三': { ease: 2.5, interval: 2, repetitions: 1, nextReview: '2026-01-03', lastGrade: 'a', firstReviewDay: '2026-01-01' },
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 3,
+          progress: {
+            一: {
+              ease: 2.5,
+              interval: 1,
+              repetitions: 1,
+              nextReview: '2026-01-01',
+              lastGrade: 'a',
+              firstReviewDay: '2026-01-01',
+            },
+            二: {
+              ease: 2.5,
+              interval: 1,
+              repetitions: 1,
+              nextReview: '2026-01-01',
+              lastGrade: 'b',
+              firstReviewDay: '2026-01-01',
+            },
+            三: {
+              ease: 2.5,
+              interval: 2,
+              repetitions: 1,
+              nextReview: '2026-01-03',
+              lastGrade: 'a',
+              firstReviewDay: '2026-01-01',
+            },
+          },
         },
-      }],
-      wordBooks: [{
-        id: 'wb_1', name: '测试生字本', characters: ['一', '二', '三', '四', '五'],
-      }],
+      ],
+      wordBooks: [
+        {
+          id: 'wb_1',
+          name: '测试生字本',
+          characters: ['一', '二', '三', '四', '五'],
+        },
+      ],
     })
     const wrapper = createStatefulWrapper(state)
 
@@ -617,15 +678,21 @@ describe('useToday', () => {
     expect(result.current.doneToday).toBe(false)
 
     // 走完流程
-    act(() => { result.current.startSession() })
-    act(() => { result.current.handlePresentNav('next') })
+    act(() => {
+      result.current.startSession()
+    })
+    act(() => {
+      result.current.handlePresentNav('next')
+    })
     await act(async () => {
       result.current.handleRate('a')
       await new Promise(resolve => setTimeout(resolve, 400))
     })
     expect(result.current.phase).toBe('roundComplete')
 
-    act(() => { result.current.handleDone() })
+    act(() => {
+      result.current.handleDone()
+    })
 
     expect(result.current.doneToday).toBe(true)
     expect(result.current.phase).toBe('idle')
@@ -638,9 +705,13 @@ describe('useToday', () => {
     const { result } = renderHook(() => useToday(), { wrapper })
 
     // 走完流程
-    act(() => { result.current.startSession() })
+    act(() => {
+      result.current.startSession()
+    })
     for (let i = 0; i < 2; i++) {
-      act(() => { result.current.handlePresentNav('next') })
+      act(() => {
+        result.current.handlePresentNav('next')
+      })
     }
     for (const _char of ['一', '二']) {
       await act(async () => {
@@ -648,8 +719,12 @@ describe('useToday', () => {
         await new Promise(resolve => setTimeout(resolve, 400))
       })
     }
-    act(() => { result.current.handleSkipRound() })
-    act(() => { result.current.handleDone() })
+    act(() => {
+      result.current.handleSkipRound()
+    })
+    act(() => {
+      result.current.handleDone()
+    })
 
     // doneToday=true 后触发明日计算
     // 明天 2026-01-02 是纯复习日，「一」和「二」的 nextReview 都是 2026-01-02 → 到期
@@ -667,7 +742,7 @@ describe('useToday', () => {
       const [state] = useState<AppState>(initialState)
       const [dataVersion, setDataVersion] = useState(0)
       const [selectedChildId, setSelectedChildId] = useState<string>(
-        () => state.children[0]?.id || ''
+        () => state.children[0]?.id || '',
       )
 
       const reloadState = useCallback(() => {
@@ -708,7 +783,15 @@ describe('useToday', () => {
 
   it('sync 后 IndexedDB 有今日复习日志 → doneToday 自动标记为 true', async () => {
     mockGetReviewsForChildOnDay.mockResolvedValue([
-      { timestamp: 1000000, type: 'review', childId: 'child_1', character: '一', grade: 'a', round: 1, dayKey: '2026-01-01' },
+      {
+        timestamp: 1000000,
+        type: 'review',
+        childId: 'child_1',
+        character: '一',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-01-01',
+      },
     ])
     mockGetLastStudyDayForChild.mockResolvedValue('2025-12-31')
 
@@ -745,14 +828,22 @@ describe('useToday', () => {
     const { result } = renderHook(() => useToday(), { wrapper })
 
     // 走完流程
-    act(() => { result.current.startSession() })
-    act(() => { result.current.handlePresentNav('next') })
+    act(() => {
+      result.current.startSession()
+    })
+    act(() => {
+      result.current.handlePresentNav('next')
+    })
     await act(async () => {
       result.current.handleRate('a')
       await new Promise(resolve => setTimeout(resolve, 400))
     })
-    act(() => { result.current.handleSkipRound() })
-    act(() => { result.current.handleDone() })
+    act(() => {
+      result.current.handleSkipRound()
+    })
+    act(() => {
+      result.current.handleDone()
+    })
 
     // 明天 2026-01-02 是纯复习日，「一」的 nextReview 是 2026-01-02 → 到期
     // 所以明天的复习队列应该有「一」

@@ -9,7 +9,7 @@
  */
 
 import type { AppState, Child, TaskItem, DayType, ReviewEntry, SM2State } from './types'
-import { isDueForReview, todayKey } from './sm2'
+import { isDueForReview } from './sm2'
 
 /**
  * 根据上次学习日是否有新字来判断今天的日类型。
@@ -23,9 +23,7 @@ export function getEffectiveDayType(
   progress: Record<string, SM2State>,
 ): DayType {
   if (!lastStudyDay) return 'learn'
-  const lastDayHadNewChars = Object.values(progress).some(
-    s => s.firstReviewDay === lastStudyDay,
-  )
+  const lastDayHadNewChars = Object.values(progress).some(s => s.firstReviewDay === lastStudyDay)
   return lastDayHadNewChars ? 'review' : 'learn'
 }
 
@@ -56,16 +54,14 @@ export function generateTodayTasks(
   const dueReviews = getDueReviews(child, dateKey)
 
   // 2. Build review task items (limited by dailyReviewLimit)
-  const reviewTasks: TaskItem[] = dueReviews
-    .slice(0, dailyReviewLimit)
-    .map(char => ({
-      character: char,
-      pinyin: '', // Will be populated from character metadata
-      words: [],
-      isNew: false,
-      isReview: true,
-      sm2State: child.progress[char],
-    }))
+  const reviewTasks: TaskItem[] = dueReviews.slice(0, dailyReviewLimit).map(char => ({
+    character: char,
+    pinyin: '', // Will be populated from character metadata
+    words: [],
+    isNew: false,
+    isReview: true,
+    sm2State: child.progress[char],
+  }))
 
   // 3. Add new characters on learn days (fill remaining quota)
   let newTasks: TaskItem[] = []
@@ -94,7 +90,7 @@ export function generateTodayTasks(
  * Priority: due date (earliest first), then ease (higher = easier first).
  */
 function getDueReviews(child: Child, dateKey: string): string[] {
-  const due: { char: string; state: typeof child.progress[string] }[] = []
+  const due: { char: string; state: (typeof child.progress)[string] }[] = []
 
   for (const [char, state] of Object.entries(child.progress)) {
     if (isDueForReview(state, dateKey)) {
@@ -117,11 +113,7 @@ function getDueReviews(child: Child, dateKey: string): string[] {
  * Get new characters from the word book that the child hasn't learned yet,
  * in sequential order.
  */
-function getNewCharacters(
-  child: Child,
-  allChars: string[],
-  count: number,
-): string[] {
+function getNewCharacters(child: Child, allChars: string[], count: number): string[] {
   const result: string[] = []
   for (let i = child.nextCharIndex; i < allChars.length && result.length < count; i++) {
     const char = allChars[i]
@@ -137,10 +129,7 @@ function getNewCharacters(
  * Get the characters that need re-review in subsequent rounds.
  * These are characters that received grade 'c' or 'd' in the current session.
  */
-export function getNextRoundChars(
-  sessionReviews: ReviewEntry[],
-  currentRound: number,
-): string[] {
+export function getNextRoundChars(sessionReviews: ReviewEntry[], currentRound: number): string[] {
   return sessionReviews
     .filter(r => r.round === currentRound && (r.grade === 'c' || r.grade === 'd'))
     .map(r => r.character)
@@ -166,7 +155,10 @@ export function countReviewsForDay(
 /**
  * Get the total daily limit (review + new) for a given day type.
  */
-export function getDailyLimit(settings: { dailyReviewLimit: number; dailyNewChars: number }, dayType: DayType): number {
+export function getDailyLimit(
+  settings: { dailyReviewLimit: number; dailyNewChars: number },
+  dayType: DayType,
+): number {
   if (dayType === 'learn') {
     return settings.dailyReviewLimit + settings.dailyNewChars
   }
@@ -185,19 +177,33 @@ export function getChildStats(child: Child) {
   }
 
   // Count by last review grade stored in SM2State.lastGrade
-  let a = 0, b = 0, c = 0, d = 0
+  let a = 0,
+    b = 0,
+    c = 0,
+    d = 0
   for (const [, state] of entries) {
     switch (state.lastGrade) {
-      case 'a': a++; break
-      case 'b': b++; break
-      case 'c': c++; break
-      case 'd': d++; break
+      case 'a':
+        a++
+        break
+      case 'b':
+        b++
+        break
+      case 'c':
+        c++
+        break
+      case 'd':
+        d++
+        break
     }
   }
 
   return {
     total,
-    a, b, c, d,
+    a,
+    b,
+    c,
+    d,
     aPercent: Math.round((a / total) * 100),
     bPercent: Math.round((b / total) * 100),
     cPercent: Math.round((c / total) * 100),

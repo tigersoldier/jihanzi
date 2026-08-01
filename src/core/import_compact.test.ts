@@ -59,7 +59,9 @@ describe('Import & Compact Pipeline', () => {
     console.log(`\nReplayed state:`)
     console.log(`  Children: ${state.children.length}`)
     const child = state.children[0]
-    console.log(`  ${child.name}: ${Object.keys(child.progress).length} learned, nextCharIndex=${child.nextCharIndex}`)
+    console.log(
+      `  ${child.name}: ${Object.keys(child.progress).length} learned, nextCharIndex=${child.nextCharIndex}`,
+    )
 
     // 3. Verify replay results
     expect(state.children).toHaveLength(1)

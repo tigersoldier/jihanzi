@@ -42,8 +42,8 @@ describe('isChineseChar', () => {
   })
 
   it('日文假名返回 false', () => {
-    expect(isChineseChar('あ')).toBe(false)  // hiragana
-    expect(isChineseChar('ア')).toBe(false)  // katakana
+    expect(isChineseChar('あ')).toBe(false) // hiragana
+    expect(isChineseChar('ア')).toBe(false) // katakana
   })
 
   it('韩文谚文返回 false', () => {

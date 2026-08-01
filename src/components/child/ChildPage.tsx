@@ -6,16 +6,8 @@ import EmptyState from '../common/EmptyState'
 
 export default function ChildPage() {
   const { state, createWordBook: createWB } = useApp()
-  const {
-    currentChild,
-    childList,
-    hasPrevChild,
-    hasNextChild,
-    goToPrevChild,
-    goToNextChild,
-    createChild,
-    deleteChild,
-  } = useChild()
+  const { currentChild, hasPrevChild, hasNextChild, goToPrevChild, goToNextChild, createChild } =
+    useChild()
 
   const [showAddForm, setShowAddForm] = useState(false)
   const [newName, setNewName] = useState('')
@@ -87,10 +79,10 @@ export default function ChildPage() {
 
         {/* Per-grade breakdown */}
         <div className="space-y-3">
-          <StatRow color="bg-green-500" label="完全掌握" count={stats.a} percent={stats.aPercent} />
-          <StatRow color="bg-yellow-500" label="部分正确" count={stats.b} percent={stats.bPercent} />
-          <StatRow color="bg-orange-500" label="需提示" count={stats.c} percent={stats.cPercent} />
-          <StatRow color="bg-red-500" label="遗忘" count={stats.d} percent={stats.dPercent} />
+          <StatRow color="bg-green-500" label="完全掌握" percent={stats.aPercent} />
+          <StatRow color="bg-yellow-500" label="部分正确" percent={stats.bPercent} />
+          <StatRow color="bg-orange-500" label="需提示" percent={stats.cPercent} />
+          <StatRow color="bg-red-500" label="遗忘" percent={stats.dPercent} />
         </div>
 
         {/* Word book info */}
@@ -130,12 +122,15 @@ export default function ChildPage() {
   )
 }
 
-function StatRow({ color, label, count, percent }: { color: string; label: string; count: number; percent: number }) {
+function StatRow({ color, label, percent }: { color: string; label: string; percent: number }) {
   return (
     <div className="flex items-center gap-3">
       <span className="text-sm text-gray-600 w-20">{label}</span>
       <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-        <div className={`h-full ${color} rounded-full transition-all`} style={{ width: `${percent}%` }} />
+        <div
+          className={`h-full ${color} rounded-full transition-all`}
+          style={{ width: `${percent}%` }}
+        />
       </div>
       <span className="text-sm text-gray-500 w-12 text-right">{percent}%</span>
     </div>
@@ -143,7 +138,13 @@ function StatRow({ color, label, count, percent }: { color: string; label: strin
 }
 
 function AddChildForm({
-  name, onNameChange, wordBooks, selectedWB, onWBChange, onSubmit, onCancel,
+  name,
+  onNameChange,
+  wordBooks,
+  selectedWB,
+  onWBChange,
+  onSubmit,
+  onCancel,
 }: {
   name: string
   onNameChange: (v: string) => void
@@ -172,7 +173,9 @@ function AddChildForm({
         >
           <option value="">选择生字本</option>
           {wordBooks.map(wb => (
-            <option key={wb.id} value={wb.id}>{wb.name}</option>
+            <option key={wb.id} value={wb.id}>
+              {wb.name}
+            </option>
           ))}
         </select>
       )}

@@ -6,20 +6,21 @@ interface RoundCompleteProps {
   onSkip: () => void
 }
 
-export default function RoundComplete({ round, needReview, maxRounds, onContinue, onSkip }: RoundCompleteProps) {
+export default function RoundComplete({
+  round,
+  needReview,
+  maxRounds,
+  onContinue,
+  onSkip,
+}: RoundCompleteProps) {
   const canContinue = round < maxRounds
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
       <div className="text-5xl mb-4">{round === 1 ? '💪' : '🔄'}</div>
-      <h2 className="text-xl font-bold text-gray-800 mb-2">
-        第 {round} 轮完成
-      </h2>
+      <h2 className="text-xl font-bold text-gray-800 mb-2">第 {round} 轮完成</h2>
       <p className="text-gray-500 mb-6">
-        {needReview > 0
-          ? `${needReview} 个字需要再巩固`
-          : '全部掌握，太棒了！'
-        }
+        {needReview > 0 ? `${needReview} 个字需要再巩固` : '全部掌握，太棒了！'}
       </p>
 
       {needReview > 0 && canContinue && (

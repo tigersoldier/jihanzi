@@ -21,7 +21,7 @@ export function makeDiffKey(e: AnyLogEntry): string {
     return `${e.timestamp}:${e.type}:${e.childId}:${e.dayKey}`
   }
   // 泛用键：timestamp + type + 实体 ID
-  const entityId = (e as any).childId || (e as any).wordBookId || ''
+  const entityId = 'childId' in e ? e.childId : 'wordBookId' in e ? e.wordBookId : ''
   return `${e.timestamp}:${e.type}:${entityId}`
 }
 

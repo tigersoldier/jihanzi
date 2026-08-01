@@ -201,13 +201,13 @@ export function initTokenClient(): void {
   const client = google.accounts.oauth2.initTokenClient({
     client_id: GOOGLE_CLIENT_ID,
     scope: OAUTH_SCOPE,
-    callback: (response) => {
+    callback: response => {
       if (response.error) {
         console.error('OAuth error:', response.error, response.error_description || '')
         return
       }
       accessToken = response.access_token
-      tokenExpiry = Date.now() + (parseInt(response.expires_in || '3600') * 1000)
+      tokenExpiry = Date.now() + parseInt(response.expires_in || '3600') * 1000
       saveTokenToStorage(accessToken!, tokenExpiry)
     },
   })
@@ -224,7 +224,7 @@ export async function requestAccessToken(): Promise<string> {
   }
 
   return new Promise((resolve, reject) => {
-    tokenClient!.callback = (response) => {
+    tokenClient!.callback = response => {
       if (response.error) {
         const detail = response.error_description
           ? `${response.error}: ${response.error_description}`
@@ -233,7 +233,7 @@ export async function requestAccessToken(): Promise<string> {
         return
       }
       accessToken = response.access_token
-      tokenExpiry = Date.now() + (parseInt(response.expires_in || '3600') * 1000)
+      tokenExpiry = Date.now() + parseInt(response.expires_in || '3600') * 1000
       saveTokenToStorage(accessToken!, tokenExpiry)
       resolve(accessToken!)
     }
@@ -305,10 +305,10 @@ export async function trySilentLogin(): Promise<string | null> {
   }
 
   try {
-    return await new Promise<string | null>((resolve) => {
+    return await new Promise<string | null>(resolve => {
       let settled = false
 
-      tokenClient!.callback = (response) => {
+      tokenClient!.callback = response => {
         if (response.error) {
           if (!settled) {
             settled = true
@@ -320,7 +320,7 @@ export async function trySilentLogin(): Promise<string | null> {
         // This handles the case where Google shows a popup despite prompt: ''
         // and the user takes longer than the timeout to complete login.
         accessToken = response.access_token
-        tokenExpiry = Date.now() + (parseInt(response.expires_in || '3600') * 1000)
+        tokenExpiry = Date.now() + parseInt(response.expires_in || '3600') * 1000
         saveTokenToStorage(accessToken!, tokenExpiry)
         if (!settled) {
           settled = true

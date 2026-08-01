@@ -103,12 +103,15 @@ function applyCreateChild(state: AppState, entry: CreateChildEntry): boolean {
   return true
 }
 
-function applyUpdateChild(state: AppState, entry: {
-  type: 'update_child'
-  childId: string
-  name?: string
-  wordBookId?: string
-}): boolean {
+function applyUpdateChild(
+  state: AppState,
+  entry: {
+    type: 'update_child'
+    childId: string
+    name?: string
+    wordBookId?: string
+  },
+): boolean {
   const child = state.children.find(c => c.id === entry.childId)
   if (!child) return false
   if (entry.name === undefined && entry.wordBookId === undefined) return false
@@ -124,7 +127,10 @@ function applyUpdateChild(state: AppState, entry: {
   return changed
 }
 
-function applyDeleteChild(state: AppState, entry: { type: 'delete_child'; childId: string }): boolean {
+function applyDeleteChild(
+  state: AppState,
+  entry: { type: 'delete_child'; childId: string },
+): boolean {
   const before = state.children.length
   state.children = state.children.filter(c => c.id !== entry.childId)
   return state.children.length !== before
@@ -142,11 +148,14 @@ function applyCreateWordBook(state: AppState, entry: CreateWordBookEntry): boole
   return true
 }
 
-function applyUpdateWordBook(state: AppState, entry: {
-  type: 'update_wordbook'
-  wordBookId: string
-  name?: string
-}): boolean {
+function applyUpdateWordBook(
+  state: AppState,
+  entry: {
+    type: 'update_wordbook'
+    wordBookId: string
+    name?: string
+  },
+): boolean {
   const wb = state.wordBooks.find(w => w.id === entry.wordBookId)
   if (!wb) return false
   if (entry.name === undefined) return false
@@ -155,10 +164,13 @@ function applyUpdateWordBook(state: AppState, entry: {
   return true
 }
 
-function applyDeleteWordBook(state: AppState, entry: {
-  type: 'delete_wordbook'
-  wordBookId: string
-}): boolean {
+function applyDeleteWordBook(
+  state: AppState,
+  entry: {
+    type: 'delete_wordbook'
+    wordBookId: string
+  },
+): boolean {
   const before = state.wordBooks.length
   state.wordBooks = state.wordBooks.filter(w => w.id !== entry.wordBookId)
   return state.wordBooks.length !== before
@@ -171,12 +183,15 @@ function applyAddChar(state: AppState, entry: AddCharEntry): void {
   wb.characters.splice(entry.index, 0, entry.character)
 }
 
-function applyRemoveChar(state: AppState, entry: {
-  type: 'remove_char'
-  wordBookId: string
-  character: string
-  index: number
-}): boolean {
+function applyRemoveChar(
+  state: AppState,
+  entry: {
+    type: 'remove_char'
+    wordBookId: string
+    character: string
+    index: number
+  },
+): boolean {
   const wb = state.wordBooks.find(w => w.id === entry.wordBookId)
   if (!wb) return false
   if (wb.characters[entry.index] !== entry.character) return false
@@ -184,11 +199,14 @@ function applyRemoveChar(state: AppState, entry: {
   return true
 }
 
-function applyReorderChars(state: AppState, entry: {
-  type: 'reorder_chars'
-  wordBookId: string
-  characters: string[]
-}): boolean {
+function applyReorderChars(
+  state: AppState,
+  entry: {
+    type: 'reorder_chars'
+    wordBookId: string
+    characters: string[]
+  },
+): boolean {
   const wb = state.wordBooks.find(w => w.id === entry.wordBookId)
   if (!wb) return false
   // Check if the order actually changed
@@ -222,14 +240,18 @@ function applyReview(state: AppState, entry: ReviewEntry): boolean {
   return true
 }
 
-function applyUpdateSettings(state: AppState, entry: {
-  type: 'update_settings'
-  settings: Partial<Settings>
-}): boolean {
+function applyUpdateSettings(
+  state: AppState,
+  entry: {
+    type: 'update_settings'
+    settings: Partial<Settings>
+  },
+): boolean {
   let changed = false
   for (const [key, value] of Object.entries(entry.settings)) {
-    if (value !== undefined && (state.settings as any)[key] !== value) {
-      (state.settings as any)[key] = value
+    const settingKey = key as keyof Settings
+    if (value !== undefined && state.settings[settingKey] !== value) {
+      state.settings[settingKey] = value
       changed = true
     }
   }
