@@ -1,6 +1,7 @@
 import { useAuth } from '../../state/AuthContext'
 import { useApp } from '../../state/AppContext'
 import { useSync } from '../../state/SyncContext'
+import { parseImportFiles } from '../../utils/import'
 
 interface SettingsPageProps {
   onClose: () => void
@@ -45,53 +46,18 @@ export default function SettingsPage({ onClose }: SettingsPageProps) {
       if (!files || files.length === 0) return
 
       try {
-        // Read all selected files and identify snapshot vs log
-        let snapshotData: { timestamp: number; state: any } | null = null
-        const logEntries: any[] = []
-
-        for (const file of Array.from(files)) {
-          const text = await file.text()
-          const isJsonl = file.name.endsWith('.jsonl')
-
-          if (isJsonl) {
-            // Parse JSONL — each line is a JSON object
-            text.split('\n').filter(l => l.trim()).forEach(line => {
-              try {
-                logEntries.push(JSON.parse(line))
-              } catch { /* skip invalid lines */ }
-            })
-          } else {
-            // Try parsing as snapshot (has `state` field) or as log array
-            try {
-              const parsed = JSON.parse(text)
-              if (parsed.state && parsed.timestamp !== undefined) {
-                snapshotData = parsed
-              } else if (Array.isArray(parsed)) {
-                logEntries.push(...parsed)
-              } else {
-                // Might be the old monolithic backup format
-                if (parsed.children || parsed.wordBooks) {
-                  snapshotData = {
-                    timestamp: Date.now(),
-                    state: {
-                      children: parsed.children || [],
-                      wordBooks: parsed.wordBooks || [],
-                      settings: parsed.settings || { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
-                    },
-                  }
-                  if (parsed.logs) logEntries.push(...parsed.logs)
-                }
-              }
-            } catch { /* skip */ }
-          }
-        }
+        // 读取所有选中文件后统一解析：识别基座快照（多快照取最早）与日志
+        const filesData = await Promise.all(
+          Array.from(files).map(async f => ({ name: f.name, text: await f.text() })),
+        )
+        const { snapshot: snapshotData, logs: logEntries } = await parseImportFiles(filesData)
 
         if (!snapshotData) {
           alert('未找到 snapshot 文件（需包含 state 和 timestamp 字段）')
           return
         }
 
-        await bulkImport(snapshotData as any, logEntries)
+        await bulkImport(snapshotData, logEntries)
         alert(`导入成功：${snapshotData.state.children?.length || 0} 个孩子，${snapshotData.state.wordBooks?.length || 0} 个生字本，${logEntries.length} 条日志`)
       } catch (err) {
         console.error('Import failed:', err)

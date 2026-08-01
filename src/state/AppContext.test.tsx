@@ -238,17 +238,125 @@ describe('AppContext — sync triggers', () => {
   })
 })
 
-describe('bulkImport — 导入日志去重', () => {
-  it('导入含重复条目的日志时不去重应用（interval 不爆炸、DB 无重复）', async () => {
-    const { result } = renderHook(() => useApp(), { wrapper })
+describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
 
-    // 等待 auth + 初始加载完成（与其它测试一致）
+  async function renderWithBulkImport() {
+    const { result } = renderHook(() => useApp(), { wrapper })
     await vi.waitFor(() => {
       expect(result.current.bulkImport).toBeDefined()
     }, { timeout: 1000 })
+    return result
+  }
+
+  it('导入完整快照+日志时不重复计算学习次数（回归：途字 3 次被算成 6 次、interval 595 天）', async () => {
+    const result = await renderWithBulkImport()
+
+    // 用户真实场景：快照已物化 '途' 的 3 次学习（reps=3, interval=22），
+    // 日志中同样是这 3 条 review（timestamp 均早于快照时间戳）
+    const snapshot = {
+      timestamp: 1785564867246,
+      state: {
+        children: [{
+          id: 'child_1', name: '陈尚恩', wordBookId: 'wb_1', nextCharIndex: 2,
+          progress: {
+            '途': { ease: 2.8, interval: 22, repetitions: 3, nextReview: '2026-08-18', lastGrade: 'a', firstReviewDay: '2026-07-08' },
+          },
+        }],
+        wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '途'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    }
+    const logs = [
+      { timestamp: 1783566656274, type: 'review', childId: 'child_1', character: '途', grade: 'a', round: 1, dayKey: '2026-07-08' },
+      { timestamp: 1783616286291, type: 'review', childId: 'child_1', character: '途', grade: 'a', round: 1, dayKey: '2026-07-09' },
+      { timestamp: 1785205079007, type: 'review', childId: 'child_1', character: '途', grade: 'a', round: 1, dayKey: '2026-07-27' },
+    ]
+
+    await act(async () => {
+      await result.current.bulkImport(snapshot, logs)
+    })
+
+    // 快照是完整状态：这些日志已被快照物化，重放会重复计数（reps 3→6、interval 22→595）
+    const state = mockSaveCurrentSnapshot.mock.calls.at(-1)[0].state
+    expect(state.children[0].progress['途']).toMatchObject({ ease: 2.8, interval: 22, repetitions: 3 })
+    // nextCharIndex 不被重复推进
+    expect(state.children[0].nextCharIndex).toBe(2)
+    // 日志仍全部追加到 DB（用于同步/审计），且未去重丢失
+    const appended = mockAppendLogs.mock.calls[0][0]
+    expect(appended.length).toBe(3)
+  })
+
+  it('快照时间戳之后的日志仍会重放（快照较旧时补全新进度）', async () => {
+    const result = await renderWithBulkImport()
 
     const snapshot = {
-      timestamp: Date.now(),
+      timestamp: 1000,
+      state: {
+        children: [{
+          id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0,
+          progress: {
+            '一': { ease: 2.8, interval: 22, repetitions: 3, nextReview: '2026-08-18', lastGrade: 'a', firstReviewDay: '2026-07-01' },
+          },
+        }],
+        wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '二'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    }
+    // 快照时间戳之后的 review：快照不可能已包含它，必须重放
+    const logs = [
+      { timestamp: 2000, type: 'review', childId: 'child_1', character: '一', grade: 'a', round: 1, dayKey: '2026-07-27' },
+    ]
+
+    await act(async () => {
+      await result.current.bulkImport(snapshot, logs)
+    })
+
+    const state = mockSaveCurrentSnapshot.mock.calls.at(-1)[0].state
+    expect(state.children[0].progress['一']).toMatchObject({ ease: 2.9, interval: 64, repetitions: 4 })
+  })
+
+  it('早期快照 + 后期日志：基座只含 07-09 前的 2 次学习，重放 07-27 日志后正确得到 3 次', async () => {
+    const result = await renderWithBulkImport()
+
+    // 用户场景：导入 20260731 目录时以早期快照（snapshot_2026-07-01.json，
+    // 实际时间戳 07-09 23:03，含'途' 2 次学习）为基座，后期日志（07-11/07-21）
+    // 在其上重放。'途' 的三条 review 中只有 07-27 在基座之后，应恰好补成 3 次。
+    const snapshot = {
+      timestamp: 1783663380979,
+      state: {
+        children: [{
+          id: 'child_1', name: '陈尚恩', wordBookId: 'wb_1', nextCharIndex: 1,
+          progress: {
+            '途': { ease: 2.7, interval: 8, repetitions: 2, nextReview: '2026-07-17', lastGrade: 'a', firstReviewDay: '2026-07-08' },
+          },
+        }],
+        wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '途'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    }
+    const logs = [
+      { timestamp: 1783566656274, type: 'review', childId: 'child_1', character: '途', grade: 'a', round: 1, dayKey: '2026-07-08' },
+      { timestamp: 1783616286291, type: 'review', childId: 'child_1', character: '途', grade: 'a', round: 1, dayKey: '2026-07-09' },
+      { timestamp: 1785205079007, type: 'review', childId: 'child_1', character: '途', grade: 'a', round: 1, dayKey: '2026-07-27' },
+    ]
+
+    await act(async () => {
+      await result.current.bulkImport(snapshot, logs)
+    })
+
+    // 基座 2 次 + 重放 07-27 的 1 次 = 3 次；interval 8 → 22（非 595）
+    const state = mockSaveCurrentSnapshot.mock.calls.at(-1)[0].state
+    expect(state.children[0].progress['途']).toMatchObject({ ease: 2.8, interval: 22, repetitions: 3 })
+  })
+
+  it('导入含重复条目的日志时先去重（DB 无重复、interval 不爆炸）', async () => {
+    const result = await renderWithBulkImport()
+
+    const snapshot = {
+      timestamp: 1000,
       state: {
         children: [{ id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} }],
         wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '二'] }],
@@ -257,7 +365,7 @@ describe('bulkImport — 导入日志去重', () => {
     }
     // 导出数据可能携带历史同步 bug 的重复条目（同一条 review ×14）
     const review = {
-      timestamp: 100, type: 'review', childId: 'child_1', character: '一', grade: 'a', round: 1, dayKey: '2026-07-01',
+      timestamp: 2000, type: 'review', childId: 'child_1', character: '一', grade: 'a', round: 1, dayKey: '2026-07-01',
     }
     const logs = Array(14).fill(review)
 
@@ -265,12 +373,11 @@ describe('bulkImport — 导入日志去重', () => {
       await result.current.bulkImport(snapshot, logs)
     })
 
-    // 快照中 '一' 只应用一次：interval 3（而非爆炸值）
-    // 取最后一次调用（hoisted mock 闭包可能携带前序测试的异步遗留调用）
+    // 去重后只应用一次：interval 3（而非爆炸值）
     const state = mockSaveCurrentSnapshot.mock.calls.at(-1)[0].state
     expect(state.children[0].progress['一']).toMatchObject({ ease: 2.6, interval: 3, repetitions: 1 })
     // 写入 DB 的日志已去重：只追加 1 条
-    const appended = mockAppendLogs.mock.calls[0][0]
+    const appended = mockAppendLogs.mock.calls.at(-1)[0]
     expect(appended.length).toBe(1)
   })
 })

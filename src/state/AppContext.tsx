@@ -383,16 +383,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // 不去重会导致同一复习被多次应用、SM-2 间隔指数爆炸
     const uniqueLogs = dedupeLogEntries(logs)
 
-    // 1. Apply all log entries to the snapshot state for the canonical view
+    // 1. 只重放快照时间戳之后的日志（增量物化下快照是完整状态：
+    //    快照已包含其 timestamp 之前所有日志的效果，重放它们会把
+    //    同一复习重复应用——reps 翻倍、interval 指数放大（如导入
+    //    20260731 数据后'途'字 3 次被算成 6 次、interval 变成 595 天））。
+    //    快照之后的日志不可能已被快照包含，必须重放以补全新进度。
     const newState = deepCloneState(snapshot.state)
-    for (const entry of uniqueLogs) {
+    const pendingLogs = uniqueLogs
+      .filter(e => e.timestamp > snapshot.timestamp)
+      .sort((a, b) => a.timestamp - b.timestamp)
+    for (const entry of pendingLogs) {
       applyEntry(newState, entry)
     }
 
     // 2. Save the merged snapshot as current
     await saveCurrentSnapshot({ timestamp: Date.now(), state: newState })
 
-    // 3. Append all log entries
+    // 3. Append all log entries（去重后的全集：同步载体 + 审计线索）
     if (uniqueLogs.length > 0) {
       await appendLogs(uniqueLogs)
     }
