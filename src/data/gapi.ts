@@ -18,6 +18,9 @@ const DRIVE_DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/drive/
 /** Default buffer in ms: tokens expiring within this window are treated as expired. */
 export const DEFAULT_TOKEN_BUFFER_MS = 60000
 
+/** Custom event dispatched when a token is saved after trySilentLogin timeout. */
+export const TOKEN_READY_EVENT = 'jihanzi:token-ready'
+
 // localStorage keys
 const STORAGE_KEY_TOKEN = 'jihanzi_auth_token'
 const STORAGE_KEY_EXPIRY = 'jihanzi_auth_expiry'
@@ -303,31 +306,45 @@ export async function trySilentLogin(): Promise<string | null> {
 
   try {
     return await new Promise<string | null>((resolve) => {
-      // Save original callback
-      const originalCallback = tokenClient!.callback
+      let settled = false
 
       tokenClient!.callback = (response) => {
         if (response.error) {
-          resolve(null)
+          if (!settled) {
+            settled = true
+            resolve(null)
+          }
           return
         }
+        // Always save the token — even if the timeout already fired.
+        // This handles the case where Google shows a popup despite prompt: ''
+        // and the user takes longer than the timeout to complete login.
         accessToken = response.access_token
         tokenExpiry = Date.now() + (parseInt(response.expires_in || '3600') * 1000)
         saveTokenToStorage(accessToken!, tokenExpiry)
-        resolve(accessToken!)
+        if (!settled) {
+          settled = true
+          resolve(accessToken!)
+        } else {
+          // Token saved after timeout — notify AuthProvider so it can
+          // update React state without requiring a second manual login.
+          window.dispatchEvent(new CustomEvent(TOKEN_READY_EVENT))
+        }
       }
 
       ;(tokenClient!.requestAccessToken as (config?: { prompt: string }) => void)({ prompt: '' })
 
-      // Restore original callback after a timeout in case the
-      // silent request never completes (e.g., no Google session)
+      // Safety timeout: if the callback never fires (e.g. no Google session
+      // and prompt:'' results in no callback at all), resolve null so we don't
+      // hang forever. We do NOT restore the original callback — let this one
+      // stay in place so that if Google fires it later (e.g. user completed a
+      // popup), the token is still saved to localStorage for a subsequent
+      // login() call to pick up via hasValidToken().
       setTimeout(() => {
-        // If the callback hasn't fired yet, resolve null silently
-        // and restore the original callback
-        if (tokenClient) {
-          tokenClient.callback = originalCallback
+        if (!settled) {
+          settled = true
+          resolve(null)
         }
-        resolve(null)
       }, 3000)
     })
   } catch {

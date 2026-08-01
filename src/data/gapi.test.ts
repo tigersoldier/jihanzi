@@ -2,6 +2,8 @@
  * Tests for gapi.ts localStorage token persistence.
  *
  * Uses a mock localStorage since jsdom in vitest 4.x doesn't provide it globally.
+ *
+ * @vitest-environment jsdom
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -60,6 +62,7 @@ import {
   initTokenClient,
   trySilentLogin,
   isGoogleConfigured,
+  TOKEN_READY_EVENT,
 } from './gapi'
 
 const STORAGE_KEY_TOKEN = 'jihanzi_auth_token'
@@ -314,6 +317,58 @@ describe('gapi localStorage persistence', () => {
       const result = await promise
 
       expect(result).toBeNull()
+    })
+
+    it('saves token and dispatches TOKEN_READY_EVENT when callback fires after timeout', async () => {
+      // Given: token client initialized and trySilentLogin called
+      initTokenClient()
+      const mockTokenClient = (google.accounts.oauth2.initTokenClient as ReturnType<typeof vi.fn>).mock.results[0].value
+
+      // Spy on window.dispatchEvent
+      const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+
+      const promise = trySilentLogin()
+
+      // When: timeout fires first (simulating user taking >3s in popup)
+      vi.advanceTimersByTime(3500)
+      const result = await promise
+      expect(result).toBeNull() // Promise resolved null after timeout
+
+      // Then: callback fires late (user completed login in popup)
+      mockTokenClient.callback({
+        access_token: 'late-token-from-popup',
+        expires_in: '3600',
+      })
+
+      // Token should be saved to module state and localStorage
+      expect(hasValidToken()).toBe(true)
+      // Should dispatch TOKEN_READY_EVENT so AuthContext can auto-login
+      expect(dispatchSpy).toHaveBeenCalledTimes(1)
+      const event = dispatchSpy.mock.calls[0][0] as CustomEvent
+      expect(event.type).toBe(TOKEN_READY_EVENT)
+
+      dispatchSpy.mockRestore()
+    })
+
+    it('does not resolve twice when callback fires before timeout', async () => {
+      // Given: token client initialized
+      initTokenClient()
+      const mockTokenClient = (google.accounts.oauth2.initTokenClient as ReturnType<typeof vi.fn>).mock.results[0].value
+
+      // When: callback fires immediately with success
+      mockRequestAccessToken.mockImplementationOnce(() => {
+        mockTokenClient.callback({
+          access_token: 'fast-token',
+          expires_in: '3600',
+        })
+      })
+
+      const promise = trySilentLogin()
+
+      // Then: advance past timeout — should NOT affect the already-resolved promise
+      vi.advanceTimersByTime(3500)
+      const result = await promise
+      expect(result).toBe('fast-token') // Still the original token, not null
     })
   })
 })

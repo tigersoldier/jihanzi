@@ -17,6 +17,8 @@ const {
   mockLoadUserFromStorage,
   mockClearTokenStorage,
   mockGetUserProfile,
+  mockHasValidToken,
+  mockRequestAccessToken,
 } = vi.hoisted(() => ({
   mockRestoreToken: vi.fn(() => false),
   mockTrySilentLogin: vi.fn(() => Promise.resolve(null)),
@@ -24,6 +26,8 @@ const {
   mockLoadUserFromStorage: vi.fn(() => null),
   mockClearTokenStorage: vi.fn(),
   mockGetUserProfile: vi.fn(),
+  mockHasValidToken: vi.fn(() => false),
+  mockRequestAccessToken: vi.fn(() => Promise.resolve('test-token')),
 }))
 
 vi.mock('../data/gapi', () => ({
@@ -31,16 +35,17 @@ vi.mock('../data/gapi', () => ({
   initGoogleLibraries: vi.fn().mockResolvedValue(undefined),
   initGapiClient: vi.fn().mockResolvedValue(undefined),
   initTokenClient: vi.fn(),
-  requestAccessToken: vi.fn().mockResolvedValue('test-token'),
+  requestAccessToken: () => mockRequestAccessToken(),
   signOut: vi.fn(),
   getUserProfile: () => mockGetUserProfile(),
-  hasValidToken: () => false,
+  hasValidToken: () => mockHasValidToken(),
   restoreToken: () => mockRestoreToken(),
   trySilentLogin: () => mockTrySilentLogin(),
   saveUserToStorage: vi.fn(),
   loadUserFromStorage: () => mockLoadUserFromStorage(),
   clearUserStorage: vi.fn(),
   clearTokenStorage: () => mockClearTokenStorage(),
+  TOKEN_READY_EVENT: 'jihanzi:token-ready',
 }))
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -61,6 +66,9 @@ describe('AuthContext', () => {
       email: 'test@example.com',
       picture: 'https://example.com/photo.jpg',
     })
+    mockHasValidToken.mockReturnValue(false)
+    mockRequestAccessToken.mockReset()
+    mockRequestAccessToken.mockResolvedValue('test-token')
   })
 
   describe('on mount (demo mode — no Google config)', () => {
@@ -231,6 +239,125 @@ describe('AuthContext', () => {
         picture: '',
       })
     })
+
+    it('skips requestAccessToken when valid token already exists (e.g., from late trySilentLogin callback)', async () => {
+      mockIsGoogleConfigured.mockReturnValue(true)
+      mockHasValidToken.mockReturnValue(true) // Token was saved by late callback
+
+      const { result } = renderHook(() => useAuth(), { wrapper })
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false)
+      })
+
+      mockRequestAccessToken.mockClear()
+
+      await act(async () => {
+        await result.current.login()
+      })
+
+      // Must NOT show a second popup — token is already valid
+      expect(mockRequestAccessToken).not.toHaveBeenCalled()
+      // Must still fetch profile and set logged-in state
+      expect(mockGetUserProfile).toHaveBeenCalled()
+      expect(result.current.isLoggedIn).toBe(true)
+    })
+
+    it('calls requestAccessToken when no valid token exists', async () => {
+      mockIsGoogleConfigured.mockReturnValue(true)
+      mockHasValidToken.mockReturnValue(false)
+
+      const { result } = renderHook(() => useAuth(), { wrapper })
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false)
+      })
+
+      mockRequestAccessToken.mockClear()
+
+      await act(async () => {
+        await result.current.login()
+      })
+
+      // Must show popup since no valid token
+      expect(mockRequestAccessToken).toHaveBeenCalled()
+      expect(result.current.isLoggedIn).toBe(true)
+    })
+  })
+
+  describe('TOKEN_READY_EVENT handler', () => {
+    it('auto-logs in when TOKEN_READY_EVENT fires and token is valid', async () => {
+      mockIsGoogleConfigured.mockReturnValue(true)
+      // Simulate: init flow finished, user not logged in, then late callback
+      // saves a token and dispatches TOKEN_READY_EVENT
+      mockHasValidToken.mockReturnValue(true)
+
+      const { result } = renderHook(() => useAuth(), { wrapper })
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false)
+      })
+
+      // User is not logged in yet (init flow didn't log them in)
+      expect(result.current.isLoggedIn).toBe(false)
+
+      // Dispatch TOKEN_READY_EVENT (simulating late trySilentLogin callback)
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('jihanzi:token-ready'))
+      })
+
+      await waitFor(() => {
+        expect(result.current.isLoggedIn).toBe(true)
+      })
+
+      expect(result.current.user).toEqual({
+        name: 'Test User',
+        email: 'test@example.com',
+        picture: 'https://example.com/photo.jpg',
+      })
+    })
+
+    it('does nothing when TOKEN_READY_EVENT fires but token is not valid', async () => {
+      mockIsGoogleConfigured.mockReturnValue(true)
+      mockHasValidToken.mockReturnValue(false) // No valid token
+
+      const { result } = renderHook(() => useAuth(), { wrapper })
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false)
+      })
+
+      expect(result.current.isLoggedIn).toBe(false)
+
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('jihanzi:token-ready'))
+      })
+
+      // Should stay logged out — token not valid
+      expect(result.current.isLoggedIn).toBe(false)
+    })
+
+    it('does not double-login when already logged in', async () => {
+      mockIsGoogleConfigured.mockReturnValue(true)
+      mockRestoreToken.mockReturnValue(true) // Will log in via init flow
+
+      const { result } = renderHook(() => useAuth(), { wrapper })
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false)
+      })
+
+      expect(result.current.isLoggedIn).toBe(true)
+      const callCount = mockGetUserProfile.mock.calls.length
+
+      // Dispatch event — should be ignored since already logged in
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('jihanzi:token-ready'))
+      })
+
+      // getUserProfile should NOT have been called again
+      expect(mockGetUserProfile.mock.calls.length).toBe(callCount)
+    })
   })
 
   describe('error state', () => {
@@ -256,10 +383,7 @@ describe('AuthContext', () => {
     })
 
     it('exposes error when login() fails', async () => {
-      const { requestAccessToken } = await import('../data/gapi')
-      const mockReqToken = requestAccessToken as ReturnType<typeof vi.fn>
-      mockReqToken.mockRejectedValueOnce(new Error('⛔ Core error code: MissingUrl'))
-
+      mockRequestAccessToken.mockRejectedValueOnce(new Error('⛔ Core error code: MissingUrl'))
       mockIsGoogleConfigured.mockReturnValue(true)
 
       const { result } = renderHook(() => useAuth(), { wrapper })
@@ -277,13 +401,10 @@ describe('AuthContext', () => {
     })
 
     it('clears error on successful login after a previous error', async () => {
-      const { requestAccessToken } = await import('../data/gapi')
-      const mockReqToken = requestAccessToken as ReturnType<typeof vi.fn>
       // First call fails
-      mockReqToken.mockRejectedValueOnce(new Error('Some error'))
+      mockRequestAccessToken.mockRejectedValueOnce(new Error('Some error'))
       // Second call succeeds
-      mockReqToken.mockResolvedValueOnce('valid-token')
-
+      mockRequestAccessToken.mockResolvedValueOnce('valid-token')
       mockIsGoogleConfigured.mockReturnValue(true)
 
       const { result } = renderHook(() => useAuth(), { wrapper })

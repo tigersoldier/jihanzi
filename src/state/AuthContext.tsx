@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import {
   initGoogleLibraries,
   initGapiClient,
@@ -14,6 +14,7 @@ import {
   loadUserFromStorage,
   clearTokenStorage,
   clearUserStorage,
+  TOKEN_READY_EVENT,
 } from '../data/gapi'
 
 interface UserProfile {
@@ -101,6 +102,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setIsLoading(false))
   }, [])
 
+  // 监听 trySilentLogin 延迟回调保存的 token。
+  // 当 trySilentLogin 超时后 Google 才回调（用户完成弹窗登录），
+  // token 被保存到 localStorage 但 React 状态未更新。
+  // 此监听器检测到有效 token 时自动完成登录，无需用户再次点击。
+  const isLoggedInRef = useRef(isLoggedIn)
+  isLoggedInRef.current = isLoggedIn
+
+  useEffect(() => {
+    if (!isGoogleConfigured()) return
+
+    let handling = false
+
+    const handleTokenReady = async () => {
+      if (handling || isLoggedInRef.current) return
+      if (!hasValidToken()) return
+      handling = true
+      try {
+        const profile = await getUserProfile()
+        saveUserToStorage(profile)
+        setUser(profile)
+        setIsLoggedIn(true)
+        setError(null)
+      } catch {
+        // Token 可能无效 — 忽略，用户可手动登录
+      } finally {
+        handling = false
+      }
+    }
+
+    window.addEventListener(TOKEN_READY_EVENT, handleTokenReady)
+    return () => window.removeEventListener(TOKEN_READY_EVENT, handleTokenReady)
+  }, [])
+
   const login = useCallback(async () => {
     if (!isGoogleConfigured()) {
       // Demo mode — simulate login and persist state
@@ -113,7 +147,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setIsLoading(true)
     try {
-      await requestAccessToken()
+      // 如果已有有效 token（如 trySilentLogin 延迟回调已保存），
+      // 跳过弹窗直接拉取 profile，避免用户看到第二次 OAuth 弹窗
+      if (!hasValidToken()) {
+        await requestAccessToken()
+      }
       const profile = await getUserProfile()
       saveUserToStorage(profile)
       setUser(profile)
