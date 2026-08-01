@@ -87,7 +87,7 @@ describe('isUTF8Corrupted', () => {
 // repairCorruptedLogs — migration repair tests
 // ============================================================
 
-import db, { appendLog, repairCorruptedLogs, getReviewsForChild, getReviewsForChildChar, getReviewsForChildCharPaginated } from './db'
+import db, { appendLog, repairCorruptedLogs, getReviewsForChild, getReviewsForChildChar, getReviewsForChildCharPaginated, dedupeLocalLogs } from './db'
 
 function makeReviewEntry(overrides: Partial<AnyLogEntry> = {}): AnyLogEntry {
   return {
@@ -416,5 +416,35 @@ describe('getReviewsForChildCharPaginated', () => {
     expect(next.entries).toHaveLength(0)
     expect(next.hasMore).toBe(false)
     expect(next.cursor).toBeNull()
+  })
+})
+
+describe('dedupeLocalLogs', () => {
+  beforeEach(async () => {
+    await db.logs.clear()
+  })
+
+  it('删除重复条目，保留每个去重键的首次记录', async () => {
+    const r1 = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1, grade: 'a' })
+    const r2 = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1, grade: 'b' }) // 同 key 重复
+    const r3 = makeReviewEntry({ childId: 'child_a', character: '山', timestamp: 2, grade: 'b' })
+    await db.logs.bulkAdd([r1, r2, r3])
+
+    const deleted = await dedupeLocalLogs()
+
+    expect(deleted).toBe(1)
+    const remaining = await db.logs.toArray()
+    expect(remaining).toHaveLength(2)
+    // 保留首次记录（id 最小），即 grade 'a'
+    const kept = remaining.find(r => r.character === '花')
+    expect(kept?.grade).toBe('a')
+  })
+
+  it('无重复时删除 0 条', async () => {
+    const r1 = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1 })
+    const r2 = makeReviewEntry({ childId: 'child_a', character: '山', timestamp: 2 })
+    await db.logs.bulkAdd([r1, r2])
+
+    expect(await dedupeLocalLogs()).toBe(0)
   })
 })

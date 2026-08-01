@@ -54,7 +54,7 @@ vi.mock('../data/gapi', () => ({
 }))
 
 // Mock db with state accumulation so applyAndPersist can read the latest snapshot
-const { mockTransaction, mockGetLatestSnapshot, mockSaveCurrentSnapshot } = vi.hoisted(() => {
+const { mockTransaction, mockGetLatestSnapshot, mockSaveCurrentSnapshot, mockAppendLogs } = vi.hoisted(() => {
   let savedSnapshot: { timestamp: number; state: any } | null = null
 
   return {
@@ -66,6 +66,7 @@ const { mockTransaction, mockGetLatestSnapshot, mockSaveCurrentSnapshot } = vi.h
     mockSaveCurrentSnapshot: vi.fn(async (snap: { timestamp: number; state: any }) => {
       savedSnapshot = snap
     }),
+    mockAppendLogs: vi.fn().mockResolvedValue(undefined),
   }
 })
 
@@ -77,7 +78,7 @@ vi.mock('../data/db', () => ({
     meta: {},
   },
   appendLog: vi.fn().mockResolvedValue(undefined),
-  appendLogs: vi.fn().mockResolvedValue(undefined),
+  appendLogs: mockAppendLogs,
   getLatestSnapshot: mockGetLatestSnapshot,
   saveCurrentSnapshot: mockSaveCurrentSnapshot,
   saveHistoricalSnapshot: vi.fn().mockResolvedValue(undefined),
@@ -234,5 +235,42 @@ describe('AppContext — sync triggers', () => {
       const child = result.current.app.state.children.find(c => c.id === childId)!
       expect(child.progress['一']).toBeUndefined()
     }
+  })
+})
+
+describe('bulkImport — 导入日志去重', () => {
+  it('导入含重复条目的日志时不去重应用（interval 不爆炸、DB 无重复）', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+
+    // 等待 auth + 初始加载完成（与其它测试一致）
+    await vi.waitFor(() => {
+      expect(result.current.bulkImport).toBeDefined()
+    }, { timeout: 1000 })
+
+    const snapshot = {
+      timestamp: Date.now(),
+      state: {
+        children: [{ id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} }],
+        wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '二'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    }
+    // 导出数据可能携带历史同步 bug 的重复条目（同一条 review ×14）
+    const review = {
+      timestamp: 100, type: 'review', childId: 'child_1', character: '一', grade: 'a', round: 1, dayKey: '2026-07-01',
+    }
+    const logs = Array(14).fill(review)
+
+    await act(async () => {
+      await result.current.bulkImport(snapshot, logs)
+    })
+
+    // 快照中 '一' 只应用一次：interval 3（而非爆炸值）
+    // 取最后一次调用（hoisted mock 闭包可能携带前序测试的异步遗留调用）
+    const state = mockSaveCurrentSnapshot.mock.calls.at(-1)[0].state
+    expect(state.children[0].progress['一']).toMatchObject({ ease: 2.6, interval: 3, repetitions: 1 })
+    // 写入 DB 的日志已去重：只追加 1 条
+    const appended = mockAppendLogs.mock.calls[0][0]
+    expect(appended.length).toBe(1)
   })
 })

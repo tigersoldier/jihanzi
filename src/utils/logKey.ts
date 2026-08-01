@@ -24,3 +24,23 @@ export function makeDiffKey(e: AnyLogEntry): string {
   const entityId = (e as any).childId || (e as any).wordBookId || ''
   return `${e.timestamp}:${e.type}:${entityId}`
 }
+
+/**
+ * 按 makeDiffKey 稳定去重，保留每个键首次出现的条目。
+ *
+ * 日志条目不可变，相同键即相同事件（如同步重复追加产生的副本）。
+ * 去重是同步合并、快照重放和日志修复的前置步骤——重复条目若被
+ * 多次应用到 SM-2 状态会导致间隔指数爆炸（同一复习被应用 N 次，
+ * interval 每次乘以 ease）。
+ */
+export function dedupeLogEntries(entries: AnyLogEntry[]): AnyLogEntry[] {
+  const seen = new Set<string>()
+  const result: AnyLogEntry[] = []
+  for (const entry of entries) {
+    const key = makeDiffKey(entry)
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(entry)
+  }
+  return result
+}

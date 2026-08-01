@@ -483,3 +483,43 @@ export async function pushLogs(
     return writeFile(childFolderId, name, logEntries.join('\n') + '\n', NDJSON_MIME)
   }
 }
+
+/**
+ * 修复单个日志文件：检测并移除重复条目（历史同步 bug 的遗留污染）。
+ *
+ * 读取文件 → 逐行解析 → 按 makeDiffKey 去重（不可解析的行原样保留，
+ * 与 pushLogs 的容错策略一致）→ 若行数减少则重写整个文件。
+ * 返回是否重写以及去重后的条目（供调用方重建快照）。
+ */
+export async function repairLogFile(
+  folderId: string,
+  fileName: string,
+  fileId: string,
+): Promise<{ repaired: boolean; entries: AnyLogEntry[] }> {
+  const current = await readFile(fileId)
+  const lines = current.split('\n').filter(l => l.trim())
+
+  const seen = new Set<string>()
+  const uniqueLines: string[] = []
+  const entries: AnyLogEntry[] = []
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line) as AnyLogEntry
+      const key = makeDiffKey(entry)
+      if (seen.has(key)) continue // 重复条目 → 丢弃
+      seen.add(key)
+      uniqueLines.push(line)
+      entries.push(entry)
+    } catch {
+      // 不可解析的行无法参与去重——原样保留
+      uniqueLines.push(line)
+    }
+  }
+
+  if (uniqueLines.length < lines.length) {
+    const updated = uniqueLines.join('\n') + '\n'
+    await writeFile(folderId, fileName, updated, NDJSON_MIME, fileId)
+    return { repaired: true, entries }
+  }
+  return { repaired: false, entries }
+}

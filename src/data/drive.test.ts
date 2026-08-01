@@ -37,7 +37,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-import { writeFile, pushLogs, readFile, logFileName, snapshotFileName, listFiles, pushSnapshot } from './drive'
+import { writeFile, pushLogs, readFile, logFileName, snapshotFileName, listFiles, pushSnapshot, repairLogFile } from './drive'
 import { makeDiffKey } from '../utils/logKey'
 
 describe('writeFile', () => {
@@ -517,5 +517,83 @@ describe('pushLogs with interval filename', () => {
     await pushLogs('folder-id', ['{"entry":1}'], null, 'log_2026-07-01.jsonl')
     const reqConfig = mockGapiRequest.mock.calls[0][0]
     expect(reqConfig.body).toContain('"name":"log_2026-07-01.jsonl"')
+  })
+})
+
+describe('repairLogFile', () => {
+  const lineA = '{"timestamp":1,"type":"review","childId":"c1","character":"花","grade":"a","round":1,"dayKey":"2026-01-01"}'
+  const lineB = '{"timestamp":2,"type":"review","childId":"c1","character":"山","grade":"b","round":1,"dayKey":"2026-01-01"}'
+  const mockFetch = vi.fn()
+  const mockGapiRequest = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGapiRequest.mockReset()
+    mockFetch.mockReset()
+    vi.stubGlobal('fetch', mockFetch)
+    vi.stubGlobal('gapi', {
+      client: {
+        request: mockGapiRequest,
+        drive: {
+          files: {
+            list: vi.fn().mockResolvedValue({ result: { files: [] } }),
+            create: vi.fn().mockImplementation(({ resource }) =>
+              Promise.resolve({ result: { id: `mock-id-${resource.name}` } }),
+            ),
+          },
+        },
+      },
+    })
+  })
+
+  it('文件含重复条目时重写为去重内容并返回去重后的条目', async () => {
+    // Drive 文件被历史同步 bug 重复追加：每条 ×3
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new TextEncoder().encode([lineA, lineA, lineA, lineB, lineB].join('\n') + '\n').buffer.slice(0)),
+    })
+    mockGapiRequest.mockResolvedValue({ result: { id: 'file-id' } })
+
+    const result = await repairLogFile('folder-abc', 'log_2026-07-01.jsonl', 'file-id')
+
+    expect(result.repaired).toBe(true)
+    expect(result.entries).toHaveLength(2)
+
+    // 重写：PATCH 到同一 file id，内容为去重后的两行
+    expect(mockGapiRequest).toHaveBeenCalledTimes(1)
+    const req = mockGapiRequest.mock.calls[0][0]
+    expect(req.method).toBe('PATCH')
+    expect(req.path).toBe('/upload/drive/v3/files/file-id')
+    const bodyLines = (req.body as string).split('\n').filter(l => l.trim())
+    expect(bodyLines).toHaveLength(2)
+    expect(bodyLines[0]).toContain('"character":"花"')
+    expect(bodyLines[1]).toContain('"character":"山"')
+  })
+
+  it('文件无重复时不写盘，返回 repaired=false', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new TextEncoder().encode(lineA + '\n' + lineB + '\n').buffer.slice(0)),
+    })
+
+    const result = await repairLogFile('folder-abc', 'log_2026-07-01.jsonl', 'file-id')
+
+    expect(result.repaired).toBe(false)
+    expect(result.entries).toHaveLength(2)
+    expect(mockGapiRequest).not.toHaveBeenCalled()
+  })
+
+  it('解析失败的行保留但不参与去重', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new TextEncoder().encode(lineA + '\n[broken-json\n' + lineA + '\n').buffer.slice(0)),
+    })
+    mockGapiRequest.mockResolvedValue({ result: { id: 'file-id' } })
+
+    const result = await repairLogFile('folder-abc', 'log_2026-07-01.jsonl', 'file-id')
+
+    // 可解析条目去重后 1 条 → repaired（行数减少）
+    expect(result.repaired).toBe(true)
+    expect(result.entries).toHaveLength(1)
   })
 })

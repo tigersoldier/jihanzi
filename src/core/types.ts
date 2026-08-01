@@ -225,3 +225,13 @@ export const GRADE_COLORS: Record<Grade, string> = {
 export const SM2_INITIAL_EASE = 2.5
 export const SM2_MIN_EASE = 1.3
 export const SM2_INITIAL_INTERVAL = 1
+
+/**
+ * 间隔天数上限（100 年）。
+ *
+ * 防御纵深：正常 SM-2 复习链（连续 a 评级）需要 11+ 次才能触达该值，
+ * 实际使用中不可能达到。若日志重复条目被多次应用（同步 bug 的历史教训），
+ * interval 会按 ease 指数爆炸，此上限保证最坏情况下仍得到合法日期，
+ * 而不是 "NaN-NaN-NaN"。
+ */
+export const MAX_SANE_INTERVAL_DAYS = 36500

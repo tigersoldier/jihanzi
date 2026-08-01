@@ -8,8 +8,9 @@
  * 4. Update: lastKnownRemoteTime = max(Drive modifiedTime)
  */
 
-import type { AnyLogEntry, Snapshot } from '../core/types'
+import type { AnyLogEntry, AppState, Snapshot } from '../core/types'
 import { applyEntry, deepCloneState } from '../core/log'
+import { MAX_SANE_INTERVAL_DAYS } from '../core/sm2'
 import {
   appendLogs,
   getLogsAfter,
@@ -20,6 +21,7 @@ import {
   getLogTimestampRange,
   getLogsAfterPaginated,
   getLastKnownRemoteTime,
+  dedupeLocalLogs,
 } from './db'
 import {
   findOrCreateRootFolder,
@@ -30,12 +32,61 @@ import {
   pushMeta,
   pushSnapshot,
   pushLogs,
+  repairLogFile,
   logFileName,
   snapshotFileName,
 } from './drive'
 import { getIntervalKey, getIntervalKeysBetween } from '../utils/date'
-import { makeDiffKey } from '../utils/logKey'
+import { makeDiffKey, dedupeLogEntries } from '../utils/logKey'
 import { hasValidToken } from './gapi'
+
+// ============================================================
+// 污染检测与状态重建
+// ============================================================
+
+/** ease 上限：需要 25+ 次连续 a 评级才能达到，实际使用不可能 */
+const MAX_SANE_EASE = 5
+
+const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * 检测快照中的 SM-2 状态是否被污染（重复日志条目被多次应用）。
+ *
+ * 历史 bug：同步重复追加日志条目后，同一条复习被应用到快照多次，
+ * interval 按 ease 指数爆炸（如 1.79e28 天）、nextReview 溢出为
+ * "NaN-NaN-NaN"、ease 累积到不可能的高度。
+ */
+export function isSnapshotPolluted(state: AppState): boolean {
+  for (const child of state.children) {
+    for (const sm2 of Object.values(child.progress)) {
+      if (sm2.interval > MAX_SANE_INTERVAL_DAYS) return true
+      if (sm2.ease > MAX_SANE_EASE) return true
+      if (!DAY_KEY_RE.test(sm2.nextReview)) return true
+    }
+  }
+  return false
+}
+
+/**
+ * 从（去重后的）日志重建学习进度：保留快照结构（孩子、生字本、设置），
+ * 清空 progress/nextCharIndex 后按时间戳顺序重放全部日志。
+ *
+ * progress 完全由复习日志推导，因此去重日志是进度的唯一可信来源；
+ * 重建可修复重复应用造成的间隔爆炸。日志不完整时（如被裁剪）
+ * 重建结果会缺失被裁剪的进度——仅在检测到污染时使用。
+ */
+export function rebuildStateFromLogs(state: AppState, entries: AnyLogEntry[]): AppState {
+  const rebuilt = deepCloneState(state)
+  for (const child of rebuilt.children) {
+    child.progress = {}
+    child.nextCharIndex = 0
+  }
+  const sorted = dedupeLogEntries(entries).sort((a, b) => a.timestamp - b.timestamp)
+  for (const entry of sorted) {
+    applyEntry(rebuilt, entry)
+  }
+  return rebuilt
+}
 
 // ============================================================
 // Diff — content-based log dedup
@@ -192,9 +243,13 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
     }
 
     // Merge snapshot: pick the newer one by timestamp
+    // 若远程快照被污染（历史同步 bug 的遗留），不采用——保留本地快照，
+    // 由启动时的 repairPollutedData 用去重日志重建并推送修复。
     const localSnapshot = await getLatestSnapshot()
+    const remotePolluted = remoteSnapshot ? isSnapshotPolluted(remoteSnapshot.state) : false
     const bestSnapshot =
-      !localSnapshot || (remoteSnapshot && remoteSnapshot.timestamp > localSnapshot.timestamp)
+      !remotePolluted &&
+      (!localSnapshot || (remoteSnapshot && remoteSnapshot.timestamp > localSnapshot.timestamp))
         ? remoteSnapshot
         : localSnapshot
 
@@ -286,9 +341,13 @@ export async function pushChanges(
 
   const snapshotData = JSON.stringify(snapshot)
 
+  // 推送前去重：本地 DB 可能残留历史同步 bug 产生的重复条目，
+  // 去重保证新创建的日志文件也是干净的（pushLogs 只对已有文件去重）
+  const uniqueEntries = dedupeLogEntries(logEntries)
+
   // Group log entries by UTC interval key
   const logsByInterval = new Map<string, AnyLogEntry[]>()
-  for (const entry of logEntries) {
+  for (const entry of uniqueEntries) {
     const key = getIntervalKey(entry.timestamp)
     const group = logsByInterval.get(key)
     if (group) {
@@ -299,7 +358,7 @@ export async function pushChanges(
   }
 
   // Load historical snapshots for push
-  const historical = logEntries.length > 0
+  const historical = uniqueEntries.length > 0
     ? await getHistoricalSnapshots()
     : []
 
@@ -558,6 +617,75 @@ export async function ensureIntervalFilesOnDrive(): Promise<void> {
     }
   } catch (err) {
     console.error('Interval file check failed:', err)
+  }
+}
+
+// ============================================================
+// 污染修复（启动时执行一次）
+// ============================================================
+
+export interface RepairResult {
+  /** 快照是否被重建 */
+  snapshotRepaired: boolean
+  /** 被重写（去重）的 Drive 日志文件数 */
+  filesRepaired: number
+}
+
+/**
+ * 修复历史同步 bug（重复追加日志条目）遗留的数据污染：
+ *
+ * 1. 遍历所有孩子的 Drive 日志文件，把含重复条目的文件重写为去重内容
+ *    （防止污染继续传播给其它设备）；
+ * 2. 若本地快照的 SM-2 状态被污染（interval 爆炸 / ease 异常 / 非法日期），
+ *    用去重后的全量日志重建学习进度并保存，同时把修复后的快照推送到 Drive。
+ *
+ * 幂等：数据干净时不做任何写操作。启动时调用一次。
+ */
+export async function repairPollutedData(): Promise<RepairResult> {
+  const result: RepairResult = { snapshotRepaired: false, filesRepaired: 0 }
+  if (!hasValidToken()) return result
+
+  try {
+    const rootId = await findOrCreateRootFolder()
+    const snapshot = await getLatestSnapshot()
+    if (!snapshot) return result
+
+    // 0. 清理本地日志表中的重复条目（历史同步 bug 遗留），
+    //    保证统计数据与后续推送都基于干净日志
+    await dedupeLocalLogs()
+
+    // 1. 遍历日志文件：去重并重写污染文件，同时收集去重后的全部条目
+    const allEntries: AnyLogEntry[] = []
+    for (const child of snapshot.state.children) {
+      const childFolderId = await findOrCreateFolder(rootId, child.name)
+      const files = await listFiles(childFolderId)
+      for (const file of files) {
+        if (!file.name.startsWith('log_')) continue
+        const { repaired, entries } = await repairLogFile(childFolderId, file.name, file.id)
+        allEntries.push(...entries)
+        if (repaired) result.filesRepaired++
+      }
+    }
+
+    // 2. 本地快照污染 → 用去重后的全量日志重建进度
+    if (isSnapshotPolluted(snapshot.state) && allEntries.length > 0) {
+      const rebuilt = rebuildStateFromLogs(snapshot.state, allEntries)
+      await saveCurrentSnapshot({ timestamp: Date.now(), state: rebuilt })
+      result.snapshotRepaired = true
+
+      // 把修复后的快照推送到 Drive，避免其它设备继续拉到污染快照
+      const snapshotData = JSON.stringify({ timestamp: Date.now(), state: rebuilt })
+      for (const child of rebuilt.children) {
+        const childFolderId = await findOrCreateFolder(rootId, child.name)
+        const existing = await findFile(childFolderId, 'snapshot_current.json')
+        await pushSnapshot(childFolderId, snapshotData, existing?.id)
+      }
+    }
+
+    return result
+  } catch (err) {
+    console.error('repairPollutedData failed:', err)
+    return result
   }
 }
 

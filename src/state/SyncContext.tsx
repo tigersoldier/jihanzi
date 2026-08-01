@@ -15,6 +15,7 @@ import {
   syncOnce,
   initialPull,
   ensureIntervalFilesOnDrive,
+  repairPollutedData,
 } from '../data/sync'
 import { useAuth } from './AuthContext'
 import { useApp } from './AppContext'
@@ -54,6 +55,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       }
       // Ensure Drive has all local interval files (startup check only)
       ensureIntervalFilesOnDrive().catch(() => {})
+      // 修复历史同步 bug 遗留的日志重复与快照污染（启动时执行一次）
+      repairPollutedData().then(r => {
+        if (r.snapshotRepaired) reloadState()
+      }).catch(() => {})
     })
 
     // Start background sync

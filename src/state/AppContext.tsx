@@ -40,6 +40,7 @@ import db, {
   pruneOldestLogs,
 } from '../data/db'
 import { getIntervalKey } from '../utils/date'
+import { dedupeLogEntries } from '../utils/logKey'
 import { validateAddChar } from '../utils/chars'
 import { useAuth } from './AuthContext'
 import { notifyDataChanged } from '../data/sync'
@@ -378,9 +379,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     snapshot: { timestamp: number; state: AppState },
     logs: AnyLogEntry[],
   ): Promise<void> => {
+    // 导入前按内容去重：导出数据可能携带历史同步 bug 的重复条目，
+    // 不去重会导致同一复习被多次应用、SM-2 间隔指数爆炸
+    const uniqueLogs = dedupeLogEntries(logs)
+
     // 1. Apply all log entries to the snapshot state for the canonical view
     const newState = deepCloneState(snapshot.state)
-    for (const entry of logs) {
+    for (const entry of uniqueLogs) {
       applyEntry(newState, entry)
     }
 
@@ -388,8 +393,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await saveCurrentSnapshot({ timestamp: Date.now(), state: newState })
 
     // 3. Append all log entries
-    if (logs.length > 0) {
-      await appendLogs(logs)
+    if (uniqueLogs.length > 0) {
+      await appendLogs(uniqueLogs)
     }
 
     // 4. Update React state

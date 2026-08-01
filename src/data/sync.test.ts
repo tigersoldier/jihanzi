@@ -21,6 +21,8 @@ const {
   mockPushMeta,
   mockPushSnapshot,
   mockPushLogs,
+  mockListFiles,
+  mockRepairLogFile,
 } = vi.hoisted(() => ({
   mockFindOrCreateRootFolder: vi.fn(),
   mockFindOrCreateFolder: vi.fn(),
@@ -28,6 +30,8 @@ const {
   mockPushMeta: vi.fn(),
   mockPushSnapshot: vi.fn(),
   mockPushLogs: vi.fn(),
+  mockListFiles: vi.fn(),
+  mockRepairLogFile: vi.fn(),
 }))
 
 const { mockHasValidToken } = vi.hoisted(() => ({
@@ -49,6 +53,8 @@ vi.mock('./drive', () => ({
   pushMeta: (...args: any[]) => mockPushMeta(...args),
   pushSnapshot: (...args: any[]) => mockPushSnapshot(...args),
   pushLogs: (...args: any[]) => mockPushLogs(...args),
+  listFiles: (...args: any[]) => mockListFiles(...args),
+  repairLogFile: (...args: any[]) => mockRepairLogFile(...args),
   logFileName: (key: string) => `log_${key}.jsonl`,
   snapshotFileName: (key: string) => `snapshot_${key}.json`,
 }))
@@ -68,6 +74,7 @@ vi.mock('./db', () => ({
   getHistoricalSnapshots: () => mockGetHistoricalSnapshots(),
   appendLog: vi.fn(),
   appendLogs: (...args: any[]) => mockAppendLogs(...args),
+  dedupeLocalLogs: vi.fn().mockResolvedValue(0),
 }))
 
 const MOCK_LOG_ENTRIES = [
@@ -87,7 +94,7 @@ const MOCK_SNAPSHOT = {
   },
 }
 
-import { pushChanges, initialPull, syncOnce, diffEntries } from './sync'
+import { pushChanges, initialPull, syncOnce, diffEntries, isSnapshotPolluted, rebuildStateFromLogs, repairPollutedData } from './sync'
 
 // ============================================================
 // diffEntries — content-based log dedup
@@ -718,5 +725,308 @@ describe('syncOnce', () => {
 
     // pushLogs 不应被调用
     expect(mockPushLogs).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// isSnapshotPolluted — SM-2 状态污染检测
+// ============================================================
+
+describe('isSnapshotPolluted', () => {
+  const cleanState = {
+    children: [
+      {
+        id: 'child_a',
+        name: '小明',
+        wordBookId: 'wb_1',
+        nextCharIndex: 2,
+        progress: {
+          '花': { ease: 2.6, interval: 3, repetitions: 1, nextReview: '2026-07-04', lastGrade: 'a', firstReviewDay: '2026-07-01' },
+        },
+      },
+    ],
+    wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['花', '山'] }],
+    settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+  }
+
+  it('正常快照不被判定为污染', () => {
+    expect(isSnapshotPolluted(cleanState)).toBe(false)
+  })
+
+  it('interval 超过上限（重复应用导致指数爆炸）判定为污染', () => {
+    const polluted = JSON.parse(JSON.stringify(cleanState))
+    polluted.children[0].progress['花'].interval = 1.79e28
+    expect(isSnapshotPolluted(polluted)).toBe(true)
+  })
+
+  it('nextReview 为 NaN-NaN-NaN（日期溢出）判定为污染', () => {
+    const polluted = JSON.parse(JSON.stringify(cleanState))
+    polluted.children[0].progress['花'].nextReview = 'NaN-NaN-NaN'
+    expect(isSnapshotPolluted(polluted)).toBe(true)
+  })
+
+  it('ease 异常偏高（重复应用 25+ 次）判定为污染', () => {
+    const polluted = JSON.parse(JSON.stringify(cleanState))
+    polluted.children[0].progress['花'].ease = 6.8
+    expect(isSnapshotPolluted(polluted)).toBe(true)
+  })
+
+  it('无 progress 的快照不被判定为污染', () => {
+    const empty = JSON.parse(JSON.stringify(cleanState))
+    empty.children[0].progress = {}
+    expect(isSnapshotPolluted(empty)).toBe(false)
+  })
+})
+
+// ============================================================
+// rebuildStateFromLogs — 从去重日志重建学习进度
+// ============================================================
+
+describe('rebuildStateFromLogs', () => {
+  const pollutedState = {
+    children: [
+      {
+        id: 'child_a',
+        name: '小明',
+        wordBookId: 'wb_1',
+        // 污染的 nextCharIndex 和 progress
+        nextCharIndex: 100,
+        progress: {
+          '花': { ease: 6.8, interval: 1.79e28, repetitions: 43, nextReview: 'NaN-NaN-NaN', lastGrade: 'a', firstReviewDay: '2026-05-30' },
+        },
+      },
+    ],
+    wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['花', '山', '水'] }],
+    settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+  }
+
+  // 真实污染模式：同一条 review 被同步重复追加 14 次
+  const reviewOnce = {
+    timestamp: 100, type: 'review', childId: 'child_a', character: '花', grade: 'a', round: 1, dayKey: '2026-07-01',
+  }
+  const reviewTwice = {
+    timestamp: 200, type: 'review', childId: 'child_a', character: '山', grade: 'b', round: 1, dayKey: '2026-07-01',
+  }
+  const duplicatedLog = [
+    ...Array(14).fill(reviewOnce),
+    ...Array(14).fill(reviewTwice),
+  ]
+
+  it('重建后 interval/ease 恢复为去重日志的正确值，结构与 nextCharIndex 保留', () => {
+    const rebuilt = rebuildStateFromLogs(pollutedState, duplicatedLog)
+
+    const child = rebuilt.children[0]
+    // 结构保留
+    expect(child.name).toBe('小明')
+    expect(rebuilt.wordBooks[0].characters).toEqual(['花', '山', '水'])
+    // progress 恢复正确（花：1 次 a → interval 3；山：1 次 b → q=3 → ease 2.36 → interval 2）
+    expect(child.progress['花']).toMatchObject({ ease: 2.6, interval: 3, repetitions: 1 })
+    expect(child.progress['山']).toMatchObject({ ease: 2.36, interval: 2, repetitions: 1 })
+    // nextCharIndex 从日志重建（花、山都是首次复习 → 指针越过山）
+    expect(child.nextCharIndex).toBe(2)
+    // 污染字符被清除
+    expect(child.progress['花'].nextReview).not.toBe('NaN-NaN-NaN')
+  })
+
+  it('空日志重建为空 progress 且 nextCharIndex 归零', () => {
+    const rebuilt = rebuildStateFromLogs(pollutedState, [])
+    const child = rebuilt.children[0]
+    expect(child.progress).toEqual({})
+    expect(child.nextCharIndex).toBe(0)
+  })
+
+  it('不修改传入的状态（纯函数）', () => {
+    const original = JSON.stringify(pollutedState)
+    rebuildStateFromLogs(pollutedState, duplicatedLog)
+    expect(JSON.stringify(pollutedState)).toBe(original)
+  })
+})
+
+describe('pushChanges dedup', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockFindOrCreateRootFolder.mockResolvedValue('root-folder-id')
+    mockFindFile.mockResolvedValue(null)
+    mockPushMeta.mockResolvedValue('meta-file-id')
+    mockFindOrCreateFolder.mockImplementation((_parentId: string, name: string) =>
+      Promise.resolve(`folder-${name}`),
+    )
+    mockPushSnapshot.mockResolvedValue('snapshot-file-id')
+    mockPushLogs.mockResolvedValue('logs-file-id')
+  })
+
+  it('推送前去重：本地残留的重复条目不会写入 Drive 文件', async () => {
+    // 同一条 review 在本地 DB 中存在 14 份（历史同步 bug 的残留）
+    const entry = {
+      timestamp: 1001,
+      type: 'review',
+      childId: 'child_a',
+      character: '花',
+      grade: 'a',
+      round: 1,
+      dayKey: '2026-01-01',
+    }
+    const duplicated = Array(14).fill(entry)
+    // 新文件场景（existingFileId=null）——pushLogs 自身不做去重，
+    // 去重必须发生在 pushChanges 内
+    await pushChanges(duplicated as any, MOCK_SNAPSHOT as any)
+
+    const logLines = mockPushLogs.mock.calls[0][1] as string[]
+    expect(logLines.length).toBe(1)
+    expect(JSON.parse(logLines[0])).toMatchObject({ timestamp: 1001, character: '花' })
+  })
+
+  it('不同 key 的条目全部保留', async () => {
+    const e1 = { timestamp: 1001, type: 'review', childId: 'child_a', character: '花', grade: 'a', round: 1, dayKey: '2026-01-01' }
+    const e2 = { timestamp: 1002, type: 'review', childId: 'child_a', character: '山', grade: 'b', round: 1, dayKey: '2026-01-01' }
+    await pushChanges([e1, e2, e1] as any, MOCK_SNAPSHOT as any)
+
+    const logLines = mockPushLogs.mock.calls[0][1] as string[]
+    expect(logLines.length).toBe(2)
+  })
+})
+
+// ============================================================
+// repairPollutedData — 启动修复：去重日志文件 + 重建污染快照
+// ============================================================
+
+describe('repairPollutedData', () => {
+  const pollutedSnapshot = {
+    timestamp: 1000,
+    state: {
+      children: [
+        {
+          id: 'child_a',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 1,
+          progress: {
+            '花': { ease: 6.8, interval: 1.79e28, repetitions: 43, nextReview: 'NaN-NaN-NaN', lastGrade: 'a', firstReviewDay: '2026-05-30' },
+          },
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['花', '山'] }],
+      settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+    },
+  }
+  const reviewEntry = {
+    timestamp: 100, type: 'review', childId: 'child_a', character: '花', grade: 'a', round: 1, dayKey: '2026-07-01',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockHasValidToken.mockReturnValue(true)
+    mockFindOrCreateRootFolder.mockResolvedValue('root-folder-id')
+    mockFindOrCreateFolder.mockResolvedValue('child-folder-id')
+    mockListFiles.mockResolvedValue([
+      { id: 'log-file-id', name: 'log_2026-07-01.jsonl', modifiedTime: '2026-07-02T00:00:00.000Z' },
+    ])
+    mockRepairLogFile.mockResolvedValue({ repaired: true, entries: [reviewEntry] })
+    mockGetLatestSnapshot.mockResolvedValue(pollutedSnapshot)
+  })
+
+  it('污染快照被重建为去重日志的正确进度，并推送修复后的快照', async () => {
+    mockFindFile.mockResolvedValue({ id: 'snapshot-file-id', modifiedTime: '2026-07-02T00:00:00.000Z' })
+
+    const result = await repairPollutedData()
+
+    expect(result.snapshotRepaired).toBe(true)
+    // 重建后的快照：'花' 的 interval 恢复为 1 次 a 评级的正确值
+    const saved = mockSaveCurrentSnapshot.mock.calls[0][0]
+    const child = saved.state.children[0]
+    expect(child.progress['花']).toMatchObject({ ease: 2.6, interval: 3, repetitions: 1 })
+    expect(child.progress['花'].nextReview).not.toBe('NaN-NaN-NaN')
+    // 修复后的快照推送到 Drive
+    expect(mockPushSnapshot).toHaveBeenCalledWith(
+      'child-folder-id',
+      expect.stringContaining('"interval":3'),
+      'snapshot-file-id',
+    )
+  })
+
+  it('重复日志文件被重写（repairLogFile 对每个 log 文件调用）', async () => {
+    const result = await repairPollutedData()
+
+    expect(mockRepairLogFile).toHaveBeenCalledWith(
+      'child-folder-id',
+      'log_2026-07-01.jsonl',
+      'log-file-id',
+    )
+    expect(result.filesRepaired).toBe(1)
+  })
+
+  it('数据干净时不做任何修改', async () => {
+    const cleanSnapshot = JSON.parse(JSON.stringify(pollutedSnapshot))
+    cleanSnapshot.state.children[0].progress['花'] = {
+      ease: 2.6, interval: 3, repetitions: 1, nextReview: '2026-07-04', lastGrade: 'a', firstReviewDay: '2026-07-01',
+    }
+    mockGetLatestSnapshot.mockResolvedValue(cleanSnapshot)
+    mockRepairLogFile.mockResolvedValue({ repaired: false, entries: [reviewEntry] })
+
+    const result = await repairPollutedData()
+
+    expect(result.snapshotRepaired).toBe(false)
+    expect(result.filesRepaired).toBe(0)
+    expect(mockSaveCurrentSnapshot).not.toHaveBeenCalled()
+    expect(mockPushSnapshot).not.toHaveBeenCalled()
+  })
+})
+
+describe('initialPull pollution guard', () => {
+  const pollutedRemoteSnapshot = {
+    timestamp: 9999,
+    state: {
+      children: [
+        {
+          id: 'child_a', name: '小明', wordBookId: 'wb_1', nextCharIndex: 1,
+          progress: {
+            '花': { ease: 6.8, interval: 1.79e28, repetitions: 43, nextReview: 'NaN-NaN-NaN', lastGrade: 'a', firstReviewDay: '2026-05-30' },
+          },
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['花', '山'] }],
+      settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+    },
+  }
+  const localCleanSnapshot = {
+    timestamp: 1000,
+    state: {
+      children: [
+        {
+          id: 'child_a', name: '小明', wordBookId: 'wb_1', nextCharIndex: 1,
+          progress: {
+            '花': { ease: 2.6, interval: 3, repetitions: 1, nextReview: '2026-07-04', lastGrade: 'a', firstReviewDay: '2026-07-01' },
+          },
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['花', '山'] }],
+      settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+    },
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockHasValidToken.mockReturnValue(true)
+    mockGetLatestSnapshot.mockResolvedValue(localCleanSnapshot)
+    mockGetLogsAfter.mockResolvedValue([])
+  })
+
+  it('远程快照被污染时不覆盖本地快照（阻止污染传播）', async () => {
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
+      childData: {
+        '小明': {
+          snapshot: JSON.stringify(pollutedRemoteSnapshot),
+          logs: [],
+        },
+      },
+    })
+
+    await initialPull()
+
+    // 本地干净快照（timestamp 1000）不应被远程污染快照（9999）覆盖
+    expect(mockSaveCurrentSnapshot).not.toHaveBeenCalledWith(
+      expect.objectContaining({ timestamp: 9999 }),
+    )
   })
 })

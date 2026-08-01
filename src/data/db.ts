@@ -9,6 +9,7 @@
 
 import Dexie, { type Table } from 'dexie'
 import type { AnyLogEntry, ReviewEntry, Snapshot } from '../core/types'
+import { makeDiffKey } from '../utils/logKey'
 
 /** Database schema version and definition */
 class JihanziDB extends Dexie {
@@ -138,6 +139,31 @@ export async function repairCorruptedLogs(): Promise<number> {
 /** Append a single log entry to IndexedDB */
 export async function appendLog(entry: AnyLogEntry): Promise<number> {
   return db.logs.add(entry)
+}
+
+/**
+ * 清理本地日志表中的重复条目（历史同步 bug 的遗留污染）。
+ *
+ * 按 makeDiffKey 保留每个键 id 最小（最先写入）的一条，删除其余副本。
+ * 返回删除的条数。数据干净时返回 0。
+ */
+export async function dedupeLocalLogs(): Promise<number> {
+  const seen = new Set<string>()
+  const toDelete: number[] = []
+  // each 按主键（id）升序遍历，保证每个键首次遇到的是最早写入的副本
+  await db.logs.each(entry => {
+    const key = makeDiffKey(entry)
+    if (seen.has(key)) {
+      const id = (entry as any).id as number
+      if (typeof id === 'number') toDelete.push(id)
+    } else {
+      seen.add(key)
+    }
+  })
+  if (toDelete.length > 0) {
+    await db.logs.bulkDelete(toDelete)
+  }
+  return toDelete.length
 }
 
 /** Append multiple log entries (e.g., from sync) */
