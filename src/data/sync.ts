@@ -294,7 +294,14 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
     const hadBestSnapshot = bestSnapshot !== null
     if (hadBestSnapshot && dedupedRemoteOnly.length > 0) {
       const mergedState = deepCloneState(bestSnapshot!.state)
-      const sortedRemoteOnly = [...dedupedRemoteOnly].sort((a, b) => a.timestamp - b.timestamp)
+      // 与导入同一规则：只重放快照时间戳之后的条目。
+      // 快照（增量物化）已包含其 timestamp 之前所有日志的效果——全新浏览器
+      // 全量拉取时远程 snapshot_current 是完整状态，重放已物化条目会把同一
+      // 复习重复应用（reps 翻倍、interval 指数放大，如'途'字 3 次被算成 6 次、
+      // interval 变成 595 天）。快照之后的条目不可能已被包含，必须重放补新。
+      const sortedRemoteOnly = dedupedRemoteOnly
+        .filter(e => e.timestamp > bestSnapshot!.timestamp)
+        .sort((a, b) => a.timestamp - b.timestamp)
       let changed = false
       for (const entry of sortedRemoteOnly) {
         if (applyEntry(mergedState, entry)) changed = true

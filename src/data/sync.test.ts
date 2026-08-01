@@ -448,6 +448,45 @@ describe('initialPull', () => {
     expect(savedChild.progress['三'].lastGrade).toBe('c')
   })
 
+  it('全新浏览器全量拉取时不重复重放快照已物化的日志（回归：途 3 次不被算成 6 次）', async () => {
+    // 真实场景：Drive 上的 snapshot_current.json 是完整状态（增量物化），
+    // progress 已包含全部远程日志的效果。全新浏览器本地为空 → remoteOnly
+    // = 全部远程日志；若全部重放到完整快照上，同一复习被应用两次：
+    // 途 3→6 次、interval 22→595 天（与导入 bug 相同）。
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
+      childData: {
+        '小明': {
+          snapshot: JSON.stringify({
+            timestamp: 1785564867246,
+            state: {
+              children: [{
+                id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 2,
+                progress: {
+                  '途': { ease: 2.8, interval: 22, repetitions: 3, nextReview: '2026-08-18', lastGrade: 'a', firstReviewDay: '2026-07-08' },
+                },
+              }],
+              wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '途'] }],
+              settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+            },
+          }),
+          logs: [
+            '{"timestamp":1783566656274,"type":"review","childId":"child_1","character":"途","grade":"a","round":1,"dayKey":"2026-07-08"}',
+            '{"timestamp":1783616286291,"type":"review","childId":"child_1","character":"途","grade":"a","round":1,"dayKey":"2026-07-09"}',
+            '{"timestamp":1785205079007,"type":"review","childId":"child_1","character":"途","grade":"a","round":1,"dayKey":"2026-07-27"}',
+          ],
+        },
+      },
+    })
+
+    await initialPull()
+
+    const savedSnapshot = mockSaveCurrentSnapshot.mock.calls.at(-1)[0]
+    const savedChild = savedSnapshot.state.children[0]
+    // 快照已物化的复习不重复应用：途保持 3 次、interval 22（而非 6 次、595 天）
+    expect(savedChild.progress['途']).toMatchObject({ ease: 2.8, interval: 22, repetitions: 3 })
+  })
+
   it('replays remote review entries into snapshot after merge (incremental)', async () => {
     // 模拟增量同步场景：本地已有 snapshot（含部分 progress），
     // 远程拉取到新的复习日志
@@ -470,9 +509,9 @@ describe('initialPull', () => {
     }
     mockGetLatestSnapshot.mockResolvedValue(localSnapshot)
 
-    // 远程新日志：设备 B 上学了「三」
+    // 远程新日志：设备 B 上学了「三」（时间戳晚于本地快照 3000）
     const remoteLogLinesWithNewReview = [
-      '{"timestamp":2003,"type":"review","childId":"child_x","character":"三","grade":"a","round":1,"dayKey":"2026-07-03"}',
+      '{"timestamp":3001,"type":"review","childId":"child_x","character":"三","grade":"a","round":1,"dayKey":"2026-07-03"}',
     ]
     mockPullAllData.mockResolvedValue({
       meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
