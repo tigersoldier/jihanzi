@@ -1,0 +1,15 @@
+# 构建产物与依赖
+dist/
+node_modules/
+
+# 环境变量
+.env
+.env.*.local
+
+# 文档与配置
+docs/
+*.md
+package-lock.json
+
+# TypeScript 构建信息
+tsconfig.tsbuildinfo
