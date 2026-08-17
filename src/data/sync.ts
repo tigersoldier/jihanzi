@@ -410,9 +410,16 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
     // state (SM-2 progress, nextCharIndex, etc.) reflects the merged
     // logs. Without this, the snapshot would be stale after a first
     // import or after pulling reviews produced on another device.
+    // 修订：采纳了旧代码产物（无 appliedThrough 水位）的快照时，用本地
+    // 日志并集逐字校验修复——旧代码的中度污染（×3、interval 封顶）会绕过
+    // 廉价阈值，不能在采纳时直接进入本地状态，也不能继续流转。
+    const adoptedLegacy =
+      bestSnapshot !== null &&
+      bestSnapshot !== localSnapshot &&
+      bestSnapshot.appliedThrough === undefined
     const hadBestSnapshot = bestSnapshot !== null
-    if (hadBestSnapshot && dedupedRemoteOnly.length > 0) {
-      const mergedState = deepCloneState(bestSnapshot!.state)
+    if (hadBestSnapshot && (dedupedRemoteOnly.length > 0 || adoptedLegacy)) {
+      let mergedState = deepCloneState(bestSnapshot!.state)
       // 与导入同一规则：只重放快照水位之后的条目。
       // 快照（增量物化）已包含其水位之前所有日志的效果——全新浏览器
       // 全量拉取时远程 snapshot_current 是完整状态，重放已物化条目会把同一
@@ -427,14 +434,36 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
       for (const entry of sortedRemoteOnly) {
         if (applyEntry(mergedState, entry)) changed = true
       }
-      if (changed) {
-        let appliedThrough = watermark
-        if (sortedRemoteOnly.length > 0) {
-          appliedThrough = Math.max(
-            appliedThrough,
-            sortedRemoteOnly[sortedRemoteOnly.length - 1].timestamp,
+
+      let appliedThrough = watermark
+      if (sortedRemoteOnly.length > 0) {
+        appliedThrough = Math.max(
+          appliedThrough,
+          sortedRemoteOnly[sortedRemoteOnly.length - 1].timestamp,
+        )
+      }
+
+      if (adoptedLegacy) {
+        const unionLogs = await getLogsAfter(0)
+        if (unionLogs.length > 0) {
+          const { state: repaired, repaired: repairedChars } = repairSnapshotProgress(
+            mergedState,
+            unionLogs,
           )
+          const salvaged = salvageUnverifiableHeavy(repaired, unionLogs)
+          if (repairedChars.length > 0 || salvaged.length > 0) {
+            mergedState = repaired
+            changed = true
+            // 逐字修复覆盖了并集日志的全部效果，水位推进到并集最大 timestamp
+            appliedThrough = unionLogs.reduce(
+              (max, e) => Math.max(max, e.timestamp),
+              appliedThrough,
+            )
+          }
         }
+      }
+
+      if (changed) {
         await saveCurrentSnapshot({
           timestamp: Date.now(),
           appliedThrough,

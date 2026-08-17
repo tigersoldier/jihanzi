@@ -583,6 +583,115 @@ describe('initialPull', () => {
     expect(savedChild.progress['途']).toMatchObject({ ease: 2.8, interval: 22, repetitions: 3 })
   })
 
+  it('采纳无 appliedThrough 的旧版快照时逐字校验修复（中度污染）', async () => {
+    // 真实事故模式：今 3 条日志被旧代码应用 3 次 → reps 9 / interval 21362。
+    // 廉价阈值不拦截（interval < 36500、ease < 5、日期合法），逐字校验必须兑住。
+    const jinLogs = [
+      { timestamp: 100, type: 'review', childId: 'child_1', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
+      { timestamp: 200, type: 'review', childId: 'child_1', character: '今', grade: 'a', round: 1, dayKey: '2026-05-19' },
+      { timestamp: 300, type: 'review', childId: 'child_1', character: '今', grade: 'a', round: 1, dayKey: '2026-08-04' },
+    ]
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
+      childData: {
+        小明: {
+          snapshot: JSON.stringify({
+            timestamp: 1000,
+            state: {
+              children: [
+                {
+                  id: 'child_1',
+                  name: '小明',
+                  wordBookId: 'wb_1',
+                  nextCharIndex: 1,
+                  progress: {
+                    今: {
+                      ease: 3.4,
+                      interval: 21362,
+                      repetitions: 9,
+                      nextReview: '2085-01-28',
+                      lastGrade: 'a',
+                      firstReviewDay: '2026-05-18',
+                    },
+                  },
+                },
+              ],
+              wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['今'] }],
+              settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+            },
+          }),
+          logs: jinLogs.map(l => JSON.stringify(l)),
+        },
+      },
+    })
+    mockGetLogsAfter.mockResolvedValue(jinLogs)
+
+    await initialPull()
+
+    const saved = mockSaveCurrentSnapshot.mock.calls.at(-1)[0]
+    expect(saved.state.children[0].progress['今']).toMatchObject({
+      ease: 2.7,
+      interval: 8,
+      repetitions: 2,
+      nextReview: '2026-08-12',
+    })
+    // 修复后写入水位（P3 标记）：max(快照墙钟 1000, 并集最大 ts 300)
+    expect(saved.appliedThrough).toBe(1000)
+  })
+
+  it('有 appliedThrough 的 P3 快照直接信任，不逐字校验', async () => {
+    // 远程快照带水位（P3 产物）→ 不做逐字校验；只重放水位之后的条目
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
+      childData: {
+        小明: {
+          snapshot: JSON.stringify({
+            timestamp: 10_000_000,
+            appliedThrough: 10_500_000,
+            state: {
+              children: [
+                {
+                  id: 'child_1',
+                  name: '小明',
+                  wordBookId: 'wb_1',
+                  nextCharIndex: 1,
+                  progress: {
+                    今: {
+                      ease: 2.7,
+                      interval: 8,
+                      repetitions: 2,
+                      nextReview: '2026-08-12',
+                      lastGrade: 'a',
+                      firstReviewDay: '2026-05-18',
+                    },
+                  },
+                },
+              ],
+              wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['今', '二'] }],
+              settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+            },
+          }),
+          logs: [
+            '{"timestamp":10501000,"type":"review","childId":"child_1","character":"二","grade":"a","round":1,"dayKey":"2026-08-06"}',
+          ],
+        },
+      },
+    })
+    mockGetLogsAfter.mockResolvedValue([])
+
+    await initialPull()
+
+    const saved = mockSaveCurrentSnapshot.mock.calls.at(-1)[0]
+    // 水位之后的条目被重放（新字「二」物化）
+    expect(saved.state.children[0].progress['二']).toBeDefined()
+    // 水位之内的「今」不被重复应用
+    expect(saved.state.children[0].progress['今'].repetitions).toBe(2)
+    // 水位推进到重放条目的最大 timestamp
+    expect(saved.appliedThrough).toBe(10501000)
+    // 未触发逐字校验（校验会以 0 为下界拉全量日志）
+    expect(mockGetLogsAfter).not.toHaveBeenCalledWith(0)
+  })
+
   it('replays remote review entries into snapshot after merge (incremental)', async () => {
     // 模拟增量同步场景：本地已有 snapshot（含部分 progress），
     // 远程拉取到新的复习日志

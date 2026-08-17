@@ -41,7 +41,11 @@ import { getIntervalKey } from '../utils/date'
 import { dedupeLogEntries } from '../utils/logKey'
 import { validateAddChar } from '../utils/chars'
 import { useAuth } from './AuthContext'
-import { notifyDataChanged } from '../data/sync'
+import {
+  notifyDataChanged,
+  repairSnapshotProgress,
+  salvageUnverifiableHeavy,
+} from '../data/sync'
 
 export interface AppContextState {
   state: AppState
@@ -442,22 +446,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
         applyEntry(newState, entry)
       }
 
-      // 2. Save the merged snapshot as current（水位取重放条目的最大 timestamp）
+      // 2. 修订：导入旧代码产物（无 appliedThrough 水位）的快照时逐字校验修复——
+      //    导出→导入迁移流程同样自愈。可验证且与日志不一致的字用重放值替换，
+      //    不可验证的重污染字 8a 兑底。水位推进到并集日志的最大 timestamp。
       let appliedThrough = watermark
       if (pendingLogs.length > 0) {
         appliedThrough = Math.max(appliedThrough, pendingLogs[pendingLogs.length - 1].timestamp)
       }
-      await saveCurrentSnapshot({ timestamp: Date.now(), appliedThrough, state: newState })
+      let finalState = newState
+      if (snapshot.appliedThrough === undefined) {
+        const { state: repaired, repaired: repairedChars } = repairSnapshotProgress(
+          newState,
+          uniqueLogs,
+        )
+        const salvaged = salvageUnverifiableHeavy(repaired, uniqueLogs)
+        if (repairedChars.length > 0 || salvaged.length > 0) {
+          finalState = repaired
+          appliedThrough = uniqueLogs.reduce((max, e) => Math.max(max, e.timestamp), appliedThrough)
+        }
+      }
 
-      // 3. Append all log entries（去重后的全集：同步载体 + 审计线索）
+      // 3. Save the merged snapshot as current
+      await saveCurrentSnapshot({ timestamp: Date.now(), appliedThrough, state: finalState })
+
+      // 4. Append all log entries（去重后的全集：同步载体 + 审计线索）
       if (uniqueLogs.length > 0) {
         await appendLogs(uniqueLogs)
       }
 
-      // 4. Update React state
-      setState(newState)
+      // 5. Update React state
+      setState(finalState)
 
-      // 5. Trigger sync to push imported data to Drive
+      // 6. Trigger sync to push imported data to Drive
       notifyDataChanged()
     },
     [],

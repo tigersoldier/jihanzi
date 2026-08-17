@@ -17,21 +17,15 @@ const { mockNotifyDataChanged } = vi.hoisted(() => ({
   mockNotifyDataChanged: vi.fn(),
 }))
 
-vi.mock('../data/sync', () => ({
-  notifyDataChanged: () => mockNotifyDataChanged(),
-  getSyncStatus: () => 'online',
-  onSyncStatusChange: vi.fn().mockReturnValue(() => {}),
-  startBackgroundSync: vi.fn(),
-  stopBackgroundSync: vi.fn(),
-  checkOnlineStatus: vi.fn(),
-  initialPull: vi.fn().mockResolvedValue({
-    didMerge: false,
-    driveIsEmpty: true,
-    remoteSnapshot: null,
-    remoteLogEntries: [],
-  }),
-  SyncStatus: {},
-}))
+vi.mock('../data/sync', async () => {
+  // 复用真实的 repairSnapshotProgress / salvageUnverifiableHeavy，
+  // 只拦截同步触发函数
+  const actual = await vi.importActual<typeof import('../data/sync')>('../data/sync')
+  return {
+    ...actual,
+    notifyDataChanged: () => mockNotifyDataChanged(),
+  }
+})
 
 // Mock gapi
 vi.mock('../data/gapi', () => ({
@@ -331,12 +325,13 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
       await result.current.bulkImport(snapshot, logs)
     })
 
-    // 快照是完整状态：这些日志已被快照物化，重放会重复计数（reps 3→6、interval 22→595）
+    // 旧版快照（无 appliedThrough）→ 逐字校验修复：07-09 的复习未到期
+    // （07-08 评 a 后 07-11 才到期），按防护语义不计入 → reps 2 / interval 8
     const state = mockSaveCurrentSnapshot.mock.calls.at(-1)[0].state
     expect(state.children[0].progress['途']).toMatchObject({
-      ease: 2.8,
-      interval: 22,
-      repetitions: 3,
+      ease: 2.7,
+      interval: 8,
+      repetitions: 2,
     })
     // nextCharIndex 不被重复推进
     expect(state.children[0].nextCharIndex).toBe(2)
@@ -464,12 +459,13 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
       await result.current.bulkImport(snapshot, logs)
     })
 
-    // 基座 2 次 + 重放 07-27 的 1 次 = 3 次；interval 8 → 22（非 595）
+    // 旧版快照（无 appliedThrough）→ 逐字校验修复后按防护语义：
+    // 07-09 未到期不计入 → 只有 07-08 与 07-27 两次；interval 8（非 595）
     const state = mockSaveCurrentSnapshot.mock.calls.at(-1)[0].state
     expect(state.children[0].progress['途']).toMatchObject({
-      ease: 2.8,
-      interval: 22,
-      repetitions: 3,
+      ease: 2.7,
+      interval: 8,
+      repetitions: 2,
     })
   })
 
@@ -577,5 +573,97 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
     expect(saved.state.children[0].progress['二']).toBeDefined()
     // 保存的水位推进到重放条目的最大 timestamp
     expect(saved.appliedThrough).toBe(6000)
+  })
+
+  it('导入旧版污染快照（无 appliedThrough）时逐字校验修复', async () => {
+    const result = await renderWithBulkImport()
+
+    // 真实事故模式：今 3 条日志被应用 3 次 → reps 9 / interval 21362
+    const snapshot = {
+      timestamp: 1000,
+      state: {
+        children: [
+          {
+            id: 'child_1',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: 1,
+            progress: {
+              今: {
+                ease: 3.4,
+                interval: 21362,
+                repetitions: 9,
+                nextReview: '2085-01-28',
+                lastGrade: 'a',
+                firstReviewDay: '2026-05-18',
+              },
+            },
+          },
+        ],
+        wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['今', '二'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    }
+    const logs = [
+      { timestamp: 100, type: 'review', childId: 'child_1', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
+      { timestamp: 200, type: 'review', childId: 'child_1', character: '今', grade: 'a', round: 1, dayKey: '2026-05-19' },
+      { timestamp: 300, type: 'review', childId: 'child_1', character: '今', grade: 'a', round: 1, dayKey: '2026-08-04' },
+    ]
+
+    await act(async () => {
+      await result.current.bulkImport(snapshot, logs)
+    })
+
+    const saved = mockSaveCurrentSnapshot.mock.calls.at(-1)[0]
+    expect(saved.state.children[0].progress['今']).toMatchObject({
+      ease: 2.7,
+      interval: 8,
+      repetitions: 2,
+      nextReview: '2026-08-12',
+    })
+    // 修复后写入水位标记（P3 产物）：max(快照墙钟 1000, 日志最大 ts 300)
+    expect(saved.appliedThrough).toBe(1000)
+  })
+
+  it('导入旧版快照时不可验证的重污染字被 8a 兑底（NaN 日期 → interval 1）', async () => {
+    const result = await renderWithBulkImport()
+
+    const snapshot = {
+      timestamp: 1000,
+      state: {
+        children: [
+          {
+            id: 'child_1',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: 1,
+            progress: {
+              花: {
+                ease: 6.8,
+                interval: 1.79e28,
+                repetitions: 43,
+                nextReview: 'NaN-NaN-NaN',
+                lastGrade: 'a',
+                firstReviewDay: '2026-05-30',
+              },
+            },
+          },
+        ],
+        wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['花'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    }
+    // 日志缺早期复习：firstReviewDay 不一致 → 不可验证 → 只能兑底
+    const logs = [
+      { timestamp: 100, type: 'review', childId: 'child_1', character: '花', grade: 'a', round: 1, dayKey: '2026-07-01' },
+    ]
+
+    await act(async () => {
+      await result.current.bulkImport(snapshot, logs)
+    })
+
+    const saved = mockSaveCurrentSnapshot.mock.calls.at(-1)[0]
+    expect(saved.state.children[0].progress['花']).toMatchObject({ ease: 2.5, interval: 1 })
+    expect(saved.state.children[0].progress['花'].nextReview).not.toBe('NaN-NaN-NaN')
   })
 })
