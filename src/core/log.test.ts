@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { replayLog } from './log'
-import type { AppState, Snapshot } from './types'
+import { replayLog, applyEntry } from './log'
+import type { AppState, Snapshot, ReviewEntry } from './types'
 
 function makeSnapshot(state: AppState): Snapshot {
   return { timestamp: 0, state }
@@ -155,5 +155,86 @@ describe('replayLog', () => {
     expect(progress.interval).toBe(3)
     expect(progress.repetitions).toBe(2)
     expect(progress.nextReview).toBe('2026-06-30')
+  })
+})
+
+describe('applyReview 未到期防护', () => {
+  const baseState = (): AppState =>
+    makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 1,
+          progress: {
+            花: {
+              ease: 2.6,
+              interval: 3,
+              repetitions: 1,
+              nextReview: '2026-07-05',
+              lastGrade: 'a',
+              firstReviewDay: '2026-07-02',
+            },
+          },
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '测试', characters: ['花', '山'] }],
+    })
+
+  const review = (overrides: Partial<ReviewEntry> = {}): ReviewEntry => ({
+    timestamp: 1,
+    type: 'review',
+    childId: 'child_1',
+    character: '花',
+    grade: 'a',
+    round: 1,
+    dayKey: '2026-07-05',
+    ...overrides,
+  })
+
+  it('到期复习正常应用', () => {
+    const state = baseState()
+    const changed = applyEntry(state, review({ dayKey: '2026-07-05' }))
+    expect(changed).toBe(true)
+    expect(state.children[0].progress['花'].repetitions).toBe(2)
+  })
+
+  it('未到期的 round-1 复习不计入 SM-2（返回 false，状态不变）', () => {
+    const state = baseState()
+    const before = JSON.stringify(state.children[0].progress['花'])
+    const changed = applyEntry(state, review({ dayKey: '2026-07-03' }))
+    expect(changed).toBe(false)
+    expect(JSON.stringify(state.children[0].progress['花'])).toBe(before)
+  })
+
+  it('首次复习（无记忆状态）永远应用', () => {
+    const state = baseState()
+    const changed = applyEntry(state, review({ character: '山', dayKey: '2026-07-03' }))
+    expect(changed).toBe(true)
+    expect(state.children[0].progress['山']).toBeDefined()
+  })
+
+  it('同日重复评分（双击）第二条被忽略', () => {
+    const state = baseState()
+    expect(applyEntry(state, review({ dayKey: '2026-07-05', timestamp: 1 }))).toBe(true)
+    expect(applyEntry(state, review({ dayKey: '2026-07-05', timestamp: 2 }))).toBe(false)
+    expect(state.children[0].progress['花'].repetitions).toBe(2)
+  })
+
+  it('到期 d 评级正常重置', () => {
+    const state = baseState()
+    const changed = applyEntry(state, review({ dayKey: '2026-07-05', grade: 'd' }))
+    expect(changed).toBe(true)
+    expect(state.children[0].progress['花'].repetitions).toBe(0)
+    expect(state.children[0].progress['花'].interval).toBe(1)
+  })
+
+  it('双设备分叉：同一字隔天重复复习只计第一条', () => {
+    // 设备 A 07-05 复习（到期），设备 B 用旧状态 07-06 又复习一次
+    const state = baseState()
+    expect(applyEntry(state, review({ dayKey: '2026-07-05', timestamp: 100 }))).toBe(true)
+    expect(applyEntry(state, review({ dayKey: '2026-07-06', timestamp: 200 }))).toBe(false)
+    expect(state.children[0].progress['花'].repetitions).toBe(2)
   })
 })

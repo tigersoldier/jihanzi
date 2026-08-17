@@ -373,7 +373,8 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
         settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
       },
     }
-    // 快照时间戳之后的 review：快照不可能已包含它，必须重放
+    // 快照时间戳之后的 review：但 07-27 < nextReview 08-18，未到期防护
+    // 不允许重复计入（快照状态已包含该复习的效果）
     const logs = [
       {
         timestamp: 2000,
@@ -392,9 +393,9 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
 
     const state = mockSaveCurrentSnapshot.mock.calls.at(-1)[0].state
     expect(state.children[0].progress['一']).toMatchObject({
-      ease: 2.9,
-      interval: 64,
-      repetitions: 4,
+      ease: 2.8,
+      interval: 22,
+      repetitions: 3,
     })
   })
 

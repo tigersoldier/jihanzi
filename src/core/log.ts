@@ -223,6 +223,13 @@ function applyReview(state: AppState, entry: ReviewEntry): boolean {
   if (!child) return false
 
   const current = child.progress[entry.character]
+
+  // 未到期防护：任务队列只包含到期字（scheduler 的 isDueForReview），
+  // 未到期的 round-1 复习只可能来自多设备分叉的重复复习、历史数据的
+  // 机械重复或重复点击。保留日志（审计/统计），但不重复计入 SM-2——
+  // 否则 interval 会按 ease 成倍放大，复习时间被异常延后。
+  if (current && current.nextReview > entry.dayKey) return false
+
   const updated = updateSM2(current, entry.grade, entry.dayKey)
   child.progress[entry.character] = updated
 
