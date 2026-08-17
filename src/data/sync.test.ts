@@ -43,6 +43,10 @@ const { mockHasValidToken } = vi.hoisted(() => ({
   mockHasValidToken: vi.fn().mockReturnValue(true),
 }))
 
+const { mockReadFile } = vi.hoisted(() => ({
+  mockReadFile: vi.fn(),
+}))
+
 const { mockPullAllData, mockSaveCurrentSnapshot, mockAppendLogs, mockGetHistoricalSnapshots } =
   vi.hoisted(() => ({
     mockPullAllData: vi.fn(),
@@ -61,6 +65,7 @@ vi.mock('./drive', () => ({
   pushLogs: (...args: any[]) => mockPushLogs(...args),
   listFiles: (...args: any[]) => mockListFiles(...args),
   repairLogFile: (...args: any[]) => mockRepairLogFile(...args),
+  readFile: (...args: any[]) => mockReadFile(...args),
   logFileName: (key: string) => `log_${key}.jsonl`,
   snapshotFileName: (key: string) => `snapshot_${key}.json`,
 }))
@@ -1378,9 +1383,10 @@ describe('repairPollutedData', () => {
     ])
     mockRepairLogFile.mockResolvedValue({ repaired: true, entries: [reviewEntry] })
     mockGetLatestSnapshot.mockResolvedValue(pollutedSnapshot)
+    mockGetLogsAfter.mockResolvedValue([reviewEntry])
   })
 
-  it('污染快照被重建为去重日志的正确进度，并推送修复后的快照', async () => {
+  it('不可验证的重污染字（NaN 日期）被 8a 兑底重置为 interval=1，并推送修复后的快照', async () => {
     mockFindFile.mockResolvedValue({
       id: 'snapshot-file-id',
       modifiedTime: '2026-07-02T00:00:00.000Z',
@@ -1389,17 +1395,69 @@ describe('repairPollutedData', () => {
     const result = await repairPollutedData()
 
     expect(result.snapshotRepaired).toBe(true)
-    // 重建后的快照：'花' 的 interval 恢复为 1 次 a 评级的正确值
+    expect(result.salvaged).toBe(1)
+    // 快照的 firstReviewDay(05-30) 与日志首条(07-01)不一致 → 不可验证，
+    // 无法重放重建，只能兑底：interval=1、ease=2.5、nextReview 合法
     const saved = mockSaveCurrentSnapshot.mock.calls[0][0]
     const child = saved.state.children[0]
-    expect(child.progress['花']).toMatchObject({ ease: 2.6, interval: 3, repetitions: 1 })
+    expect(child.progress['花']).toMatchObject({ ease: 2.5, interval: 1 })
     expect(child.progress['花'].nextReview).not.toBe('NaN-NaN-NaN')
+    expect(child.progress['花'].firstReviewDay).toBe('2026-05-30')
     // 修复后的快照推送到 Drive
     expect(mockPushSnapshot).toHaveBeenCalledWith(
       'child-folder-id',
-      expect.stringContaining('"interval":3'),
+      expect.any(String),
       'snapshot-file-id',
     )
+  })
+
+  it('中度污染（×3、interval 封顶）且历史完整的字被逐字修复', async () => {
+    // 真实事故模式：今 3 条日志被应用 3 次 → reps 9 / interval 21362
+    const jinPolluted = {
+      timestamp: 1000,
+      state: {
+        children: [
+          {
+            id: 'child_a',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: 1,
+            progress: {
+              今: {
+                ease: 3.4,
+                interval: 21362,
+                repetitions: 9,
+                nextReview: '2085-01-28',
+                lastGrade: 'a',
+                firstReviewDay: '2026-05-18',
+              },
+            },
+          },
+        ],
+        wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['今', '山'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    }
+    const jinLogs = [
+      { timestamp: 100, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
+      { timestamp: 200, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-19' },
+      { timestamp: 300, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-08-04' },
+    ]
+    mockGetLatestSnapshot.mockResolvedValue(jinPolluted)
+    mockGetLogsAfter.mockResolvedValue(jinLogs)
+    mockRepairLogFile.mockResolvedValue({ repaired: false, entries: jinLogs })
+
+    const result = await repairPollutedData()
+
+    expect(result.snapshotRepaired).toBe(true)
+    expect(result.salvaged).toBe(0)
+    const saved = mockSaveCurrentSnapshot.mock.calls[0][0]
+    expect(saved.state.children[0].progress['今']).toMatchObject({
+      ease: 2.7,
+      interval: 8,
+      repetitions: 2,
+      nextReview: '2026-08-12',
+    })
   })
 
   it('重复日志文件被重写（repairLogFile 对每个 log 文件调用）', async () => {
@@ -1411,6 +1469,43 @@ describe('repairPollutedData', () => {
       'log-file-id',
     )
     expect(result.filesRepaired).toBe(1)
+  })
+
+  it('离线（无 token）时本地修复仍执行，不触碰 Drive', async () => {
+    mockHasValidToken.mockReturnValue(false)
+
+    const result = await repairPollutedData()
+
+    expect(result.snapshotRepaired).toBe(true)
+    expect(mockSaveCurrentSnapshot).toHaveBeenCalled()
+    expect(mockFindOrCreateRootFolder).not.toHaveBeenCalled()
+    expect(mockPushSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('云端快照污染时即使本地干净也推送本地快照覆盖', async () => {
+    const cleanSnapshot = JSON.parse(JSON.stringify(pollutedSnapshot))
+    cleanSnapshot.state.children[0].progress['花'] = {
+      ease: 2.6,
+      interval: 3,
+      repetitions: 1,
+      nextReview: '2026-07-04',
+      lastGrade: 'a',
+      firstReviewDay: '2026-07-01',
+    }
+    mockGetLatestSnapshot.mockResolvedValue(cleanSnapshot)
+    mockRepairLogFile.mockResolvedValue({ repaired: false, entries: [reviewEntry] })
+    // 云端 snapshot_current.json 是污染版
+    mockReadFile.mockResolvedValue(JSON.stringify(pollutedSnapshot))
+    mockListFiles.mockResolvedValue([
+      { id: 'log-file-id', name: 'log_2026-07-01.jsonl', modifiedTime: '2026-07-02T00:00:00.000Z' },
+      { id: 'snap-file-id', name: 'snapshot_current.json', modifiedTime: '2026-07-02T00:00:00.000Z' },
+    ])
+
+    const result = await repairPollutedData()
+
+    expect(result.snapshotRepaired).toBe(false)
+    expect(mockSaveCurrentSnapshot).not.toHaveBeenCalled()
+    expect(mockPushSnapshot).toHaveBeenCalled()
   })
 
   it('数据干净时不做任何修改', async () => {
@@ -1425,11 +1520,17 @@ describe('repairPollutedData', () => {
     }
     mockGetLatestSnapshot.mockResolvedValue(cleanSnapshot)
     mockRepairLogFile.mockResolvedValue({ repaired: false, entries: [reviewEntry] })
+    mockReadFile.mockResolvedValue(JSON.stringify(cleanSnapshot))
+    mockListFiles.mockResolvedValue([
+      { id: 'log-file-id', name: 'log_2026-07-01.jsonl', modifiedTime: '2026-07-02T00:00:00.000Z' },
+      { id: 'snap-file-id', name: 'snapshot_current.json', modifiedTime: '2026-07-02T00:00:00.000Z' },
+    ])
 
     const result = await repairPollutedData()
 
     expect(result.snapshotRepaired).toBe(false)
     expect(result.filesRepaired).toBe(0)
+    expect(result.salvaged).toBe(0)
     expect(mockSaveCurrentSnapshot).not.toHaveBeenCalled()
     expect(mockPushSnapshot).not.toHaveBeenCalled()
   })

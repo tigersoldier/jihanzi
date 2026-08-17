@@ -9,8 +9,9 @@
  */
 
 import type { AnyLogEntry, AppState, SM2State, Snapshot } from '../core/types'
+import { SM2_INITIAL_EASE, SM2_INITIAL_INTERVAL } from '../core/types'
 import { applyEntry, deepCloneState } from '../core/log'
-import { MAX_SANE_INTERVAL_DAYS } from '../core/sm2'
+import { MAX_SANE_INTERVAL_DAYS, toDateKey } from '../core/sm2'
 import {
   appendLogs,
   getLogsAfter,
@@ -33,6 +34,7 @@ import {
   pushSnapshot,
   pushLogs,
   repairLogFile,
+  readFile,
   logFileName,
   snapshotFileName,
 } from './drive'
@@ -742,53 +744,136 @@ export interface RepairResult {
   snapshotRepaired: boolean
   /** 被重写（去重）的 Drive 日志文件数 */
   filesRepaired: number
+  /** 8a 兑底：被重置为 interval=1 的不可验证重污染字数 */
+  salvaged: number
+}
+
+/** 8a 兑底阈值：10 年（正常复习链不可能达到，视为重复应用的确凿证据） */
+export const SALVAGE_INTERVAL_DAYS = 3650
+
+/**
+ * 8a 兑底：历史日志不完整（无法逐字验证）且 interval 达到 10 年以上的字，
+ * 是重复应用被封顶/放大的确凿证据——重置 interval=1、ease=2.5，
+ * 让该字尽快重新进入复习队列，靠真实复习自然重建记忆状态。
+ * 只动不可验证的字：可验证的字由逐字修复（repairSnapshotProgress）处理。
+ */
+export function salvageUnverifiableHeavy(state: AppState, entries: AnyLogEntry[]): string[] {
+  const expected = computeExpectedProgress(state, entries)
+  const salvaged: string[] = []
+
+  const tomorrow = new Date()
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  const tomorrowKey = toDateKey(tomorrow)
+
+  for (const child of state.children) {
+    const expChild = expected.children.find(c => c.id === child.id)
+    if (!expChild) continue
+    for (const [character, sm2] of Object.entries(child.progress)) {
+      const exp = expChild.progress[character]
+      const verifiable = exp !== undefined && exp.firstReviewDay === sm2.firstReviewDay
+      if (verifiable) continue
+      const heavy = sm2.interval >= SALVAGE_INTERVAL_DAYS || !DAY_KEY_RE.test(sm2.nextReview)
+      if (!heavy) continue
+      child.progress[character] = {
+        ...sm2,
+        ease: SM2_INITIAL_EASE,
+        interval: SM2_INITIAL_INTERVAL,
+        nextReview: tomorrowKey,
+      }
+      salvaged.push(character)
+    }
+  }
+  return salvaged
 }
 
 /**
- * 修复历史同步 bug（重复追加日志条目）遗留的数据污染：
+ * 修复历史同步 bug（重复追加日志条目）遗留的数据污染。
  *
- * 1. 遍历所有孩子的 Drive 日志文件，把含重复条目的文件重写为去重内容
- *    （防止污染继续传播给其它设备）；
- * 2. 若本地快照的 SM-2 状态被污染（interval 爆炸 / ease 异常 / 非法日期），
- *    用去重后的全量日志重建学习进度并保存，同时把修复后的快照推送到 Drive。
+ * 本地步骤（无需 token，离线也可自愈）：
+ *   1. 清理本地日志表重复条目；
+ *   2. 用本地日志对快照逐字核对，完整历史且不一致的字用重放值修复；
+ *   3. 不可验证的重污染字（8a）重置 interval=1 尽快重新复习。
+ * 云端步骤（需 token）：
+ *   4. 重写 Drive 上含重复条目的日志文件（防止污染继续传播）；
+ *   5. 本地快照被修复 / Drive 文件被重写 / 云端快照污染 → 推送本地
+ *      干净快照覆盖云端污染版。
  *
- * 幂等：数据干净时不做任何写操作。启动时调用一次。
+ * 幂等：数据干净时不做任何写操作。启动时执行一次。
  */
 export async function repairPollutedData(): Promise<RepairResult> {
-  const result: RepairResult = { snapshotRepaired: false, filesRepaired: 0 }
-  if (!hasValidToken()) return result
+  const result: RepairResult = { snapshotRepaired: false, filesRepaired: 0, salvaged: 0 }
 
+  // ---- 本地步骤（离线自愈） ----
+  try {
+    await dedupeLocalLogs()
+
+    const snapshot = await getLatestSnapshot()
+    if (!snapshot) return result
+
+    const localLogs = await getLogsAfter(0)
+    if (localLogs.length > 0) {
+      const { state: repaired, repaired: repairedChars } = repairSnapshotProgress(
+        snapshot.state,
+        localLogs,
+      )
+      const salvaged = salvageUnverifiableHeavy(repaired, localLogs)
+      result.salvaged = salvaged.length
+      if (repairedChars.length > 0 || salvaged.length > 0) {
+        await saveCurrentSnapshot({ timestamp: Date.now(), state: repaired })
+        result.snapshotRepaired = true
+      }
+    }
+  } catch (err) {
+    console.error('repairPollutedData local step failed:', err)
+    return result
+  }
+
+  // ---- 云端步骤 ----
+  if (!hasValidToken()) return result
   try {
     const rootId = await findOrCreateRootFolder()
     const snapshot = await getLatestSnapshot()
     if (!snapshot) return result
 
-    // 0. 清理本地日志表中的重复条目（历史同步 bug 遗留），
-    //    保证统计数据与后续推送都基于干净日志
-    await dedupeLocalLogs()
-
-    // 1. 遍历日志文件：去重并重写污染文件，同时收集去重后的全部条目
-    const allEntries: AnyLogEntry[] = []
+    // 1. 遍历日志文件：去重并重写污染文件
     for (const child of snapshot.state.children) {
       const childFolderId = await findOrCreateFolder(rootId, child.name)
       const files = await listFiles(childFolderId)
       for (const file of files) {
         if (!file.name.startsWith('log_')) continue
-        const { repaired, entries } = await repairLogFile(childFolderId, file.name, file.id)
-        allEntries.push(...entries)
+        const { repaired } = await repairLogFile(childFolderId, file.name, file.id)
         if (repaired) result.filesRepaired++
       }
     }
 
-    // 2. 本地快照污染 → 用去重后的全量日志重建进度
-    if (isSnapshotPolluted(snapshot.state) && allEntries.length > 0) {
-      const rebuilt = rebuildStateFromLogs(snapshot.state, allEntries)
-      await saveCurrentSnapshot({ timestamp: Date.now(), state: rebuilt })
-      result.snapshotRepaired = true
+    // 2. 云端快照污染检测：用本地日志（并集）逐字核对每个孩子的
+    //    snapshot_current.json——污染时用本地快照覆盖
+    let remotePolluted = false
+    const localLogs = await getLogsAfter(0)
+    for (const child of snapshot.state.children) {
+      const childFolderId = await findOrCreateFolder(rootId, child.name)
+      const files = await listFiles(childFolderId)
+      const snapFile = files.find(f => f.name === 'snapshot_current.json')
+      if (!snapFile) continue
+      try {
+        const parsed = JSON.parse(await readFile(snapFile.id)) as Snapshot
+        // 廉价阈值（interval 封顶/爆炸、非法日期）+ 逐字核对（中度污染）
+        const pollutedByThreshold = parsed.state && isSnapshotPolluted(parsed.state)
+        const pollutedByVerify =
+          parsed.state && verifySnapshotAgainstLogs(parsed.state, localLogs).polluted
+        if (pollutedByThreshold || pollutedByVerify) {
+          remotePolluted = true
+          break
+        }
+      } catch {
+        // 无法解析的云端快照不阻塞本地修复
+      }
+    }
 
-      // 把修复后的快照推送到 Drive，避免其它设备继续拉到污染快照
-      const snapshotData = JSON.stringify({ timestamp: Date.now(), state: rebuilt })
-      for (const child of rebuilt.children) {
+    // 3. 推送本地干净快照覆盖云端（本地已修复 / 文件已重写 / 云端快照污染）
+    if (result.snapshotRepaired || result.filesRepaired > 0 || remotePolluted) {
+      const snapshotData = JSON.stringify({ timestamp: Date.now(), state: snapshot.state })
+      for (const child of snapshot.state.children) {
         const childFolderId = await findOrCreateFolder(rootId, child.name)
         const existing = await findFile(childFolderId, 'snapshot_current.json')
         await pushSnapshot(childFolderId, snapshotData, existing?.id)
@@ -797,7 +882,7 @@ export async function repairPollutedData(): Promise<RepairResult> {
 
     return result
   } catch (err) {
-    console.error('repairPollutedData failed:', err)
+    console.error('repairPollutedData cloud step failed:', err)
     return result
   }
 }
