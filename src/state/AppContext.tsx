@@ -41,11 +41,7 @@ import { getIntervalKey } from '../utils/date'
 import { dedupeLogEntries } from '../utils/logKey'
 import { validateAddChar } from '../utils/chars'
 import { useAuth } from './AuthContext'
-import {
-  notifyDataChanged,
-  repairSnapshotProgress,
-  salvageUnverifiableHeavy,
-} from '../data/sync'
+import { notifyDataChanged, repairSnapshotProgress, salvageUnverifiableHeavy } from '../data/sync'
 
 export interface AppContextState {
   state: AppState

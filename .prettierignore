@@ -13,3 +13,4 @@ package-lock.json
 
 # TypeScript 构建信息
 tsconfig.tsbuildinfo
+src/data/__fixtures__/

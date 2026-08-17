@@ -22,11 +22,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import {
-  repairSnapshotProgress,
-  salvageUnverifiableHeavy,
-  verifySnapshotAgainstLogs,
-} from './sync'
+import { repairSnapshotProgress, salvageUnverifiableHeavy, verifySnapshotAgainstLogs } from './sync'
 import type { AnyLogEntry, Snapshot } from '../core/types'
 
 const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', '20260816')
@@ -129,8 +125,7 @@ describe('20260816 真实事故数据回归', () => {
   it('8a 兜底：29 个重污染且不可验证的字被重置 interval=1', () => {
     const { state: repaired } = repairSnapshotProgress(snapshot.state, logs)
     const salvaged = salvageUnverifiableHeavy(repaired, logs)
-    const expected =
-      '伴位便修刹刻厢响将岸州巨律息恰拂敏格汗牌特直而脚节观路连途'
+    const expected = '伴位便修刹刻厢响将岸州巨律息恰拂敏格汗牌特直而脚节观路连途'
     expect([...salvaged].sort().join('')).toBe(expected)
     for (const ch of salvaged) {
       expect(repaired.children[0].progress[ch]).toMatchObject({ ease: 2.5, interval: 1 })

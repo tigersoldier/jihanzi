@@ -587,9 +587,33 @@ describe('initialPull', () => {
     // 真实事故模式：今 3 条日志被旧代码应用 3 次 → reps 9 / interval 21362。
     // 廉价阈值不拦截（interval < 36500、ease < 5、日期合法），逐字校验必须兑住。
     const jinLogs = [
-      { timestamp: 100, type: 'review', childId: 'child_1', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
-      { timestamp: 200, type: 'review', childId: 'child_1', character: '今', grade: 'a', round: 1, dayKey: '2026-05-19' },
-      { timestamp: 300, type: 'review', childId: 'child_1', character: '今', grade: 'a', round: 1, dayKey: '2026-08-04' },
+      {
+        timestamp: 100,
+        type: 'review',
+        childId: 'child_1',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-05-18',
+      },
+      {
+        timestamp: 200,
+        type: 'review',
+        childId: 'child_1',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-05-19',
+      },
+      {
+        timestamp: 300,
+        type: 'review',
+        childId: 'child_1',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-08-04',
+      },
     ]
     mockPullAllData.mockResolvedValue({
       meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
@@ -1182,9 +1206,33 @@ describe('verifySnapshotAgainstLogs', () => {
     firstReviewDay: '2026-05-18',
   }
   const jinLogs = [
-    { timestamp: 100, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
-    { timestamp: 200, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-19' },
-    { timestamp: 300, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-08-04' },
+    {
+      timestamp: 100,
+      type: 'review',
+      childId: 'child_a',
+      character: '今',
+      grade: 'a',
+      round: 1,
+      dayKey: '2026-05-18',
+    },
+    {
+      timestamp: 200,
+      type: 'review',
+      childId: 'child_a',
+      character: '今',
+      grade: 'a',
+      round: 1,
+      dayKey: '2026-05-19',
+    },
+    {
+      timestamp: 300,
+      type: 'review',
+      childId: 'child_a',
+      character: '今',
+      grade: 'a',
+      round: 1,
+      dayKey: '2026-08-04',
+    },
   ]
 
   it('×3 污染（interval 21362、日期合法、ease 3.4）被检出——旧阈值检测漏掉的中度污染', () => {
@@ -1205,11 +1253,51 @@ describe('verifySnapshotAgainstLogs', () => {
       firstReviewDay: '2026-04-20',
     }
     const zhuLogs = [
-      { timestamp: 100, type: 'review', childId: 'child_a', character: '住', grade: 'a', round: 1, dayKey: '2026-04-20' },
-      { timestamp: 200, type: 'review', childId: 'child_a', character: '住', grade: 'a', round: 1, dayKey: '2026-04-21' },
-      { timestamp: 300, type: 'review', childId: 'child_a', character: '住', grade: 'a', round: 1, dayKey: '2026-06-21' },
-      { timestamp: 400, type: 'review', childId: 'child_a', character: '住', grade: 'a', round: 1, dayKey: '2026-06-22' },
-      { timestamp: 500, type: 'review', childId: 'child_a', character: '住', grade: 'b', round: 1, dayKey: '2026-06-29' },
+      {
+        timestamp: 100,
+        type: 'review',
+        childId: 'child_a',
+        character: '住',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-04-20',
+      },
+      {
+        timestamp: 200,
+        type: 'review',
+        childId: 'child_a',
+        character: '住',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-04-21',
+      },
+      {
+        timestamp: 300,
+        type: 'review',
+        childId: 'child_a',
+        character: '住',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-06-21',
+      },
+      {
+        timestamp: 400,
+        type: 'review',
+        childId: 'child_a',
+        character: '住',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-06-22',
+      },
+      {
+        timestamp: 500,
+        type: 'review',
+        childId: 'child_a',
+        character: '住',
+        grade: 'b',
+        round: 1,
+        dayKey: '2026-06-29',
+      },
     ]
     const result = verifySnapshotAgainstLogs(makeState({ 住: capped }), zhuLogs)
     expect(result.polluted).toBe(true)
@@ -1226,7 +1314,15 @@ describe('verifySnapshotAgainstLogs', () => {
       firstReviewDay: '2026-03-05',
     }
     const fuLogs = [
-      { timestamp: 100, type: 'review', childId: 'child_a', character: '伏', grade: 'a', round: 1, dayKey: '2026-07-08' },
+      {
+        timestamp: 100,
+        type: 'review',
+        childId: 'child_a',
+        character: '伏',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-07-08',
+      },
     ]
     const result = verifySnapshotAgainstLogs(makeState({ 伏: fu }), fuLogs)
     expect(result.polluted).toBe(false)
@@ -1243,9 +1339,33 @@ describe('verifySnapshotAgainstLogs', () => {
       firstReviewDay: '2026-08-05',
     }
     const wanLogs = [
-      { timestamp: 100, type: 'review', childId: 'child_a', character: '弯', grade: 'a', round: 1, dayKey: '2026-08-04' },
-      { timestamp: 200, type: 'review', childId: 'child_a', character: '弯', grade: 'a', round: 1, dayKey: '2026-08-05' },
-      { timestamp: 300, type: 'review', childId: 'child_a', character: '弯', grade: 'a', round: 1, dayKey: '2026-08-13' },
+      {
+        timestamp: 100,
+        type: 'review',
+        childId: 'child_a',
+        character: '弯',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-08-04',
+      },
+      {
+        timestamp: 200,
+        type: 'review',
+        childId: 'child_a',
+        character: '弯',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-08-05',
+      },
+      {
+        timestamp: 300,
+        type: 'review',
+        childId: 'child_a',
+        character: '弯',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-08-13',
+      },
     ]
     const result = verifySnapshotAgainstLogs(makeState({ 弯: wan }), wanLogs)
     expect(result.polluted).toBe(true)
@@ -1300,9 +1420,33 @@ describe('repairSnapshotProgress', () => {
       },
     })
     const logs = [
-      { timestamp: 100, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
-      { timestamp: 200, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-19' },
-      { timestamp: 300, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-08-04' },
+      {
+        timestamp: 100,
+        type: 'review',
+        childId: 'child_a',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-05-18',
+      },
+      {
+        timestamp: 200,
+        type: 'review',
+        childId: 'child_a',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-05-19',
+      },
+      {
+        timestamp: 300,
+        type: 'review',
+        childId: 'child_a',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-08-04',
+      },
     ]
 
     const { state: repaired, repaired: list } = repairSnapshotProgress(state, logs)
@@ -1332,9 +1476,33 @@ describe('repairSnapshotProgress', () => {
       },
     })
     const logs = [
-      { timestamp: 100, type: 'review', childId: 'child_a', character: '及', grade: 'a', round: 1, dayKey: '2026-05-28' },
-      { timestamp: 200, type: 'review', childId: 'child_a', character: '及', grade: 'a', round: 1, dayKey: '2026-05-29' },
-      { timestamp: 300, type: 'review', childId: 'child_a', character: '及', grade: 'd', round: 1, dayKey: '2026-08-04' },
+      {
+        timestamp: 100,
+        type: 'review',
+        childId: 'child_a',
+        character: '及',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-05-28',
+      },
+      {
+        timestamp: 200,
+        type: 'review',
+        childId: 'child_a',
+        character: '及',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-05-29',
+      },
+      {
+        timestamp: 300,
+        type: 'review',
+        childId: 'child_a',
+        character: '及',
+        grade: 'd',
+        round: 1,
+        dayKey: '2026-08-04',
+      },
     ]
 
     const { state: repaired, repaired: list } = repairSnapshotProgress(state, logs)
@@ -1362,9 +1530,33 @@ describe('repairSnapshotProgress', () => {
       },
     })
     const logs = [
-      { timestamp: 100, type: 'review', childId: 'child_a', character: '弯', grade: 'a', round: 1, dayKey: '2026-08-04' },
-      { timestamp: 200, type: 'review', childId: 'child_a', character: '弯', grade: 'a', round: 1, dayKey: '2026-08-05' },
-      { timestamp: 300, type: 'review', childId: 'child_a', character: '弯', grade: 'a', round: 1, dayKey: '2026-08-13' },
+      {
+        timestamp: 100,
+        type: 'review',
+        childId: 'child_a',
+        character: '弯',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-08-04',
+      },
+      {
+        timestamp: 200,
+        type: 'review',
+        childId: 'child_a',
+        character: '弯',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-08-05',
+      },
+      {
+        timestamp: 300,
+        type: 'review',
+        childId: 'child_a',
+        character: '弯',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-08-13',
+      },
     ]
 
     const { state: repaired, repaired: list } = repairSnapshotProgress(state, logs)
@@ -1390,7 +1582,15 @@ describe('repairSnapshotProgress', () => {
     }
     const state = makeState({ 伏: fuValue })
     const logs = [
-      { timestamp: 100, type: 'review', childId: 'child_a', character: '伏', grade: 'a', round: 1, dayKey: '2026-07-08' },
+      {
+        timestamp: 100,
+        type: 'review',
+        childId: 'child_a',
+        character: '伏',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-07-08',
+      },
     ]
 
     const { state: repaired, repaired: list } = repairSnapshotProgress(state, logs)
@@ -1410,9 +1610,33 @@ describe('repairSnapshotProgress', () => {
     }
     const state = makeState({ 今: clean })
     const logs = [
-      { timestamp: 100, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
-      { timestamp: 200, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-19' },
-      { timestamp: 300, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-08-04' },
+      {
+        timestamp: 100,
+        type: 'review',
+        childId: 'child_a',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-05-18',
+      },
+      {
+        timestamp: 200,
+        type: 'review',
+        childId: 'child_a',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-05-19',
+      },
+      {
+        timestamp: 300,
+        type: 'review',
+        childId: 'child_a',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-08-04',
+      },
     ]
 
     const { repaired: list } = repairSnapshotProgress(state, logs)
@@ -1423,7 +1647,15 @@ describe('repairSnapshotProgress', () => {
     const state = makeState({})
     state.children[0].nextCharIndex = 350
     const logs = [
-      { timestamp: 100, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
+      {
+        timestamp: 100,
+        type: 'review',
+        childId: 'child_a',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-05-18',
+      },
     ]
 
     const { state: repaired } = repairSnapshotProgress(state, logs)
@@ -1597,9 +1829,33 @@ describe('repairPollutedData', () => {
       },
     }
     const jinLogs = [
-      { timestamp: 100, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
-      { timestamp: 200, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-19' },
-      { timestamp: 300, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-08-04' },
+      {
+        timestamp: 100,
+        type: 'review',
+        childId: 'child_a',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-05-18',
+      },
+      {
+        timestamp: 200,
+        type: 'review',
+        childId: 'child_a',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-05-19',
+      },
+      {
+        timestamp: 300,
+        type: 'review',
+        childId: 'child_a',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-08-04',
+      },
     ]
     mockGetLatestSnapshot.mockResolvedValue(jinPolluted)
     mockGetLogsAfter.mockResolvedValue(jinLogs)
@@ -1656,7 +1912,11 @@ describe('repairPollutedData', () => {
     mockReadFile.mockResolvedValue(JSON.stringify(pollutedSnapshot))
     mockListFiles.mockResolvedValue([
       { id: 'log-file-id', name: 'log_2026-07-01.jsonl', modifiedTime: '2026-07-02T00:00:00.000Z' },
-      { id: 'snap-file-id', name: 'snapshot_current.json', modifiedTime: '2026-07-02T00:00:00.000Z' },
+      {
+        id: 'snap-file-id',
+        name: 'snapshot_current.json',
+        modifiedTime: '2026-07-02T00:00:00.000Z',
+      },
     ])
 
     const result = await repairPollutedData()
@@ -1681,7 +1941,11 @@ describe('repairPollutedData', () => {
     mockReadFile.mockResolvedValue(JSON.stringify(cleanSnapshot))
     mockListFiles.mockResolvedValue([
       { id: 'log-file-id', name: 'log_2026-07-01.jsonl', modifiedTime: '2026-07-02T00:00:00.000Z' },
-      { id: 'snap-file-id', name: 'snapshot_current.json', modifiedTime: '2026-07-02T00:00:00.000Z' },
+      {
+        id: 'snap-file-id',
+        name: 'snapshot_current.json',
+        modifiedTime: '2026-07-02T00:00:00.000Z',
+      },
     ])
 
     const result = await repairPollutedData()

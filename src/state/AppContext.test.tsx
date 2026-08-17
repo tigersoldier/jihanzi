@@ -605,9 +605,33 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
       },
     }
     const logs = [
-      { timestamp: 100, type: 'review', childId: 'child_1', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
-      { timestamp: 200, type: 'review', childId: 'child_1', character: '今', grade: 'a', round: 1, dayKey: '2026-05-19' },
-      { timestamp: 300, type: 'review', childId: 'child_1', character: '今', grade: 'a', round: 1, dayKey: '2026-08-04' },
+      {
+        timestamp: 100,
+        type: 'review',
+        childId: 'child_1',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-05-18',
+      },
+      {
+        timestamp: 200,
+        type: 'review',
+        childId: 'child_1',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-05-19',
+      },
+      {
+        timestamp: 300,
+        type: 'review',
+        childId: 'child_1',
+        character: '今',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-08-04',
+      },
     ]
 
     await act(async () => {
@@ -655,7 +679,15 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
     }
     // 日志缺早期复习：firstReviewDay 不一致 → 不可验证 → 只能兑底
     const logs = [
-      { timestamp: 100, type: 'review', childId: 'child_1', character: '花', grade: 'a', round: 1, dayKey: '2026-07-01' },
+      {
+        timestamp: 100,
+        type: 'review',
+        childId: 'child_1',
+        character: '花',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-07-01',
+      },
     ]
 
     await act(async () => {
