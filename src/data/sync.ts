@@ -8,7 +8,7 @@
  * 4. Update: lastKnownRemoteTime = max(Drive modifiedTime)
  */
 
-import type { AnyLogEntry, AppState, Snapshot } from '../core/types'
+import type { AnyLogEntry, AppState, SM2State, Snapshot } from '../core/types'
 import { applyEntry, deepCloneState } from '../core/log'
 import { MAX_SANE_INTERVAL_DAYS } from '../core/sm2'
 import {
@@ -59,12 +59,124 @@ const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/
 export function isSnapshotPolluted(state: AppState): boolean {
   for (const child of state.children) {
     for (const sm2 of Object.values(child.progress)) {
-      if (sm2.interval > MAX_SANE_INTERVAL_DAYS) return true
+      if (sm2.interval >= MAX_SANE_INTERVAL_DAYS) return true
       if (sm2.ease > MAX_SANE_EASE) return true
       if (!DAY_KEY_RE.test(sm2.nextReview)) return true
     }
   }
   return false
+}
+
+// ============================================================
+// 逐字核对与修复
+// ============================================================
+
+/** 逐字核对结果 */
+export interface SnapshotVerification {
+  /** 是否存在可验证且与日志重放不一致的字 */
+  polluted: boolean
+  /** 不一致的（孩子, 字）列表 */
+  mismatches: Array<{ childId: string; character: string }>
+}
+
+/** 修复结果 */
+export interface SnapshotRepairResult {
+  /** 修复后的状态（未修复时等于输入） */
+  state: AppState
+  /** 被替换为日志重放值的字 */
+  repaired: string[]
+}
+
+/** SM-2 状态六字段全等比较 */
+function sm2StateEquals(a: SM2State, b: SM2State): boolean {
+  return (
+    a.ease === b.ease &&
+    a.interval === b.interval &&
+    a.repetitions === b.repetitions &&
+    a.nextReview === b.nextReview &&
+    a.lastGrade === b.lastGrade &&
+    a.firstReviewDay === b.firstReviewDay
+  )
+}
+
+/**
+ * 用去重日志单次重放推导期望的 progress（保留快照结构，清空后重放）。
+ * 复用 applyEntry——未到期防护与重放路径保持同一套语义。
+ */
+function computeExpectedProgress(state: AppState, entries: AnyLogEntry[]): AppState {
+  const rebuilt = deepCloneState(state)
+  for (const child of rebuilt.children) {
+    child.progress = {}
+    child.nextCharIndex = 0
+  }
+  const sorted = dedupeLogEntries(entries).sort((a, b) => a.timestamp - b.timestamp)
+  for (const entry of sorted) {
+    applyEntry(rebuilt, entry)
+  }
+  return rebuilt
+}
+
+/**
+ * 快照与去重日志逐字核对。
+ *
+ * 只核对“日志覆盖完整”的字：快照 firstReviewDay 与重放结果一致，
+ * 说明首次复习至今的所有日志都在——不一致才是污染。历史日志被
+ * compaction/裁剪裁掉的字无法验证，一律跳过（不误报）。
+ *
+ * 历史教训：isSnapshotPolluted 的阈值（interval > 36500 / ease > 5 /
+ * 非法日期）只抓极端爆炸；中度污染（同一复习被应用 3 次、interval
+ * 恰好等于 36500 封顶、日期合法）全部漏检，污染快照得以持续流转。
+ */
+export function verifySnapshotAgainstLogs(
+  state: AppState,
+  entries: AnyLogEntry[],
+): SnapshotVerification {
+  const expected = computeExpectedProgress(state, entries)
+  const mismatches: Array<{ childId: string; character: string }> = []
+
+  for (const child of state.children) {
+    const expChild = expected.children.find(c => c.id === child.id)
+    if (!expChild) continue
+    for (const [character, sm2] of Object.entries(child.progress)) {
+      const exp = expChild.progress[character]
+      if (!exp || exp.firstReviewDay !== sm2.firstReviewDay) continue // 历史不完整，不可验证
+      if (sm2StateEquals(sm2, exp)) continue
+      mismatches.push({ childId: child.id, character })
+    }
+  }
+
+  return { polluted: mismatches.length > 0, mismatches }
+}
+
+/**
+ * 逐字修复快照：完整历史且与日志重放不一致的字，用重放值替换。
+ *
+ * 与整库重建（rebuildStateFromLogs）的区别：只动可验证的字，
+ * 历史日志缺失的字保持快照原值——避免丢失 compaction 裁掉的进度。
+ * nextCharIndex 取 max（不完整历史会让重放低估指针）。
+ */
+export function repairSnapshotProgress(
+  state: AppState,
+  entries: AnyLogEntry[],
+): SnapshotRepairResult {
+  const repairedState = deepCloneState(state)
+  const expected = computeExpectedProgress(state, entries)
+  const repaired: string[] = []
+
+  for (const child of repairedState.children) {
+    const expChild = expected.children.find(c => c.id === child.id)
+    if (!expChild) continue
+    for (const [character, sm2] of Object.entries(child.progress)) {
+      const exp = expChild.progress[character]
+      if (!exp || exp.firstReviewDay !== sm2.firstReviewDay) continue
+      if (sm2StateEquals(sm2, exp)) continue
+      child.progress[character] = exp
+      repaired.push(character)
+    }
+    child.nextCharIndex = Math.max(child.nextCharIndex, expChild.nextCharIndex)
+  }
+
+  return { state: repairedState, repaired }
 }
 
 /**

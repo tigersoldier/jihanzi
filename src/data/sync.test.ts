@@ -123,6 +123,8 @@ import {
   diffEntries,
   isSnapshotPolluted,
   rebuildStateFromLogs,
+  verifySnapshotAgainstLogs,
+  repairSnapshotProgress,
   repairPollutedData,
 } from './sync'
 
@@ -920,6 +922,14 @@ describe('isSnapshotPolluted', () => {
     expect(isSnapshotPolluted(polluted)).toBe(true)
   })
 
+  it('interval 恰好等于上限（重复应用被封顶）也判定为污染', () => {
+    // 真实事故数据：MAX_SANE_INTERVAL_DAYS 封顶后 interval === 36500，
+    // 旧版 '>' 比较恰好漏检——封顶值本身就是重复应用的证据
+    const polluted = JSON.parse(JSON.stringify(cleanState))
+    polluted.children[0].progress['花'].interval = 36500
+    expect(isSnapshotPolluted(polluted)).toBe(true)
+  })
+
   it('nextReview 为 NaN-NaN-NaN（日期溢出）判定为污染', () => {
     const polluted = JSON.parse(JSON.stringify(cleanState))
     polluted.children[0].progress['花'].nextReview = 'NaN-NaN-NaN'
@@ -1016,6 +1026,245 @@ describe('rebuildStateFromLogs', () => {
     const original = JSON.stringify(pollutedState)
     rebuildStateFromLogs(pollutedState, duplicatedLog)
     expect(JSON.stringify(pollutedState)).toBe(original)
+  })
+})
+
+// ============================================================
+// verifySnapshotAgainstLogs / repairSnapshotProgress — 逐字核对与修复
+// ============================================================
+
+describe('verifySnapshotAgainstLogs', () => {
+  const baseStructure = {
+    children: [
+      {
+        id: 'child_a',
+        name: '小明',
+        wordBookId: 'wb_1',
+        nextCharIndex: 3,
+        progress: {} as Record<string, unknown>,
+      },
+    ],
+    wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['今', '住', '及', '伏'] }],
+    settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+  }
+
+  const makeState = (progress: Record<string, unknown>) => ({
+    ...baseStructure,
+    children: [
+      {
+        ...baseStructure.children[0],
+        progress,
+      },
+    ],
+  })
+
+  // 真实事故数据：同一复习被重复应用 3 次（今：3 条日志 → reps 9）
+  const pollutedJin = {
+    ease: 3.4,
+    interval: 21362,
+    repetitions: 9,
+    nextReview: '2085-01-28',
+    lastGrade: 'a',
+    firstReviewDay: '2026-05-18',
+  }
+  const jinLogs = [
+    { timestamp: 100, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
+    { timestamp: 200, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-19' },
+    { timestamp: 300, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-08-04' },
+  ]
+
+  it('×3 污染（interval 21362、日期合法、ease 3.4）被检出——旧阈值检测漏掉的中度污染', () => {
+    const result = verifySnapshotAgainstLogs(makeState({ 今: pollutedJin }), jinLogs)
+    expect(result.polluted).toBe(true)
+    expect(result.mismatches).toEqual([{ childId: 'child_a', character: '今' }])
+  })
+
+  it('interval 恰好等于 36500 封顶的污染被检出', () => {
+    // 重复应用被 MAX_SANE_INTERVAL_DAYS 封顶后，interval 不再 > 上限，
+    // 旧检测（>）漏检——逐字核对必须兜住
+    const capped = {
+      ease: 3.28,
+      interval: 36500,
+      repetitions: 15,
+      nextReview: '2126-06-05',
+      lastGrade: 'a',
+      firstReviewDay: '2026-04-20',
+    }
+    const zhuLogs = [
+      { timestamp: 100, type: 'review', childId: 'child_a', character: '住', grade: 'a', round: 1, dayKey: '2026-04-20' },
+      { timestamp: 200, type: 'review', childId: 'child_a', character: '住', grade: 'a', round: 1, dayKey: '2026-04-21' },
+      { timestamp: 300, type: 'review', childId: 'child_a', character: '住', grade: 'a', round: 1, dayKey: '2026-06-21' },
+      { timestamp: 400, type: 'review', childId: 'child_a', character: '住', grade: 'a', round: 1, dayKey: '2026-06-22' },
+      { timestamp: 500, type: 'review', childId: 'child_a', character: '住', grade: 'b', round: 1, dayKey: '2026-06-29' },
+    ]
+    const result = verifySnapshotAgainstLogs(makeState({ 住: capped }), zhuLogs)
+    expect(result.polluted).toBe(true)
+  })
+
+  it('历史不完整的字（日志缺早期复习）不参与核对，不误报', () => {
+    // 伏：快照 firstReviewDay 03-05，但日志只剩 07-08 起——重放首日不同
+    const fu = {
+      ease: 3.0,
+      interval: 595,
+      repetitions: 6,
+      nextReview: '2028-01-14',
+      lastGrade: 'a',
+      firstReviewDay: '2026-03-05',
+    }
+    const fuLogs = [
+      { timestamp: 100, type: 'review', childId: 'child_a', character: '伏', grade: 'a', round: 1, dayKey: '2026-07-08' },
+    ]
+    const result = verifySnapshotAgainstLogs(makeState({ 伏: fu }), fuLogs)
+    expect(result.polluted).toBe(false)
+  })
+
+  it('一致快照判为干净', () => {
+    // 守卫重放的正确值：05-18 应用、05-19 跳过、08-04 应用
+    const cleanJin = {
+      ease: 2.7,
+      interval: 8,
+      repetitions: 2,
+      nextReview: '2026-08-12',
+      lastGrade: 'a',
+      firstReviewDay: '2026-05-18',
+    }
+    const result = verifySnapshotAgainstLogs(makeState({ 今: cleanJin }), jinLogs)
+    expect(result.polluted).toBe(false)
+    expect(result.mismatches).toEqual([])
+  })
+})
+
+describe('repairSnapshotProgress', () => {
+  const baseStructure = {
+    children: [
+      {
+        id: 'child_a',
+        name: '小明',
+        wordBookId: 'wb_1',
+        nextCharIndex: 3,
+        progress: {} as Record<string, unknown>,
+      },
+    ],
+    wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['今', '住', '及', '伏'] }],
+    settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+  }
+
+  const makeState = (progress: Record<string, unknown>) => ({
+    ...baseStructure,
+    children: [{ ...baseStructure.children[0], progress }],
+  })
+
+  it('×3 污染字被替换为重放值（今 → reps 2 / interval 8）', () => {
+    const state = makeState({
+      今: {
+        ease: 3.4,
+        interval: 21362,
+        repetitions: 9,
+        nextReview: '2085-01-28',
+        lastGrade: 'a',
+        firstReviewDay: '2026-05-18',
+      },
+    })
+    const logs = [
+      { timestamp: 100, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
+      { timestamp: 200, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-19' },
+      { timestamp: 300, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-08-04' },
+    ]
+
+    const { state: repaired, repaired: list } = repairSnapshotProgress(state, logs)
+
+    expect(list).toEqual(['今'])
+    expect(repaired.children[0].progress['今']).toMatchObject({
+      ease: 2.7,
+      interval: 8,
+      repetitions: 2,
+      nextReview: '2026-08-12',
+      lastGrade: 'a',
+      firstReviewDay: '2026-05-18',
+    })
+    // 输入状态不被修改（纯函数）
+    expect(state.children[0].progress['今'].repetitions).toBe(9)
+  })
+
+  it('缺失应用的字被修复（及：08-04 的 d 从未被应用 → reps 0 / interval 1）', () => {
+    const state = makeState({
+      及: {
+        ease: 3.1,
+        interval: 595,
+        repetitions: 6,
+        nextReview: '2028-01-14',
+        lastGrade: 'a',
+        firstReviewDay: '2026-05-28',
+      },
+    })
+    const logs = [
+      { timestamp: 100, type: 'review', childId: 'child_a', character: '及', grade: 'a', round: 1, dayKey: '2026-05-28' },
+      { timestamp: 200, type: 'review', childId: 'child_a', character: '及', grade: 'a', round: 1, dayKey: '2026-05-29' },
+      { timestamp: 300, type: 'review', childId: 'child_a', character: '及', grade: 'd', round: 1, dayKey: '2026-08-04' },
+    ]
+
+    const { state: repaired, repaired: list } = repairSnapshotProgress(state, logs)
+
+    expect(list).toEqual(['及'])
+    expect(repaired.children[0].progress['及']).toMatchObject({
+      ease: 2.5,
+      interval: 1,
+      repetitions: 0,
+      nextReview: '2026-08-05',
+      lastGrade: 'd',
+      firstReviewDay: '2026-05-28',
+    })
+  })
+
+  it('历史不完整的字保持原样，不被误改', () => {
+    const fuValue = {
+      ease: 3.0,
+      interval: 595,
+      repetitions: 6,
+      nextReview: '2028-01-14',
+      lastGrade: 'a',
+      firstReviewDay: '2026-03-05',
+    }
+    const state = makeState({ 伏: fuValue })
+    const logs = [
+      { timestamp: 100, type: 'review', childId: 'child_a', character: '伏', grade: 'a', round: 1, dayKey: '2026-07-08' },
+    ]
+
+    const { state: repaired, repaired: list } = repairSnapshotProgress(state, logs)
+
+    expect(list).toEqual([])
+    expect(repaired.children[0].progress['伏']).toEqual(fuValue)
+  })
+
+  it('一致快照零修改', () => {
+    const clean = {
+      ease: 2.7,
+      interval: 8,
+      repetitions: 2,
+      nextReview: '2026-08-12',
+      lastGrade: 'a',
+      firstReviewDay: '2026-05-18',
+    }
+    const state = makeState({ 今: clean })
+    const logs = [
+      { timestamp: 100, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
+      { timestamp: 200, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-19' },
+      { timestamp: 300, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-08-04' },
+    ]
+
+    const { repaired: list } = repairSnapshotProgress(state, logs)
+    expect(list).toEqual([])
+  })
+
+  it('nextCharIndex 取 max：重放低估时不回退指针', () => {
+    const state = makeState({})
+    state.children[0].nextCharIndex = 350
+    const logs = [
+      { timestamp: 100, type: 'review', childId: 'child_a', character: '今', grade: 'a', round: 1, dayKey: '2026-05-18' },
+    ]
+
+    const { state: repaired } = repairSnapshotProgress(state, logs)
+    expect(repaired.children[0].nextCharIndex).toBe(350)
   })
 })
 
