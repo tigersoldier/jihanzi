@@ -369,7 +369,12 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
         : localSnapshot
 
     if (bestSnapshot && bestSnapshot !== localSnapshot) {
-      await saveCurrentSnapshot({ timestamp: bestSnapshot.timestamp, state: bestSnapshot.state })
+      // 采纳远程快照时保留其水位（旧版快照可能没有——用 ?? 回退）
+      await saveCurrentSnapshot({
+        timestamp: bestSnapshot.timestamp,
+        appliedThrough: bestSnapshot.appliedThrough,
+        state: bestSnapshot.state,
+      })
     }
 
     // Diff logs by content (not timestamp range) to avoid clock-skew data loss.
@@ -408,20 +413,33 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
     const hadBestSnapshot = bestSnapshot !== null
     if (hadBestSnapshot && dedupedRemoteOnly.length > 0) {
       const mergedState = deepCloneState(bestSnapshot!.state)
-      // 与导入同一规则：只重放快照时间戳之后的条目。
-      // 快照（增量物化）已包含其 timestamp 之前所有日志的效果——全新浏览器
+      // 与导入同一规则：只重放快照水位之后的条目。
+      // 快照（增量物化）已包含其水位之前所有日志的效果——全新浏览器
       // 全量拉取时远程 snapshot_current 是完整状态，重放已物化条目会把同一
       // 复习重复应用（reps 翻倍、interval 指数放大，如'途'字 3 次被算成 6 次、
-      // interval 变成 595 天）。快照之后的条目不可能已被包含，必须重放补新。
+      // interval 变成 595 天）。水位之后的条目不可能已被包含，必须重放补新。
+      // 水位与墙钟解耦（appliedThrough）：时钟回拨/跨设备偏移不会重放已物化条目。
+      const watermark = bestSnapshot!.appliedThrough ?? bestSnapshot!.timestamp
       const sortedRemoteOnly = dedupedRemoteOnly
-        .filter(e => e.timestamp > bestSnapshot!.timestamp)
+        .filter(e => e.timestamp > watermark)
         .sort((a, b) => a.timestamp - b.timestamp)
       let changed = false
       for (const entry of sortedRemoteOnly) {
         if (applyEntry(mergedState, entry)) changed = true
       }
       if (changed) {
-        await saveCurrentSnapshot({ timestamp: Date.now(), state: mergedState })
+        let appliedThrough = watermark
+        if (sortedRemoteOnly.length > 0) {
+          appliedThrough = Math.max(
+            appliedThrough,
+            sortedRemoteOnly[sortedRemoteOnly.length - 1].timestamp,
+          )
+        }
+        await saveCurrentSnapshot({
+          timestamp: Date.now(),
+          appliedThrough,
+          state: mergedState,
+        })
       }
     }
 
@@ -819,7 +837,13 @@ export async function repairPollutedData(): Promise<RepairResult> {
       const salvaged = salvageUnverifiableHeavy(repaired, localLogs)
       result.salvaged = salvaged.length
       if (repairedChars.length > 0 || salvaged.length > 0) {
-        await saveCurrentSnapshot({ timestamp: Date.now(), state: repaired })
+        const maxLogTs = localLogs.reduce((max, e) => Math.max(max, e.timestamp), 0)
+        await saveCurrentSnapshot({
+          timestamp: Date.now(),
+          // 逐字修复覆盖了并集日志的全部效果，水位推进到最大条目 timestamp
+          appliedThrough: Math.max(maxLogTs, snapshot.appliedThrough ?? snapshot.timestamp),
+          state: repaired,
+        })
         result.snapshotRepaired = true
       }
     }
@@ -872,7 +896,11 @@ export async function repairPollutedData(): Promise<RepairResult> {
 
     // 3. 推送本地干净快照覆盖云端（本地已修复 / 文件已重写 / 云端快照污染）
     if (result.snapshotRepaired || result.filesRepaired > 0 || remotePolluted) {
-      const snapshotData = JSON.stringify({ timestamp: Date.now(), state: snapshot.state })
+      const snapshotData = JSON.stringify({
+        timestamp: Date.now(),
+        appliedThrough: snapshot.appliedThrough ?? snapshot.timestamp,
+        state: snapshot.state,
+      })
       for (const child of snapshot.state.children) {
         const childFolderId = await findOrCreateFolder(rootId, child.name)
         const existing = await findFile(childFolderId, 'snapshot_current.json')

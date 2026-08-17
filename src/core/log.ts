@@ -269,8 +269,11 @@ function applyUpdateSettings(
  * Create a snapshot from the current state.
  */
 export function createSnapshot(state: AppState): Snapshot {
+  const now = Date.now()
   return {
-    timestamp: Date.now(),
+    timestamp: now,
+    // 增量物化的状态：所有已写日志均已应用，水位取当前时刻
+    appliedThrough: now,
     state: deepCloneState(state),
   }
 }

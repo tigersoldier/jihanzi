@@ -513,4 +513,69 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
     const appended = mockAppendLogs.mock.calls.at(-1)[0]
     expect(appended.length).toBe(1)
   })
+
+  it('快照带 appliedThrough 水位时按水位过滤重放，且保存时保留水位', async () => {
+    const result = await renderWithBulkImport()
+
+    // 时钟回拨场景：快照 timestamp（墙钟）=1000，但水位=5000——
+    // ts 1500 的条目已被快照物化，按墙钟过滤会重复应用，按水位不会
+    const snapshot = {
+      timestamp: 1000,
+      appliedThrough: 5000,
+      state: {
+        children: [
+          {
+            id: 'child_1',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: 0,
+            progress: {
+              一: {
+                ease: 2.6,
+                interval: 3,
+                repetitions: 1,
+                nextReview: '2026-07-04',
+                lastGrade: 'a',
+                firstReviewDay: '2026-07-01',
+              },
+            },
+          },
+        ],
+        wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一', '二'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    }
+    const logs = [
+      {
+        timestamp: 1500, // 墙钟过滤会重放它，水位过滤不会
+        type: 'review',
+        childId: 'child_1',
+        character: '一',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-07-02',
+      },
+      {
+        timestamp: 6000, // 水位之后 → 必须重放（新字）
+        type: 'review',
+        childId: 'child_1',
+        character: '二',
+        grade: 'a',
+        round: 1,
+        dayKey: '2026-07-06',
+      },
+    ]
+
+    await act(async () => {
+      await result.current.bulkImport(snapshot, logs)
+    })
+
+    const saved = mockSaveCurrentSnapshot.mock.calls.at(-1)[0]
+    // 水位之前的条目不重放（一保持 reps 1，而不是 2）
+    expect(saved.state.children[0].progress['一'].repetitions).toBe(1)
+    // 水位之后的条目重放（新字「二」被物化）
+    expect(saved.state.children[0].progress['二']).toBeDefined()
+    // 保存的水位推进到重放条目的最大 timestamp
+    expect(saved.appliedThrough).toBe(6000)
+  })
 })

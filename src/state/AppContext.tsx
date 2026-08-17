@@ -78,7 +78,7 @@ export interface AppContextState {
   getLogEntries: () => Promise<AnyLogEntry[]>
   /** Import a snapshot + log entries — writes to IndexedDB and reloads state */
   bulkImport: (
-    snapshot: { timestamp: number; state: AppState },
+    snapshot: { timestamp: number; appliedThrough?: number; state: AppState },
     logs: AnyLogEntry[],
   ) => Promise<void>
   /** Reload state from IndexedDB — called after Drive pull merges new data */
@@ -179,12 +179,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (snapshotInterval !== currentInterval && currentSnapshot) {
           await saveHistoricalSnapshot({
             timestamp: currentSnapshot.timestamp,
+            appliedThrough: currentSnapshot.appliedThrough,
             state: currentSnapshot.state,
           })
           await pruneOldSnapshots(5)
         }
 
-        await saveCurrentSnapshot({ timestamp: now, state: newState })
+        // 水位：本次条目的 timestamp 与保存时刻的较大者——时钟回拨时
+        // 水位不回退，保证"水位之前的日志都已应用"这个不变式
+        await saveCurrentSnapshot({
+          timestamp: now,
+          appliedThrough: Math.max(currentSnapshot?.appliedThrough ?? 0, now, entry.timestamp),
+          state: newState,
+        })
       }
     })
 
@@ -414,28 +421,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const bulkImport = useCallback(
     async (
-      snapshot: { timestamp: number; state: AppState },
+      snapshot: { timestamp: number; appliedThrough?: number; state: AppState },
       logs: AnyLogEntry[],
     ): Promise<void> => {
       // 导入前按内容去重：导出数据可能携带历史同步 bug 的重复条目，
       // 不去重会导致同一复习被多次应用、SM-2 间隔指数爆炸
       const uniqueLogs = dedupeLogEntries(logs)
 
-      // 1. 只重放快照时间戳之后的日志（增量物化下快照是完整状态：
-      //    快照已包含其 timestamp 之前所有日志的效果，重放它们会把
+      // 1. 只重放快照水位之后的日志（增量物化下快照是完整状态：
+      //    快照已包含其水位之前所有日志的效果，重放它们会把
       //    同一复习重复应用——reps 翻倍、interval 指数放大（如导入
       //    20260731 数据后'途'字 3 次被算成 6 次、interval 变成 595 天））。
-      //    快照之后的日志不可能已被快照包含，必须重放以补全新进度。
+      //    水位之后的日志不可能已被快照包含，必须重放以补全新进度。
+      const watermark = snapshot.appliedThrough ?? snapshot.timestamp
       const newState = deepCloneState(snapshot.state)
       const pendingLogs = uniqueLogs
-        .filter(e => e.timestamp > snapshot.timestamp)
+        .filter(e => e.timestamp > watermark)
         .sort((a, b) => a.timestamp - b.timestamp)
       for (const entry of pendingLogs) {
         applyEntry(newState, entry)
       }
 
-      // 2. Save the merged snapshot as current
-      await saveCurrentSnapshot({ timestamp: Date.now(), state: newState })
+      // 2. Save the merged snapshot as current（水位取重放条目的最大 timestamp）
+      let appliedThrough = watermark
+      if (pendingLogs.length > 0) {
+        appliedThrough = Math.max(appliedThrough, pendingLogs[pendingLogs.length - 1].timestamp)
+      }
+      await saveCurrentSnapshot({ timestamp: Date.now(), appliedThrough, state: newState })
 
       // 3. Append all log entries（去重后的全集：同步载体 + 审计线索）
       if (uniqueLogs.length > 0) {

@@ -173,7 +173,18 @@ export interface AppState {
 
 /** Snapshot of app state at a point in time */
 export interface Snapshot {
-  timestamp: number // Unix ms — logs before this are covered
+  timestamp: number // Unix ms — snapshot save time (wall clock)
+  /**
+   * 日志水位：快照状态已包含所有 timestamp ≤ appliedThrough 的日志效果。
+   *
+   * 历史教训：重放过滤曾用 snapshot.timestamp（墙钟）当水位，时钟回拨/跨设备
+   * 偏移时会把已物化的条目再应用一遍（重复计算）或漏掉新条目。水位取
+   * "最后应用条目的 timestamp"，与墙钟解耦。
+   *
+   * 可选字段：旧版快照无此字段（回退用 timestamp），其缺失本身也是
+   * "旧代码产物"标记——同步采纳时触发逐字校验（见 sync.ts）。
+   */
+  appliedThrough?: number
   state: AppState
 }
 
