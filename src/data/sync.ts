@@ -102,6 +102,16 @@ function sm2StateEquals(a: SM2State, b: SM2State): boolean {
 }
 
 /**
+ * 日志是否完整覆盖快照声称的历史：
+ * 重放首日 ≤ 快照首日 → 日志包含从首次复习起的全部条目（可能比快照更全——
+ * 快照缺失早期应用时重放首日会更早），可核对修复；
+ * 重放首日 > 快照首日 → 早期日志被 compaction/裁剪裁掉，不可验证。
+ */
+function isLogHistoryComplete(exp: SM2State | undefined, sm2: SM2State): boolean {
+  return exp !== undefined && exp.firstReviewDay <= sm2.firstReviewDay
+}
+
+/**
  * 用去重日志单次重放推导期望的 progress（保留快照结构，清空后重放）。
  * 复用 applyEntry——未到期防护与重放路径保持同一套语义。
  */
@@ -141,7 +151,7 @@ export function verifySnapshotAgainstLogs(
     if (!expChild) continue
     for (const [character, sm2] of Object.entries(child.progress)) {
       const exp = expChild.progress[character]
-      if (!exp || exp.firstReviewDay !== sm2.firstReviewDay) continue // 历史不完整，不可验证
+      if (!isLogHistoryComplete(exp, sm2)) continue // 历史不完整，不可验证
       if (sm2StateEquals(sm2, exp)) continue
       mismatches.push({ childId: child.id, character })
     }
@@ -170,7 +180,7 @@ export function repairSnapshotProgress(
     if (!expChild) continue
     for (const [character, sm2] of Object.entries(child.progress)) {
       const exp = expChild.progress[character]
-      if (!exp || exp.firstReviewDay !== sm2.firstReviewDay) continue
+      if (!isLogHistoryComplete(exp, sm2)) continue
       if (sm2StateEquals(sm2, exp)) continue
       child.progress[character] = exp
       repaired.push(character)
@@ -817,8 +827,7 @@ export function salvageUnverifiableHeavy(state: AppState, entries: AnyLogEntry[]
     if (!expChild) continue
     for (const [character, sm2] of Object.entries(child.progress)) {
       const exp = expChild.progress[character]
-      const verifiable = exp !== undefined && exp.firstReviewDay === sm2.firstReviewDay
-      if (verifiable) continue
+      if (isLogHistoryComplete(exp, sm2)) continue // 日志完整 → 由逐字修复处理
       const heavy = sm2.interval >= SALVAGE_INTERVAL_DAYS || !DAY_KEY_RE.test(sm2.nextReview)
       if (!heavy) continue
       child.progress[character] = {

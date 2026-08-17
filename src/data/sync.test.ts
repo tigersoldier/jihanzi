@@ -1216,7 +1216,7 @@ describe('verifySnapshotAgainstLogs', () => {
   })
 
   it('历史不完整的字（日志缺早期复习）不参与核对，不误报', () => {
-    // 伏：快照 firstReviewDay 03-05，但日志只剩 07-08 起——重放首日不同
+    // 伏：快照 firstReviewDay 03-05，但日志只剩 07-08 起——重放首日更晚
     const fu = {
       ease: 3.0,
       interval: 595,
@@ -1230,6 +1230,26 @@ describe('verifySnapshotAgainstLogs', () => {
     ]
     const result = verifySnapshotAgainstLogs(makeState({ 伏: fu }), fuLogs)
     expect(result.polluted).toBe(false)
+  })
+
+  it('快照缺失早期应用（日志首日更早）也检出——重放有更全的历史', () => {
+    // 真实事故：弯 08-04 的复习从未应用到快照，快照首日被记为 08-05
+    const wan = {
+      ease: 2.8,
+      interval: 22,
+      repetitions: 3,
+      nextReview: '2026-09-04',
+      lastGrade: 'a',
+      firstReviewDay: '2026-08-05',
+    }
+    const wanLogs = [
+      { timestamp: 100, type: 'review', childId: 'child_a', character: '弯', grade: 'a', round: 1, dayKey: '2026-08-04' },
+      { timestamp: 200, type: 'review', childId: 'child_a', character: '弯', grade: 'a', round: 1, dayKey: '2026-08-05' },
+      { timestamp: 300, type: 'review', childId: 'child_a', character: '弯', grade: 'a', round: 1, dayKey: '2026-08-13' },
+    ]
+    const result = verifySnapshotAgainstLogs(makeState({ 弯: wan }), wanLogs)
+    expect(result.polluted).toBe(true)
+    expect(result.mismatches).toEqual([{ childId: 'child_a', character: '弯' }])
   })
 
   it('一致快照判为干净', () => {
@@ -1327,6 +1347,35 @@ describe('repairSnapshotProgress', () => {
       nextReview: '2026-08-05',
       lastGrade: 'd',
       firstReviewDay: '2026-05-28',
+    })
+  })
+
+  it('快照缺失早期应用的字被修复（弯：日志首日 08-04 早于快照首日 08-05）', () => {
+    const state = makeState({
+      弯: {
+        ease: 2.8,
+        interval: 22,
+        repetitions: 3,
+        nextReview: '2026-09-04',
+        lastGrade: 'a',
+        firstReviewDay: '2026-08-05',
+      },
+    })
+    const logs = [
+      { timestamp: 100, type: 'review', childId: 'child_a', character: '弯', grade: 'a', round: 1, dayKey: '2026-08-04' },
+      { timestamp: 200, type: 'review', childId: 'child_a', character: '弯', grade: 'a', round: 1, dayKey: '2026-08-05' },
+      { timestamp: 300, type: 'review', childId: 'child_a', character: '弯', grade: 'a', round: 1, dayKey: '2026-08-13' },
+    ]
+
+    const { state: repaired, repaired: list } = repairSnapshotProgress(state, logs)
+
+    expect(list).toEqual(['弯'])
+    expect(repaired.children[0].progress['弯']).toMatchObject({
+      ease: 2.7,
+      interval: 8,
+      repetitions: 2,
+      nextReview: '2026-08-21',
+      firstReviewDay: '2026-08-04',
     })
   })
 
