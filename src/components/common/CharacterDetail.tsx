@@ -11,8 +11,17 @@ interface CharacterDetailProps {
 }
 
 export default function CharacterDetail({ childId, character, onBack }: CharacterDetailProps) {
-  const { sm2State, totalReviews, gradeCounts, timeline, loading, hasMore, loadingMore, loadMore } =
-    useCharacterStats(childId, character)
+  const {
+    sm2State,
+    totalReviews,
+    gradeCounts,
+    latestGrade,
+    timeline,
+    loading,
+    hasMore,
+    loadingMore,
+    loadMore,
+  } = useCharacterStats(childId, character)
   const { pinyin, words } = getCharInfo(character)
 
   // 滚动到底时触发 loadMore
@@ -105,6 +114,18 @@ export default function CharacterDetail({ childId, character, onBack }: Characte
               <span className="text-gray-400">下次复习</span>
               <div className="font-medium text-gray-800">{sm2State.nextReview}</div>
             </div>
+            <div>
+              <span className="text-gray-400">最近评级（计入）</span>
+              <div className="font-medium text-gray-800">{GRADE_LABELS[sm2State.lastGrade]}</div>
+            </div>
+            {latestGrade && latestGrade !== sm2State.lastGrade && (
+              <div>
+                <span className="text-gray-400">最近一次复习</span>
+                <div className={`font-medium ${GRADE_COLORS[latestGrade]}`}>
+                  {GRADE_LABELS[latestGrade]}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

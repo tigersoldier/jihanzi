@@ -297,4 +297,66 @@ describe('useCharacterStats', () => {
     // 查询完成后 loading 为 false
     expect(result.current.loading).toBe(false)
   })
+
+  it('latestGrade 取日志里最近一次 round-1 评级（含未计入的重复复习）', async () => {
+    // 快照 lastGrade = 'a'（计入的复习）；日志里最近一次 round-1 是 'd'
+    //（未到期防护跳过的重复复习，只留日志）→ latestGrade 应为 'd'
+    vi.mocked(db.getReviewsForChildCharPaginated).mockResolvedValue({
+      entries: [
+        {
+          id: 1,
+          timestamp: 200,
+          type: 'review',
+          childId: 'child_1',
+          character: '雨',
+          grade: 'd',
+          round: 1,
+          dayKey: '2026-01-03',
+        },
+        {
+          id: 2,
+          timestamp: 100,
+          type: 'review',
+          childId: 'child_1',
+          character: '雨',
+          grade: 'a',
+          round: 1,
+          dayKey: '2026-01-02',
+        },
+      ],
+      hasMore: false,
+      cursor: null,
+    })
+
+    function W({ children }: { children: ReactNode }) {
+      const ctx: AppContextState = {
+        state: makeState(),
+        loading: false,
+        dataVersion: 0,
+        selectedChildId: 'child_1',
+        setSelectedChildId: vi.fn(),
+        reloadState: vi.fn(),
+        createChild: vi.fn() as any,
+        updateChild: vi.fn() as any,
+        deleteChild: vi.fn() as any,
+        createWordBook: vi.fn() as any,
+        updateWordBook: vi.fn() as any,
+        deleteWordBook: vi.fn() as any,
+        addCharacter: vi.fn() as any,
+        removeCharacter: vi.fn() as any,
+        reorderCharacters: vi.fn() as any,
+        submitReview: vi.fn() as any,
+        updateSettings: vi.fn() as any,
+        getLogEntries: vi.fn() as any,
+        bulkImport: vi.fn() as any,
+      }
+      return React.createElement(AppContext.Provider, { value: ctx }, children)
+    }
+
+    const { result } = renderHook(() => useCharacterStats('child_1', '雨'), { wrapper: W })
+
+    await vi.waitFor(() => {
+      expect(result.current.latestGrade).toBe('d')
+    })
+  })
 })

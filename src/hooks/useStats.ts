@@ -21,6 +21,12 @@ export interface CharacterStats {
   sm2State: SM2State | undefined
   totalReviews: number
   gradeCounts: { a: number; b: number; c: number; d: number }
+  /**
+   * 最近一次 round-1 评级（来自日志，含未计入 SM-2 的重复复习）。
+   * 与 sm2State.lastGrade（只反映计入的复习）可能不同——
+   * 未到期防护把重复复习留在了日志里，统计口径从这里取。
+   */
+  latestGrade: Grade | undefined
   /** Review timeline grouped by day, most recent first — 分批加载 */
   timeline: {
     dayKey: string
@@ -70,6 +76,7 @@ export function useCharacterStats(childId: string, character: string): Character
   const [gradeCounts, setGradeCounts] = useState({ a: 0, b: 0, c: 0, d: 0 })
   const [totalReviews, setTotalReviews] = useState(0)
   const [timeline, setTimeline] = useState<CharacterStats['timeline']>([])
+  const [latestGrade, setLatestGrade] = useState<Grade | undefined>(undefined)
   const [loading, setLoading] = useState(false)
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -104,7 +111,11 @@ export function useCharacterStats(childId: string, character: string): Character
       setGradeCounts(counts)
       setTotalReviews(page.entries.length)
 
-      setTimeline(entriesToTimeline(page.entries))
+      const timelinePage = entriesToTimeline(page.entries)
+      setTimeline(timelinePage)
+      // 最近一天的第一个 round-1 评级即最近一次真实复习（含未计入的重复复习）
+      const latestDay = timelinePage[0]
+      setLatestGrade(latestDay?.rounds.find(r => r.round === 1)?.grade)
       setHasMore(page.hasMore)
       cursorRef.current = page.cursor ?? undefined
       setLoading(false)
@@ -136,7 +147,17 @@ export function useCharacterStats(childId: string, character: string): Character
       })
   }, [childId, character, hasMore])
 
-  return { sm2State, totalReviews, gradeCounts, timeline, loading, hasMore, loadingMore, loadMore }
+  return {
+    sm2State,
+    totalReviews,
+    gradeCounts,
+    latestGrade,
+    timeline,
+    loading,
+    hasMore,
+    loadingMore,
+    loadMore,
+  }
 }
 
 // ============================================================
