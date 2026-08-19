@@ -849,4 +849,55 @@ describe('useToday', () => {
     // 所以明天的复习队列应该有「一」
     expect(result.current.tomorrowReviewChars).toEqual(['一'])
   })
+
+  it('第二轮完成后 needReview 只统计本轮错误，不累计前几轮', async () => {
+    // Given: 三个生字
+    const initialState = freshStateWithChars(['一', '二', '三'])
+    const wrapper = createStatefulWrapper(initialState)
+
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    // 走完展示阶段（3 个新字）
+    act(() => {
+      result.current.startSession()
+    })
+    expect(result.current.phase).toBe('presenting')
+    for (let i = 0; i < 3; i++) {
+      act(() => {
+        result.current.handlePresentNav('next')
+      })
+    }
+    expect(result.current.phase).toBe('reviewing')
+
+    // 第一轮：一→c、二→a、三→d → 2 个错误
+    for (const grade of ['c', 'a', 'd'] as const) {
+      await act(async () => {
+        result.current.handleRate(grade)
+        await new Promise(resolve => setTimeout(resolve, 400))
+      })
+    }
+    expect(result.current.phase).toBe('roundComplete')
+    expect(result.current.needReview).toBe(2)
+
+    // 进入第二轮（只剩 一、三）
+    act(() => {
+      result.current.handleContinueRound()
+    })
+    expect(result.current.round).toBe(2)
+    expect(result.current.totalTasks).toBe(2)
+
+    // 第二轮：一→a、三→c → 1 个错误
+    await act(async () => {
+      result.current.handleRate('a')
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+    await act(async () => {
+      result.current.handleRate('c')
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+
+    // Then: needReview 只含第二轮的错误（1），而不是累计（1+2=3）
+    expect(result.current.phase).toBe('roundComplete')
+    expect(result.current.needReview).toBe(1)
+  })
 })

@@ -149,6 +149,8 @@ interface UseTodayReturn {
   totalTasks: number
   round: number
   sessionStats: { a: number; b: number; c: number; d: number }
+  /** 当前轮次评分为 c/d 的字数（不累计前几轮） */
+  needReview: number
   ratingAnimation: string | null
   selectedChildId: string
   children: { id: string; name: string; hasTasks: boolean }[]
@@ -372,6 +374,14 @@ export function useToday(): UseTodayReturn {
     return todayHadNewChars ? '纯复习日' : '学新日'
   }, [doneToday, selectedChildId, state.children, todayKey])
 
+  // 当前轮次需要巩固的字数（RoundComplete 展示用）。
+  // 不能用 sessionStats（跨轮累计），必须按轮次过滤，只统计本轮评分为 c/d 的字。
+  const needReview = useMemo(
+    () =>
+      sessionReviews.filter(r => r.round === round && (r.grade === 'c' || r.grade === 'd')).length,
+    [sessionReviews, round],
+  )
+
   const startSession = useCallback(() => {
     const currentTasks = tasksRef.current
     if (currentTasks.length === 0) return
@@ -528,6 +538,7 @@ export function useToday(): UseTodayReturn {
     totalTasks,
     round,
     sessionStats,
+    needReview,
     ratingAnimation,
     selectedChildId,
     children,

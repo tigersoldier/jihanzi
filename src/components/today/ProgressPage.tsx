@@ -62,6 +62,7 @@ export function TodaySession() {
     totalTasks,
     round,
     sessionStats,
+    needReview,
     ratingAnimation,
     children,
     selectedChildId,
@@ -208,7 +209,7 @@ export function TodaySession() {
       {phase === 'roundComplete' && (
         <RoundComplete
           round={round}
-          needReview={sessionStats.c + sessionStats.d}
+          needReview={needReview}
           maxRounds={state.settings.maxRounds}
           onContinue={handleContinueRound}
           onSkip={handleSkipRound}

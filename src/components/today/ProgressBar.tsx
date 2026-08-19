@@ -15,7 +15,7 @@ export default function ProgressBar({ current, total }: ProgressBarProps) {
         />
       </div>
       <span className="text-sm text-gray-500 font-medium tabular-nums whitespace-nowrap">
-        {current} / {total}
+        {current + 1} / {total}
       </span>
     </div>
   )
