@@ -4,8 +4,8 @@
  * Tests for TodaySession — the learning session UI extracted from ProgressPage.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, waitFor, cleanup } from '@testing-library/react'
 import React, { type ReactNode } from 'react'
 import type { AppState } from '../../core/types'
 import { AppContext, type AppContextState } from '../../state/AppContext'
@@ -29,6 +29,21 @@ vi.mock('../../utils/date', async () => {
 })
 
 import { TodaySession } from './ProgressPage'
+
+// Mock SyncContext — 默认已同步完成，现有测试不受影响。
+const { mockSyncStatus, mockInitialSyncPending } = vi.hoisted(() => ({
+  mockSyncStatus: vi.fn(() => 'online' as const),
+  mockInitialSyncPending: vi.fn(() => false),
+}))
+
+vi.mock('../../state/SyncContext', () => ({
+  useSync: () => ({
+    status: mockSyncStatus(),
+    initialSyncPending: mockInitialSyncPending(),
+    lastSyncTime: null,
+    syncNow: vi.fn(),
+  }),
+}))
 
 function makeState(overrides?: Partial<AppState>): AppState {
   return {
@@ -73,6 +88,13 @@ function wrapperWith(state: AppState, childId = '') {
 describe('TodaySession', () => {
   beforeEach(() => {
     localStorageStore.clear()
+    mockSyncStatus.mockReturnValue('online')
+    mockInitialSyncPending.mockReturnValue(false)
+  })
+
+  afterEach(() => {
+    // 项目未开 vitest globals，RTL 不会自动清理 DOM——不清理会残留上一测试的渲染
+    cleanup()
   })
 
   it('renders idle state with task count and character preview for the selected child', async () => {
@@ -138,5 +160,73 @@ describe('TodaySession', () => {
     })
     // 明天是纯复习日且无到期任务 → 显示空状态提示（不显示日类型标签）
     expect(screen.getByText('明天没有需要复习或学习的字')).toBeDefined()
+  })
+
+  it('同步拉取期间隐藏任务预览与开始按钮，显示同步占位', async () => {
+    mockSyncStatus.mockReturnValue('syncing')
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 0,
+          progress: {},
+        },
+      ],
+      wordBooks: [
+        {
+          id: 'wb_1',
+          name: '测试',
+          characters: ['一', '二', '三'],
+        },
+      ],
+    })
+
+    render(<TodaySession />, { wrapper: wrapperWith(state, 'child_1') })
+
+    await waitFor(() => {
+      expect(screen.getByText(/正在同步数据/)).toBeDefined()
+    })
+    // 预览与按钮均不显示（不显示过期任务列表）
+    expect(screen.queryByText('开始学习')).toBeNull()
+    expect(screen.queryByText(/准备复习/)).toBeNull()
+    expect(screen.queryByText('新学：')).toBeNull()
+  })
+
+  it('首次拉取挂起时同样显示同步占位；同步完成后恢复正常', async () => {
+    mockInitialSyncPending.mockReturnValue(true)
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 0,
+          progress: {},
+        },
+      ],
+      wordBooks: [
+        {
+          id: 'wb_1',
+          name: '测试',
+          characters: ['一', '二', '三'],
+        },
+      ],
+    })
+
+    const { rerender } = render(<TodaySession />, { wrapper: wrapperWith(state, 'child_1') })
+
+    await waitFor(() => {
+      expect(screen.getByText(/正在同步数据/)).toBeDefined()
+    })
+
+    // 拉取完成 → 占位消失，恢复任务预览与按钮
+    mockInitialSyncPending.mockReturnValue(false)
+    rerender(<TodaySession />)
+    await waitFor(() => {
+      expect(screen.getByText('开始学习')).toBeDefined()
+    })
+    expect(screen.queryByText(/正在同步数据/)).toBeNull()
   })
 })

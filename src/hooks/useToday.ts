@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import type { TaskItem, Grade, ReviewEntry, DayType } from '../core/types'
 import { useApp } from '../state/AppContext'
+import { useSync } from '../state/SyncContext'
 import { generateTodayTasks, getEffectiveDayType } from '../core/scheduler'
 import { todayKey as getTodayKey, addDays, getDayTypeLabel, formatDateLabel } from '../utils/date'
 import { getReviewsForChildOnDay, getLastStudyDayForChild } from '../data/db'
@@ -162,6 +163,8 @@ interface UseTodayReturn {
   handleSkipRound: () => void
   handleDone: () => void
   isReady: boolean
+  /** 同步拉取期间禁止开始学习（组件据此显示同步占位） */
+  syncBlocked: boolean
   doneToday: boolean
   todayNewChars: string[]
   todayReviewChars: string[]
@@ -178,10 +181,17 @@ export function useToday(): UseTodayReturn {
     selectedChildId,
     setSelectedChildId,
     dataVersion,
+    loading,
   } = useApp()
+  const { status, initialSyncPending } = useSync()
   const { dayType, dayTypeLabel, dateLabel, effectiveDayType, dayTypeLoading, todayKey } =
     useDayType()
   const tomorrowKey = addDays(todayKey, 1)
+
+  // 同步拉取期间（含登录后首次拉取、同步驱动的状态重载）禁止开始学习：
+  // 拉取中的任务队列尚未合并远程变更，用它启动会话会产生过期任务/重复复习。
+  // 拉取结束（无论成败）即解除；离线/失败时本地数据即最新可用数据，不受限制。
+  const syncBlocked = status === 'syncing' || initialSyncPending || loading
 
   const [phase, setPhase] = useState<SessionPhase>('idle')
   const [taskIndex, setTaskIndex] = useState(0)
@@ -383,6 +393,8 @@ export function useToday(): UseTodayReturn {
   )
 
   const startSession = useCallback(() => {
+    // 同步拉取期间禁止启动——UI 已隐藏按钮，此处为同帧竞态/未来入口的守卫
+    if (syncBlocked) return
     const currentTasks = tasksRef.current
     if (currentTasks.length === 0) return
     // Clear any stale saved session before starting a new one
@@ -406,7 +418,7 @@ export function useToday(): UseTodayReturn {
     setRound(1)
     setSessionReviews([])
     setSessionStats({ a: 0, b: 0, c: 0, d: 0 })
-  }, [selectedChildId, todayKey, dayType])
+  }, [selectedChildId, todayKey, dayType, syncBlocked])
 
   // 展示阶段完成：合并复习队列，写 present_chars 日志，进入复习阶段
   const handlePresentComplete = useCallback(() => {
@@ -549,7 +561,8 @@ export function useToday(): UseTodayReturn {
     handleContinueRound,
     handleSkipRound,
     handleDone,
-    isReady: selectedChildId !== '' && effectiveTasks.length > 0 && !doneToday && !dayTypeLoading,
+    isReady: selectedChildId !== '' && effectiveTasks.length > 0 && !doneToday && !dayTypeLoading && !syncBlocked,
+    syncBlocked,
     doneToday,
     todayNewChars,
     todayReviewChars,

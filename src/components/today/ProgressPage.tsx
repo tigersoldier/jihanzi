@@ -73,6 +73,7 @@ export function TodaySession() {
     handleSkipRound,
     handleDone,
     isReady,
+    syncBlocked,
     doneToday,
     todayNewChars,
     todayReviewChars,
@@ -104,37 +105,51 @@ export function TodaySession() {
       {phase === 'idle' && (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
           <div className="text-6xl mb-4">{dayType === '学新日' ? '📖' : '📝'}</div>
-          <h2 className="text-xl font-bold text-gray-800 mb-2">
-            {isReady
-              ? `准备复习 ${totalTasks} 个字`
-              : doneToday
-                ? '今日已完成'
-                : '今天没有需要复习的字'}
-          </h2>
-          <p className="text-gray-400 text-sm mb-6">
-            {dayType === '学新日' ? '学新日：复习 + 新字学习' : '纯复习日：巩固已学汉字'}
-          </p>
 
-          {/* ---- 会话前预览：今日任务分组 ---- */}
-          {isReady && (todayNewChars.length > 0 || todayReviewChars.length > 0) && (
-            <div className="mb-4 text-left border-t border-gray-100 pt-4">
-              {todayNewChars.length > 0 && <TaskPreviewList label="新学" chars={todayNewChars} />}
-              {todayReviewChars.length > 0 && (
-                <TaskPreviewList label="复习" chars={todayReviewChars} />
-              )}
+          {/* 同步拉取期间禁止开始学习：隐藏任务预览与按钮，显示同步占位。
+              此时任务列表基于未合并的旧快照，展示会误导（如误报"无任务"）。 */}
+          {syncBlocked && !doneToday ? (
+            <div className="py-6 text-gray-400 text-sm flex items-center justify-center gap-2">
+              <span className="animate-spin inline-block">🔄</span>
+              正在同步数据，请稍候…
             </div>
+          ) : (
+            <>
+              <h2 className="text-xl font-bold text-gray-800 mb-2">
+                {isReady
+                  ? `准备复习 ${totalTasks} 个字`
+                  : doneToday
+                    ? '今日已完成'
+                    : '今天没有需要复习的字'}
+              </h2>
+              <p className="text-gray-400 text-sm mb-6">
+                {dayType === '学新日' ? '学新日：复习 + 新字学习' : '纯复习日：巩固已学汉字'}
+              </p>
+
+              {/* ---- 会话前预览：今日任务分组 ---- */}
+              {isReady && (todayNewChars.length > 0 || todayReviewChars.length > 0) && (
+                <div className="mb-4 text-left border-t border-gray-100 pt-4">
+                  {todayNewChars.length > 0 && (
+                    <TaskPreviewList label="新学" chars={todayNewChars} />
+                  )}
+                  {todayReviewChars.length > 0 && (
+                    <TaskPreviewList label="复习" chars={todayReviewChars} />
+                  )}
+                </div>
+              )}
+
+              {isReady && (
+                <button
+                  onClick={startSession}
+                  className="w-full py-3 px-6 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors"
+                >
+                  开始学习
+                </button>
+              )}
+            </>
           )}
 
-          {isReady && (
-            <button
-              onClick={startSession}
-              className="w-full py-3 px-6 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors"
-            >
-              开始学习
-            </button>
-          )}
-
-          {/* ---- 会话后预览：明日任务 ---- */}
+          {/* ---- 会话后预览：明日任务（不涉及开始学习，同步期间仍显示） ---- */}
           {doneToday && (
             <div className="border-t border-gray-100 pt-4 mt-4 text-left">
               {tomorrowNewChars.length > 0 || tomorrowReviewChars.length > 0 ? (

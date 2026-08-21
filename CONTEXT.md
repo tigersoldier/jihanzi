@@ -118,6 +118,12 @@
 两份快照——会话期间即使状态变更（如 nextCharIndex 推进），任务列表也不变。
 会话状态持久化到本地存储，刷新页面后可恢复。
 
+### 会话启动条件 (Session Start Condition)
+
+学习会话只能在同步拉取窗口之外启动——拉取中的任务队列尚未合并远程变更，
+不能作为会话起点。拉取结束（无论成败）即可启动；离线时本地数据即最新
+可用数据，不受限制。
+
 ### 巩固轮 (Consolidation Round)
 
 第 2 轮及之后的复习轮次。每轮只包含上一轮中评 c 或 d 的字。最多
@@ -317,6 +323,7 @@ Push 时通过下载 + 拼接 + 上传方式写入分片文件，顺序写入安
 | 任务 | Task | 学习过程 |
 | 任务队列 | Task Queue | 学习过程 |
 | 学习会话 | Learning Session | 学习过程 |
+| 会话启动条件 | Session Start Condition | 学习过程 |
 | 巩固轮 | Consolidation Round | 学习过程 |
 | 展示阶段 | Presenting | 学习过程 |
 | 展示队列 | Present Tasks | 学习过程 |

@@ -50,6 +50,21 @@ vi.mock('../data/db', async () => {
 
 import { useToday } from './useToday'
 
+// Mock SyncContext — 默认已同步完成（online / 无挂起），现有测试不受影响。
+const { mockSyncStatus, mockInitialSyncPending } = vi.hoisted(() => ({
+  mockSyncStatus: vi.fn(() => 'online' as const),
+  mockInitialSyncPending: vi.fn(() => false),
+}))
+
+vi.mock('../state/SyncContext', () => ({
+  useSync: () => ({
+    status: mockSyncStatus(),
+    initialSyncPending: mockInitialSyncPending(),
+    lastSyncTime: null,
+    syncNow: vi.fn(),
+  }),
+}))
+
 // ---------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------
@@ -92,7 +107,7 @@ function freshStateWithChars(characters: string[]): AppState {
 // Stateful test wrapper that simulates real AppContext behavior
 // ---------------------------------------------------------------
 
-function createStatefulWrapper(initialState: AppState) {
+function createStatefulWrapper(initialState: AppState, options?: { loading?: boolean }) {
   function StatefulWrapper({ children }: { children: ReactNode }) {
     const [state, setState] = useState<AppState>(initialState)
     const [selectedChildId, setSelectedChildId] = useState<string>(
@@ -143,7 +158,7 @@ function createStatefulWrapper(initialState: AppState) {
 
     const contextValue: AppContextState = {
       state,
-      loading: false,
+      loading: options?.loading ?? false,
       dataVersion: 0,
       selectedChildId,
       setSelectedChildId,
@@ -177,6 +192,8 @@ function createStatefulWrapper(initialState: AppState) {
 describe('useToday', () => {
   beforeEach(() => {
     localStorageStore = new Map()
+    mockSyncStatus.mockReturnValue('online')
+    mockInitialSyncPending.mockReturnValue(false)
   })
 
   it('刷新页面后恢复复习进度', async () => {
@@ -899,5 +916,78 @@ describe('useToday', () => {
     // Then: needReview 只含第二轮的错误（1），而不是累计（1+2=3）
     expect(result.current.phase).toBe('roundComplete')
     expect(result.current.needReview).toBe(1)
+  })
+
+  // ---- 同步门控：拉取同步数据期间禁止开始学习 ----
+
+  it('同步中（syncing）→ isReady 为 false 且 syncBlocked 为 true', async () => {
+    mockSyncStatus.mockReturnValue('syncing')
+    const wrapper = createStatefulWrapper(freshStateWithChars(['一', '二', '三']))
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+
+    expect(result.current.syncBlocked).toBe(true)
+    expect(result.current.isReady).toBe(false)
+  })
+
+  it('登录后首次拉取挂起（initialSyncPending）→ 同样禁止开始学习', async () => {
+    mockInitialSyncPending.mockReturnValue(true)
+    const wrapper = createStatefulWrapper(freshStateWithChars(['一', '二', '三']))
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+
+    expect(result.current.syncBlocked).toBe(true)
+    expect(result.current.isReady).toBe(false)
+  })
+
+  it('同步驱动的状态重载中（loading）→ 同样禁止开始学习', async () => {
+    const wrapper = createStatefulWrapper(freshStateWithChars(['一', '二', '三']), {
+      loading: true,
+    })
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+
+    expect(result.current.syncBlocked).toBe(true)
+    expect(result.current.isReady).toBe(false)
+  })
+
+  it('离线/同步失败（offline/error）→ 不阻断开始学习', async () => {
+    for (const status of ['offline', 'error'] as const) {
+      mockSyncStatus.mockReturnValue(status)
+      const wrapper = createStatefulWrapper(freshStateWithChars(['一', '二', '三']))
+      const { result } = renderHook(() => useToday(), { wrapper })
+
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 0))
+      })
+
+      expect(result.current.syncBlocked).toBe(false)
+      expect(result.current.isReady).toBe(true)
+    }
+  })
+
+  it('同步中调用 startSession → 不启动会话（守卫）', async () => {
+    mockSyncStatus.mockReturnValue('syncing')
+    const wrapper = createStatefulWrapper(freshStateWithChars(['一', '二', '三']))
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+
+    act(() => {
+      result.current.startSession()
+    })
+
+    expect(result.current.phase).toBe('idle')
   })
 })

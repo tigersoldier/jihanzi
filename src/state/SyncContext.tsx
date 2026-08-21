@@ -17,6 +17,8 @@ import { getLastKnownRemoteTime } from '../data/db'
 interface SyncContextState {
   status: SyncStatus
   lastSyncTime: number | null
+  /** 登录后首次拉取是否仍在进行（含拉取启动前的异步间隙） */
+  initialSyncPending: boolean
   syncNow: () => Promise<void>
 }
 
@@ -27,6 +29,9 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const { reloadState } = useApp()
   const [status, setStatus] = useState<SyncStatus>('idle')
   const [lastSyncTime, setLastSyncTime] = useState<number | null>(null)
+  // 登录后首次拉取进行中：从 effect 同步置 true 起，到拉取 settle 为止。
+  // 首页据此在首次拉取期间禁止开始学习——拉取中的任务队列尚未合并远程变更。
+  const [initialSyncPending, setInitialSyncPending] = useState(false)
 
   useEffect(() => {
     const unsubscribe = onSyncStatusChange(setStatus)
@@ -35,6 +40,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!isLoggedIn) return
+
+    // 同步置位：覆盖 getLastKnownRemoteTime 到 initialPull 置 'syncing' 之间的间隙——
+    // 这期间本地旧快照已渲染、首页按钮可用，若不加挂起标记会漏过首次拉取的门控。
+    setInitialSyncPending(true)
 
     // Initial pull from Drive — if remote data was merged into
     // IndexedDB, tell AppContext to reload so the UI picks it up.
@@ -55,6 +64,9 @@ export function SyncProvider({ children }: { children: ReactNode }) {
           })
           .catch(() => {})
       })
+      // 拉取失败也解除挂起——离线/失败时本地数据即最新可用数据，允许开始学习
+      .catch(() => {})
+      .finally(() => setInitialSyncPending(false))
 
     // Start background sync
     startBackgroundSync(() => {
@@ -83,7 +95,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <SyncContext.Provider value={{ status, lastSyncTime, syncNow }}>
+    <SyncContext.Provider value={{ status, lastSyncTime, initialSyncPending, syncNow }}>
       {children}
     </SyncContext.Provider>
   )
