@@ -1,10 +1,14 @@
+import ReadAloudReminder, { type RoundCharGroup } from './ReadAloudReminder'
+
 interface CelebrationProps {
   total: number
   stats: { a: number; b: number; c: number; d: number }
+  /** 本次会话各轮写过的汉字（朗读提醒用，按轮分组） */
+  groups: RoundCharGroup[]
   onDone: () => void
 }
 
-export default function Celebration({ total, stats, onDone }: CelebrationProps) {
+export default function Celebration({ total, stats, groups, onDone }: CelebrationProps) {
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
       {/* Checkmark */}
@@ -28,6 +32,13 @@ export default function Celebration({ total, stats, onDone }: CelebrationProps) 
         <StatItem color="text-orange-600" bg="bg-orange-50" label="需提示" count={stats.c} />
         <StatItem color="text-red-600" bg="bg-red-50" label="遗忘" count={stats.d} />
       </div>
+
+      {/* 朗读提醒：列出本次会话各轮写的字，请孩子都读一遍 */}
+      {groups.length > 0 && (
+        <div className="my-6">
+          <ReadAloudReminder groups={groups} message="请让孩子把今天写的字都读一遍" />
+        </div>
+      )}
 
       <button
         onClick={onDone}

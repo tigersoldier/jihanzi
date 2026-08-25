@@ -5,10 +5,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react'
 import React, { type ReactNode } from 'react'
 import type { AppState } from '../../core/types'
 import { AppContext, type AppContextState } from '../../state/AppContext'
+import RoundComplete from './RoundComplete'
+import Celebration from './Celebration'
 
 // Mock localStorage
 const localStorageStore = new Map<string, string>()
@@ -73,8 +75,8 @@ function wrapperWith(state: AppState, childId = '') {
       addCharacter: vi.fn() as any,
       removeCharacter: vi.fn() as any,
       reorderCharacters: vi.fn() as any,
-      submitReview: vi.fn() as any,
-      submitPresentChars: vi.fn() as any,
+      submitReview: vi.fn().mockResolvedValue(undefined) as any,
+      submitPresentChars: vi.fn().mockResolvedValue(undefined) as any,
       updateSettings: vi.fn() as any,
       getLogEntries: vi.fn() as any,
       bulkImport: vi.fn() as any,
@@ -228,5 +230,206 @@ describe('TodaySession', () => {
       expect(screen.getByText('开始学习')).toBeDefined()
     })
     expect(screen.queryByText(/正在同步数据/)).toBeNull()
+  })
+})
+
+// ============================================================
+// 朗读提醒（ReadAloudReminder）—— 轮次完成 / 庆祝界面列出所写汉字
+// ============================================================
+
+describe('RoundComplete 朗读提醒', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
+  it('第 1 轮完成后列出本轮写的字并提醒朗读', () => {
+    render(
+      <RoundComplete
+        round={1}
+        needReview={0}
+        maxRounds={3}
+        roundChars={['一', '二', '三']}
+        onContinue={vi.fn()}
+        onSkip={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('第 1 轮完成')).toBeDefined()
+    expect(screen.getByText('请让孩子把这轮写的字读一遍')).toBeDefined()
+    expect(screen.getByText('第 1 轮写的字')).toBeDefined()
+    expect(screen.getByText('一')).toBeDefined()
+    expect(screen.getByText('二')).toBeDefined()
+    expect(screen.getByText('三')).toBeDefined()
+  })
+
+  it('巩固轮完成后列出该轮写的字（仅本轮，不含上一轮）', () => {
+    render(
+      <RoundComplete
+        round={2}
+        needReview={1}
+        maxRounds={3}
+        roundChars={['一', '三']}
+        onContinue={vi.fn()}
+        onSkip={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('第 2 轮完成')).toBeDefined()
+    expect(screen.getByText('第 2 轮写的字')).toBeDefined()
+    expect(screen.getByText('一')).toBeDefined()
+    expect(screen.getByText('三')).toBeDefined()
+    expect(screen.queryByText('二')).toBeNull()
+  })
+})
+
+describe('Celebration 朗读提醒', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
+  it('按轮列出本次会话各轮写的字（含巩固轮）并提醒朗读', () => {
+    render(
+      <Celebration
+        total={5}
+        stats={{ a: 2, b: 1, c: 1, d: 1 }}
+        groups={[
+          { round: 1, chars: ['一', '二', '三'] },
+          { round: 2, chars: ['二', '三'] },
+        ]}
+        onDone={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('请让孩子把今天写的字都读一遍')).toBeDefined()
+    expect(screen.getByText('第 1 轮写的字')).toBeDefined()
+    expect(screen.getByText('第 2 轮写的字')).toBeDefined()
+    // 遗忘字跨轮重复出现，应每轮都列出
+    expect(screen.getAllByText('二')).toHaveLength(2)
+    expect(screen.getAllByText('三')).toHaveLength(2)
+    expect(screen.getByText('一')).toBeDefined()
+  })
+})
+
+// ============================================================
+// 完整会话流程：轮次完成与庆祝界面的朗读提醒联动
+// ============================================================
+
+describe('TodaySession 朗读提醒联动', () => {
+  beforeEach(() => {
+    localStorageStore.clear()
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  const learnState = () =>
+    makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 0,
+          progress: {},
+        },
+      ],
+      wordBooks: [
+        {
+          id: 'wb_1',
+          name: '测试',
+          characters: ['一', '二', '三'],
+        },
+      ],
+    })
+
+  /** 走完展示阶段进入复习阶段 */
+  async function presentAllAndStartReview() {
+    fireEvent.click(screen.getByText('下一个')) // 一 → 二
+    fireEvent.click(screen.getByText('下一个')) // 二 → 三
+    fireEvent.click(screen.getByText('开始复习')) // 进入复习
+  }
+
+  it('全部掌握：轮次完成提醒读本轮 3 个字，庆祝提醒读全部字', async () => {
+    render(<TodaySession />, { wrapper: wrapperWith(learnState(), 'child_1') })
+
+    await waitFor(() => expect(screen.getByText('开始学习')).toBeDefined())
+    fireEvent.click(screen.getByText('开始学习'))
+    await presentAllAndStartReview()
+
+    // 第 1 轮：三个字全部评 a
+    await screen.findByText('一')
+    fireEvent.click(screen.getByText('完全掌握'))
+    await screen.findByText('二')
+    fireEvent.click(screen.getByText('完全掌握'))
+    await screen.findByText('三')
+    fireEvent.click(screen.getByText('完全掌握'))
+
+    // 轮次完成：列出本轮 3 个字，提醒朗读
+    await waitFor(() => expect(screen.getByText('第 1 轮完成')).toBeDefined())
+    expect(screen.getByText('请让孩子把这轮写的字读一遍')).toBeDefined()
+    expect(screen.getByText('第 1 轮写的字')).toBeDefined()
+    expect(screen.getByText('一')).toBeDefined()
+    expect(screen.getByText('二')).toBeDefined()
+    expect(screen.getByText('三')).toBeDefined()
+
+    // 进入庆祝：列出全部 3 个字
+    fireEvent.click(screen.getByText('太棒了，继续'))
+    await waitFor(() => expect(screen.getByText('今天完成 3 个字')).toBeDefined())
+    expect(screen.getByText('请让孩子把今天写的字都读一遍')).toBeDefined()
+    expect(screen.getByText('第 1 轮写的字')).toBeDefined()
+    expect(screen.getByText('一')).toBeDefined()
+    expect(screen.getByText('二')).toBeDefined()
+    expect(screen.getByText('三')).toBeDefined()
+  })
+
+  it('有遗忘字进入巩固轮：每轮完成都提醒读本轮的字，庆祝列出两轮的字', async () => {
+    render(<TodaySession />, { wrapper: wrapperWith(learnState(), 'child_1') })
+
+    await waitFor(() => expect(screen.getByText('开始学习')).toBeDefined())
+    fireEvent.click(screen.getByText('开始学习'))
+    await presentAllAndStartReview()
+
+    // 第 1 轮：一遗忘(d)、二掌握(a)、三需提示(c)
+    await screen.findByText('一')
+    fireEvent.click(screen.getByText('遗忘'))
+    await screen.findByText('二')
+    fireEvent.click(screen.getByText('完全掌握'))
+    await screen.findByText('三')
+    fireEvent.click(screen.getByText('需提示'))
+
+    // 第 1 轮完成：2 个字需巩固，提醒朗读本轮 3 个字
+    await waitFor(() => expect(screen.getByText('第 1 轮完成')).toBeDefined())
+    expect(screen.getByText('2 个字需要再巩固')).toBeDefined()
+    expect(screen.getByText('请让孩子把这轮写的字读一遍')).toBeDefined()
+    expect(screen.getByText('一')).toBeDefined()
+    expect(screen.getByText('二')).toBeDefined()
+    expect(screen.getByText('三')).toBeDefined()
+
+    // 进入第 2 轮巩固：只剩一、三
+    fireEvent.click(screen.getByText('开始第 2 轮巩固'))
+    await screen.findByText('一')
+    expect(screen.getByText('第 2 轮')).toBeDefined()
+    fireEvent.click(screen.getByText('完全掌握'))
+    await screen.findByText('三')
+    fireEvent.click(screen.getByText('完全掌握'))
+
+    // 第 2 轮完成：提醒朗读本轮 2 个字（不含二）
+    await waitFor(() => expect(screen.getByText('第 2 轮完成')).toBeDefined())
+    expect(screen.getByText('请让孩子把这轮写的字读一遍')).toBeDefined()
+    expect(screen.getByText('第 2 轮写的字')).toBeDefined()
+    expect(screen.getByText('一')).toBeDefined()
+    expect(screen.getByText('三')).toBeDefined()
+    expect(screen.queryByText('二')).toBeNull()
+
+    // 庆祝：两轮的字都列出（一、三 跨轮重复）
+    fireEvent.click(screen.getByText('太棒了，继续'))
+    await waitFor(() => expect(screen.getByText('今天完成 5 个字')).toBeDefined())
+    expect(screen.getByText('请让孩子把今天写的字都读一遍')).toBeDefined()
+    expect(screen.getByText('第 1 轮写的字')).toBeDefined()
+    expect(screen.getByText('第 2 轮写的字')).toBeDefined()
+    expect(screen.getAllByText('一')).toHaveLength(2)
+    expect(screen.getAllByText('三')).toHaveLength(2)
+    expect(screen.getByText('二')).toBeDefined()
   })
 })

@@ -8,6 +8,12 @@ import { getReviewsForChildOnDay, getLastStudyDayForChild } from '../data/db'
 
 export type SessionPhase = 'idle' | 'presenting' | 'reviewing' | 'roundComplete' | 'celebration'
 
+/** 一轮复习写过的字：轮次 + 该轮写过的汉字 */
+export interface RoundCharGroup {
+  round: number
+  chars: string[]
+}
+
 // ---- Shared day type hook (used by both header and session) ----
 
 export interface DayTypeInfo {
@@ -152,6 +158,10 @@ interface UseTodayReturn {
   sessionStats: { a: number; b: number; c: number; d: number }
   /** 当前轮次评分为 c/d 的字数（不累计前几轮） */
   needReview: number
+  /** 本轮（刚完成的一轮）写过的字，去重保序（RoundComplete 朗读提醒用） */
+  roundChars: string[]
+  /** 本次会话各轮写过的字，按轮分组升序（Celebration 朗读提醒用） */
+  sessionCharGroups: RoundCharGroup[]
   ratingAnimation: string | null
   selectedChildId: string
   children: { id: string; name: string; hasTasks: boolean }[]
@@ -392,6 +402,30 @@ export function useToday(): UseTodayReturn {
     [sessionReviews, round],
   )
 
+  // 本轮写过的字（去重保序）——RoundComplete 朗读提醒用。
+  // 每轮内每字只评一次，去重仅作防御。
+  const roundChars = useMemo(
+    () => [...new Set(sessionReviews.filter(r => r.round === round).map(r => r.character))],
+    [sessionReviews, round],
+  )
+
+  // 本次会话各轮写过的字（按轮分组升序）——Celebration 朗读提醒用。
+  // 遗忘字会跨轮重复出现，故按轮展示；同一轮内去重保序。
+  const sessionCharGroups = useMemo(() => {
+    const byRound = new Map<number, string[]>()
+    for (const r of sessionReviews) {
+      const chars = byRound.get(r.round)
+      if (chars) {
+        if (!chars.includes(r.character)) chars.push(r.character)
+      } else {
+        byRound.set(r.round, [r.character])
+      }
+    }
+    return [...byRound.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([round, chars]) => ({ round, chars }))
+  }, [sessionReviews])
+
   const startSession = useCallback(() => {
     // 同步拉取期间禁止启动——UI 已隐藏按钮，此处为同帧竞态/未来入口的守卫
     if (syncBlocked) return
@@ -551,6 +585,8 @@ export function useToday(): UseTodayReturn {
     round,
     sessionStats,
     needReview,
+    roundChars,
+    sessionCharGroups,
     ratingAnimation,
     selectedChildId,
     children,

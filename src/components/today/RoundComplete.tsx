@@ -1,7 +1,11 @@
+import ReadAloudReminder from './ReadAloudReminder'
+
 interface RoundCompleteProps {
   round: number
   needReview: number
   maxRounds: number
+  /** 本轮写过的汉字（朗读提醒用） */
+  roundChars: string[]
   onContinue: () => void
   onSkip: () => void
 }
@@ -10,6 +14,7 @@ export default function RoundComplete({
   round,
   needReview,
   maxRounds,
+  roundChars,
   onContinue,
   onSkip,
 }: RoundCompleteProps) {
@@ -22,6 +27,16 @@ export default function RoundComplete({
       <p className="text-gray-500 mb-6">
         {needReview > 0 ? `${needReview} 个字需要再巩固` : '全部掌握，太棒了！'}
       </p>
+
+      {/* 朗读提醒：列出本轮写的字，请孩子读一遍 */}
+      {roundChars.length > 0 && (
+        <div className="mb-6">
+          <ReadAloudReminder
+            groups={[{ round, chars: roundChars }]}
+            message="请让孩子把这轮写的字读一遍"
+          />
+        </div>
+      )}
 
       {needReview > 0 && canContinue && (
         <div className="space-y-3">

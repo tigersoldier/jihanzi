@@ -63,6 +63,8 @@ export function TodaySession() {
     round,
     sessionStats,
     needReview,
+    roundChars,
+    sessionCharGroups,
     ratingAnimation,
     children,
     selectedChildId,
@@ -226,6 +228,7 @@ export function TodaySession() {
           round={round}
           needReview={needReview}
           maxRounds={state.settings.maxRounds}
+          roundChars={roundChars}
           onContinue={handleContinueRound}
           onSkip={handleSkipRound}
         />
@@ -236,6 +239,7 @@ export function TodaySession() {
         <Celebration
           total={sessionStats.a + sessionStats.b + sessionStats.c + sessionStats.d}
           stats={sessionStats}
+          groups={sessionCharGroups}
           onDone={handleDone}
         />
       )}
