@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useWordBook } from '../../hooks/useWordBook'
+import { useRoute } from '../../hooks/useRoute'
 import { useApp } from '../../state/AppContext'
+import type { WordBookRoute } from '../../router'
 import WordBookSwitcher from './WordBookSwitcher'
 import CharacterList from './CharacterList'
 import CharacterDetail from '../common/CharacterDetail'
@@ -11,6 +13,9 @@ type FilterMode = 'all' | 'learned' | 'unlearned'
 
 export default function WordBookPage() {
   const { state, selectedChildId, setSelectedChildId } = useApp()
+  const { route, navigate, goBack } = useRoute()
+  // WordBookPage 只在 activeTab === 'wordbook' 时被渲染，此处路由必为 wordbook
+  const wbRoute = route as WordBookRoute
   const {
     selectedWBId,
     setSelectedWBId,
@@ -26,7 +31,9 @@ export default function WordBookPage() {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newWBName, setNewWBName] = useState('')
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
-  const [detailChar, setDetailChar] = useState<string | null>(null)
+
+  // 查看的生字由 URL 驱动（#/wordbook/char/<字>）
+  const detailChar = wbRoute.char ?? null
 
   // Get current child's progress for proficiency lookup
   const currentChild = state.children.find(c => c.id === selectedChildId)
@@ -51,7 +58,7 @@ export default function WordBookPage() {
       <CharacterDetail
         childId={selectedChildId}
         character={detailChar}
-        onBack={() => setDetailChar(null)}
+        onBack={() => goBack({ name: 'wordbook', wbId: wbRoute.wbId ?? undefined })}
       />
     )
   }
@@ -237,7 +244,7 @@ export default function WordBookPage() {
           onReorder={handleReorder}
           onRemove={handleRemove}
           proficiencyMap={proficiencyMap}
-          onCharClick={selectedChildId ? char => setDetailChar(char) : undefined}
+          onCharClick={selectedChildId ? char => navigate({ name: 'wordbook', char }) : undefined}
         />
       ) : (
         <div className="text-center py-12 text-gray-400 text-sm">

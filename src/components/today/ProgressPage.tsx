@@ -1,6 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useMemo } from 'react'
 import { useApp } from '../../state/AppContext'
 import { useToday, useDayType } from '../../hooks/useToday'
+import { useRoute } from '../../hooks/useRoute'
+import type { ProgressRoute } from '../../router'
 import { useHistory, type DaySummary } from '../../hooks/useStats'
 import { formatDateLabel, getDayTypeLabel } from '../../utils/date'
 import { GRADE_LABELS, GRADE_COLORS, type Grade } from '../../core/types'
@@ -249,11 +251,16 @@ export function TodaySession() {
 
 export default function ProgressPage() {
   const { state, selectedChildId, setSelectedChildId } = useApp()
+  const { route, navigate, goBack } = useRoute()
+  // ProgressPage 只在 activeTab === 'progress' 时被渲染，此处路由必为 progress
+  const progressRoute = route as ProgressRoute
   const curYM = currentYearMonth()
 
-  const [viewMonth, setViewMonth] = useState(curYM)
-  const [selectedDay, setSelectedDay] = useState<string | null>(null)
-  const [detailChar, setDetailChar] = useState<string | null>(null)
+  // 月份 / 选中日期 / 查看的生字全部由 URL 驱动（#/progress[/<月>[/<日>[/<字>]]]），
+  // 系统后退键与刷新都能恢复到对应状态
+  const viewMonth = progressRoute.month ?? curYM
+  const selectedDay = progressRoute.day ?? null
+  const detailChar = progressRoute.char ?? null
 
   const isCurrentMonth = viewMonth === curYM
 
@@ -277,7 +284,7 @@ export default function ProgressPage() {
       <CharacterDetail
         childId={activeChildId}
         character={detailChar}
-        onBack={() => setDetailChar(null)}
+        onBack={() => goBack({ name: 'progress', month: viewMonth, day: selectedDay ?? undefined })}
       />
     )
   }
@@ -287,8 +294,10 @@ export default function ProgressPage() {
     return (
       <DayDetailView
         daySummary={selectedDaySummary}
-        onBack={() => setSelectedDay(null)}
-        onCharClick={char => setDetailChar(char)}
+        onBack={() => goBack({ name: 'progress', month: viewMonth })}
+        onCharClick={char =>
+          navigate({ name: 'progress', month: viewMonth, day: selectedDay, char })
+        }
       />
     )
   }
@@ -362,7 +371,9 @@ export default function ProgressPage() {
         {/* Month navigator */}
         <div className="flex items-center justify-between mb-3">
           <button
-            onClick={() => setViewMonth(prevMonth(viewMonth))}
+            onClick={() =>
+              navigate({ name: 'progress', month: prevMonth(viewMonth) }, { replace: true })
+            }
             className="text-sm text-indigo-600 hover:text-indigo-800 px-2 py-1"
           >
             ← 上月
@@ -372,7 +383,13 @@ export default function ProgressPage() {
             onClick={() => {
               const next = nextMonth(viewMonth)
               // Don't go past current month
-              if (next <= curYM) setViewMonth(next)
+              if (next <= curYM) {
+                navigate(
+                  // 当前月份不带 month 段，保持 URL 简洁
+                  { name: 'progress', month: next === curYM ? undefined : next },
+                  { replace: true },
+                )
+              }
             }}
             disabled={viewMonth >= curYM}
             className="text-sm text-indigo-600 hover:text-indigo-800 px-2 py-1 disabled:opacity-30 disabled:cursor-default"
@@ -391,7 +408,7 @@ export default function ProgressPage() {
             {history.days.map(day => (
               <button
                 key={day.dayKey}
-                onClick={() => setSelectedDay(day.dayKey)}
+                onClick={() => navigate({ name: 'progress', month: viewMonth, day: day.dayKey })}
                 className="w-full bg-white rounded-xl border border-gray-100 px-4 py-3 shadow-sm hover:shadow-md transition-shadow text-left"
               >
                 <DaySummaryRow day={day} />

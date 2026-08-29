@@ -85,6 +85,25 @@ src/
     └── chars.ts            # 80+ 常用汉字拼音与组词数据库
 ```
 
+## URL 路由
+
+应用部署在 GitHub Pages（`/jihanzi/`），没有服务端重写，因此 UI 状态由
+`location.hash` 承载（见 `src/router.ts`、`src/hooks/useRoute.ts`）。切换页面、
+查看生字等操作会 push 历史记录，手机上系统后退键可逐级返回，刷新后停留在
+当前页面：
+
+```
+#/progress                             学习进度（本月）
+#/progress/2026-08                     学习进度，指定月份（翻月用 replace）
+#/progress/2026-08/2026-08-16          某天详情
+#/progress/2026-08/2026-08-16/花       从某天详情查看生字
+#/child                                孩子
+#/wordbook                             生字本
+#/wordbook/wb/<id>                     生字本，选中指定字本（切换用 replace）
+#/wordbook/char/花                     生字本中查看生字
+#/settings                             设置
+```
+
 ## 核心概念
 
 ### 记忆算法：SM-2 变体

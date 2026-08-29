@@ -1,5 +1,7 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useMemo, useCallback } from 'react'
 import { useApp } from '../state/AppContext'
+import { useRoute } from './useRoute'
+import type { WordBookRoute } from '../router'
 import { isChineseChar, ValidationError } from '../utils/chars'
 
 interface UseWordBookReturn {
@@ -26,8 +28,25 @@ export function useWordBook(): UseWordBookReturn {
     updateWordBook,
   } = useApp()
 
-  const [selectedWBId, setSelectedWBId] = useState<string | null>(
-    () => state.wordBooks[0]?.id || null,
+  const { route, navigate } = useRoute()
+  // useWordBook 仅在生字本页使用，此处路由必为 wordbook
+  const wbRoute = route as WordBookRoute
+
+  // 选中的生字本由 URL 驱动（#/wordbook/wb/<id>）：刷新 / 后退可恢复。
+  // URL 中的 id 失效（生字本已被删除）时回退到第一个生字本。
+  const selectedWBId = useMemo(() => {
+    if (wbRoute.wbId && state.wordBooks.some(w => w.id === wbRoute.wbId)) {
+      return wbRoute.wbId
+    }
+    return state.wordBooks[0]?.id ?? null
+  }, [wbRoute.wbId, state.wordBooks])
+
+  // 切换生字本是选择器操作而非页面跳转 → replace，避免历史记录膨胀
+  const setSelectedWBId = useCallback(
+    (id: string | null) => {
+      navigate({ name: 'wordbook', wbId: id ?? undefined }, { replace: true })
+    },
+    [navigate],
   )
 
   const wbList = useMemo(
