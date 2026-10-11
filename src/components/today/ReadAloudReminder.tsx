@@ -36,7 +36,7 @@ export default function ReadAloudReminder({ groups, message }: ReadAloudReminder
                   key={char}
                   className="bg-white rounded-xl border border-amber-100 px-3 py-1.5 text-center"
                 >
-                  <div className="text-2xl font-kai text-gray-800 leading-tight">{char}</div>
+                  <div className="text-2xl text-gray-800 leading-tight">{char}</div>
                   <div className="text-[10px] text-gray-400 leading-tight mt-0.5">
                     {getPinyin(char)}
                   </div>

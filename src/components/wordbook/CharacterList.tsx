@@ -148,7 +148,7 @@ function SortableCharItem({
       <span className="text-xs text-gray-400 w-6 text-right tabular-nums">{index + 1}.</span>
 
       {/* Character */}
-      <span className="text-2xl font-kai text-gray-800 flex-1">{char}</span>
+      <span className="text-2xl text-gray-800 flex-1">{char}</span>
 
       {/* Pinyin */}
       <span className="text-xs text-gray-400 hidden sm:block">{pinyin}</span>

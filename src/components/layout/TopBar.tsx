@@ -8,7 +8,7 @@ export default function TopBar({ onSettingsClick }: TopBarProps) {
   return (
     <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-gray-200">
       <div className="max-w-2xl mx-auto flex items-center justify-between px-4 h-12">
-        <h1 className="text-lg font-bold text-indigo-700 font-kai tracking-wide">记汉字</h1>
+        <h1 className="text-lg font-bold text-indigo-700 tracking-wide">记汉字</h1>
         <div className="flex items-center gap-3">
           <SyncIndicator />
           <button

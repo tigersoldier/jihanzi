@@ -47,6 +47,10 @@ vi.mock('../../state/SyncContext', () => ({
   }),
 }))
 
+vi.mock('../../utils/learningFont', () => ({
+  loadLearningKaiFont: vi.fn().mockResolvedValue(undefined),
+}))
+
 function makeState(overrides?: Partial<AppState>): AppState {
   return {
     children: [],
@@ -345,8 +349,20 @@ describe('TodaySession 朗读提醒联动', () => {
 
   /** 走完展示阶段进入复习阶段 */
   async function presentAllAndStartReview() {
+    await screen.findByText('一')
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '下一个' }).hasAttribute('disabled')).toBe(false),
+    )
     fireEvent.click(screen.getByText('下一个')) // 一 → 二
+    await screen.findByText('二')
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '下一个' }).hasAttribute('disabled')).toBe(false),
+    )
     fireEvent.click(screen.getByText('下一个')) // 二 → 三
+    await screen.findByText('三')
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '开始复习' }).hasAttribute('disabled')).toBe(false),
+    )
     fireEvent.click(screen.getByText('开始复习')) // 进入复习
   }
 

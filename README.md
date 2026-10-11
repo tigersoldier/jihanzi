@@ -328,7 +328,8 @@ jobs:
 | 拖拽 | @dnd-kit | 生字本排序 |
 | PWA | vite-plugin-pwa (Workbox) | Service Worker、离线缓存 |
 | 部署 | gh-pages | GitHub Pages |
-| 字体 | KaiTi / STKaiti（系统楷体） | 汉字展示 |
+| UI 字体 | Tailwind 系统无衬线字体 | 界面文字 |
+| 示范字字体 | 霞鹜文楷 GB 轻便版 1.522（OFL-1.1，内嵌 WOFF2；见 `public/fonts/`） | 仅用于大字示范 |
 
 ## 设计文档
 

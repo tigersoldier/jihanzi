@@ -1,4 +1,5 @@
 import { useCharacterStats } from '../../hooks/useStats'
+import LearningCharacter from './LearningCharacter'
 import { getCharInfo } from '../../utils/chars'
 import { formatDateLabel } from '../../utils/date'
 import { GRADE_LABELS, GRADE_COLORS } from '../../core/types'
@@ -54,7 +55,9 @@ export default function CharacterDetail({ childId, character, onBack }: Characte
 
       {/* Character display */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 text-center">
-        <div className="text-7xl font-bold text-gray-800 mb-2">{character}</div>
+        <div className="mb-2 text-7xl text-gray-800">
+          <LearningCharacter character={character} />
+        </div>
         <div className="text-lg text-gray-500 mb-1">{pinyin}</div>
         {words.length > 0 && <div className="text-sm text-gray-400">{words.join(' · ')}</div>}
       </div>

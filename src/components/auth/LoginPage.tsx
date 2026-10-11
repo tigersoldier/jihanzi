@@ -8,10 +8,10 @@ export default function LoginPage() {
       <div className="max-w-sm w-full text-center">
         {/* Logo */}
         <div className="w-24 h-24 bg-indigo-600 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg">
-          <span className="text-5xl font-kai text-white">字</span>
+          <span className="text-5xl text-white">字</span>
         </div>
 
-        <h1 className="text-3xl font-bold text-gray-900 mb-2 font-kai">记汉字</h1>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">记汉字</h1>
         <p className="text-gray-500 mb-8">帮助学龄儿童学习和复习汉字的交互式学习工具</p>
 
         {/* Feature highlights */}

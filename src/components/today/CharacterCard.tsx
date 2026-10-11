@@ -1,5 +1,6 @@
 import { getPinyin, getWords } from '../../utils/chars'
 import type { SM2State } from '../../core/types'
+import LearningCharacter from '../common/LearningCharacter'
 
 interface CharacterCardProps {
   character: string
@@ -7,6 +8,7 @@ interface CharacterCardProps {
   sm2State?: SM2State
   ratingAnimation?: string | null // 'a' | 'b' | 'c' | 'd' | null
   slideDirection?: 'in' | 'out' | null
+  onFontReadyChange?: (character: string, isReady: boolean) => void
 }
 
 const gradeColors: Record<string, string> = {
@@ -29,6 +31,7 @@ export default function CharacterCard({
   sm2State,
   ratingAnimation,
   slideDirection,
+  onFontReadyChange,
 }: CharacterCardProps) {
   const pinyin = getPinyin(character)
   const words = getWords(character)
@@ -60,9 +63,11 @@ export default function CharacterCard({
 
         {/* Character display */}
         <div className="w-32 h-32 sm:w-40 sm:h-40 flex items-center justify-center mb-4">
-          <span className="text-7xl sm:text-8xl font-kai text-gray-900 select-none">
-            {character}
-          </span>
+          <LearningCharacter
+            character={character}
+            className="text-7xl sm:text-8xl text-gray-900 select-none"
+            onFontReadyChange={onFontReadyChange}
+          />
         </div>
 
         {/* Pinyin */}

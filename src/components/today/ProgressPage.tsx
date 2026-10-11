@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useApp } from '../../state/AppContext'
 import { useToday, useDayType } from '../../hooks/useToday'
 import { useRoute } from '../../hooks/useRoute'
@@ -55,6 +55,13 @@ function TaskPreviewList({ label, chars }: { label: string; chars: string[] }) {
 
 export function TodaySession() {
   const { state, setSelectedChildId } = useApp()
+  const [fontReadyCharacter, setFontReadyCharacter] = useState<string | null>(null)
+  const handleFontReadyChange = useCallback((character: string, isReady: boolean) => {
+    setFontReadyCharacter(current => {
+      if (isReady) return character
+      return current === character ? null : current
+    })
+  }, [])
   const today = useToday()
   const {
     phase,
@@ -192,12 +199,14 @@ export function TodaySession() {
             sm2State={undefined}
             ratingAnimation={null}
             slideDirection="in"
+            onFontReadyChange={handleFontReadyChange}
           />
           <PresentingButtons
             taskIndex={taskIndex}
             totalTasks={totalTasks}
             onPrev={() => handlePresentNav('prev')}
             onNext={() => handlePresentNav('next')}
+            disabled={fontReadyCharacter !== currentTask.character}
           />
         </div>
       )}
@@ -219,8 +228,12 @@ export function TodaySession() {
             sm2State={currentTask.sm2State}
             ratingAnimation={ratingAnimation}
             slideDirection="in"
+            onFontReadyChange={handleFontReadyChange}
           />
-          <RatingButtons onRate={handleRate} />
+          <RatingButtons
+            onRate={handleRate}
+            disabled={fontReadyCharacter !== currentTask.character}
+          />
         </div>
       )}
 
@@ -534,7 +547,7 @@ function DayDetailView({
                 onClick={() => onCharClick(character)}
                 className="w-full flex items-center justify-between py-2 px-3 rounded-lg hover:bg-gray-50 transition-colors text-left"
               >
-                <span className="text-lg font-kai text-gray-800">{character}</span>
+                <span className="text-lg text-gray-800">{character}</span>
                 <span className={`text-sm font-medium ${GRADE_COLORS[grade]}`}>
                   {GRADE_LABELS[grade as Grade]}
                 </span>
@@ -555,7 +568,7 @@ function DayDetailView({
                 onClick={() => onCharClick(character)}
                 className="w-full flex items-center justify-between py-2 px-3 rounded-lg hover:bg-gray-50 transition-colors text-left"
               >
-                <span className="text-lg font-kai text-gray-800">{character}</span>
+                <span className="text-lg text-gray-800">{character}</span>
                 <span className={`text-sm font-medium ${GRADE_COLORS[grade]}`}>
                   {GRADE_LABELS[grade as Grade]}
                 </span>

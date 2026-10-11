@@ -1,3 +1,11 @@
+@font-face {
+  font-family: 'LXGW WenKai GB Lite';
+  src: url('./assets/fonts/lxgw-wenkai-gb-lite.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -8,7 +16,7 @@
   }
 
   body {
-    @apply min-h-screen;
+    @apply min-h-screen font-sans;
   }
 }
 
@@ -23,8 +31,8 @@
 }
 
 @layer utilities {
-  .text-kai {
-    font-family: 'KaiTi', 'STKaiti', 'AR PL UKai CN', serif;
+  .font-learning-kai {
+    font-family: 'LXGW WenKai GB Lite';
   }
 }
 
