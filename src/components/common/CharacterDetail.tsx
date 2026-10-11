@@ -25,6 +25,11 @@ export default function CharacterDetail({ childId, character, onBack }: Characte
   } = useCharacterStats(childId, character)
   const { pinyin, words } = getCharInfo(character)
 
+  useEffect(() => {
+    // 生字详情作为新页面打开时，不继承列表或上一生字的滚动位置。
+    window.scrollTo(0, 0)
+  }, [character])
+
   // 滚动到底时触发 loadMore
   const sentinelRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
