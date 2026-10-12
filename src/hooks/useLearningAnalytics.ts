@@ -54,6 +54,7 @@ export function useLearningAnalytics(childId: string, yearMonth: string): Learni
     ready: false,
     processed: 0,
     total: 0,
+    phase: 'facts',
   })
   const [dailyRows, setDailyRows] = useState<
     Awaited<ReturnType<typeof getDailyReviewStatsInRange>>
@@ -69,7 +70,7 @@ export function useLearningAnalytics(childId: string, yearMonth: string): Learni
     let cancelled = false
     if (!childId) {
       setLoading(false)
-      setBackfill({ ready: true, processed: 0, total: 0 })
+      setBackfill({ ready: true, processed: 0, total: 0, phase: 'logs' })
       return () => {
         cancelled = true
       }

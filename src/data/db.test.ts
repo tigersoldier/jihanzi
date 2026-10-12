@@ -8,6 +8,7 @@
 import 'fake-indexeddb/auto'
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { AnyLogEntry } from '../core/types'
+import { buildHistoricalCharts } from '../core/learningAnalytics'
 
 // ============================================================
 // isUTF8Corrupted — pure function tests
@@ -492,6 +493,227 @@ describe('learning analytics projection', () => {
     await db.characterAnalytics.clear()
   })
 
+  it('classifies retained learned-character reviews from the snapshot when earlier logs were pruned', async () => {
+    await db.snapshot.put({
+      type: 'current',
+      timestamp: 30,
+      state: {
+        children: [
+          {
+            id: 'child_test',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: 1,
+            progress: {
+              花: {
+                ease: 2.5,
+                interval: 2,
+                repetitions: 2,
+                nextReview: '2026-07-02',
+                lastGrade: 'a',
+                firstReviewDay: '2026-06-30',
+              },
+            },
+          },
+        ],
+        wordBooks: [{ id: 'wb_1', name: '测试', characters: ['花'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    })
+    await db.logs.bulkAdd([makeReviewEntry({ timestamp: 30, grade: 'b', dayKey: '2026-07-02' })])
+
+    await backfillLearningAnalytics()
+
+    const [day] = await getDailyReviewStatsInRange('child_test', '2026-07-02', '2026-07-02')
+    const charts = buildHistoricalCharts('2026-07', [day])
+    expect(charts.days[1].inMonth.learnedChars.b).toBe(1)
+    expect(charts.days[1].inMonth.newChars.b).toBe(0)
+  })
+
+  it('rebuilds a completed old projection instead of keeping its incorrect category', async () => {
+    await db.snapshot.put({
+      type: 'current',
+      timestamp: 30,
+      state: {
+        children: [
+          {
+            id: 'child_test',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: 1,
+            progress: {
+              花: {
+                ease: 2.5,
+                interval: 2,
+                repetitions: 2,
+                nextReview: '2026-07-02',
+                lastGrade: 'a',
+                firstReviewDay: '2026-06-30',
+              },
+            },
+          },
+        ],
+        wordBooks: [{ id: 'wb_1', name: '测试', characters: ['花'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    })
+    await db.logs.bulkAdd([makeReviewEntry({ timestamp: 30, grade: 'b', dayKey: '2026-07-02' })])
+    await db.reviewFacts.add({
+      childId: 'child_test',
+      character: '花',
+      dayKey: '2026-07-02',
+      timestamp: 30,
+      grade: 'b',
+      isNew: true,
+    })
+    await db.dailyReviewStats.add({
+      childId: 'child_test',
+      dayKey: '2026-07-02',
+      newChars: { a: 0, b: 1, c: 0, d: 0 },
+      learnedChars: { a: 0, b: 0, c: 0, d: 0 },
+    })
+    await db.characterAnalytics.add({
+      childId: 'child_test',
+      character: '花',
+      recentLearnedFacts: [{ dayKey: '2026-07-02', timestamp: 30, grade: 'b', isNew: true }],
+      everForgottenAfterMastery: true,
+      currentlyForgottenAfterMastery: true,
+      lastMasteryStatusTimestamp: 25,
+    })
+    await db.meta.put({
+      key: 'learningAnalyticsBackfill',
+      value: { ready: true, processed: 1, total: 1 },
+    })
+
+    await backfillLearningAnalytics()
+
+    const [day] = await getDailyReviewStatsInRange('child_test', '2026-07-02', '2026-07-02')
+    expect(day.learnedChars.b).toBe(1)
+    expect(day.newChars.b).toBe(0)
+    expect((await getCharacterAnalyticsForChild('child_test'))[0]).toMatchObject({
+      recentLearnedFacts: [{ dayKey: '2026-07-02', timestamp: 30, grade: 'b', isNew: false }],
+      everForgottenAfterMastery: true,
+      currentlyForgottenAfterMastery: true,
+      lastMasteryStatusTimestamp: 25,
+    })
+  })
+
+  it('reclassifies existing facts from the snapshot when their source logs were pruned', async () => {
+    await db.snapshot.put({
+      type: 'current',
+      timestamp: 30,
+      state: {
+        children: [
+          {
+            id: 'child_test',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: 1,
+            progress: {
+              花: {
+                ease: 2.5,
+                interval: 2,
+                repetitions: 2,
+                nextReview: '2026-07-02',
+                lastGrade: 'a',
+                firstReviewDay: '2026-06-30',
+              },
+            },
+          },
+        ],
+        wordBooks: [{ id: 'wb_1', name: '测试', characters: ['花'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    })
+    await db.reviewFacts.add({
+      childId: 'child_test',
+      character: '花',
+      dayKey: '2026-07-02',
+      timestamp: 30,
+      grade: 'b',
+      isNew: true,
+    })
+    await db.dailyReviewStats.add({
+      childId: 'child_test',
+      dayKey: '2026-07-02',
+      newChars: { a: 0, b: 1, c: 0, d: 0 },
+      learnedChars: { a: 0, b: 0, c: 0, d: 0 },
+    })
+    await db.meta.put({
+      key: 'learningAnalyticsBackfill',
+      value: { ready: true, processed: 1, total: 1 },
+    })
+
+    await backfillLearningAnalytics()
+
+    const [day] = await getDailyReviewStatsInRange('child_test', '2026-07-02', '2026-07-02')
+    expect(day.learnedChars.b).toBe(1)
+    expect(day.newChars.b).toBe(0)
+  })
+
+  it('resumes existing-fact reclassification across batches', async () => {
+    const characters = Array.from({ length: 501 }, (_, index) => `字${index}`)
+    await db.snapshot.put({
+      type: 'current',
+      timestamp: 30,
+      state: {
+        children: [
+          {
+            id: 'child_test',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: characters.length,
+            progress: Object.fromEntries(
+              characters.map(character => [
+                character,
+                {
+                  ease: 2.5,
+                  interval: 2,
+                  repetitions: 2,
+                  nextReview: '2026-07-02',
+                  lastGrade: 'a',
+                  firstReviewDay: '2026-06-30',
+                },
+              ]),
+            ),
+          },
+        ],
+        wordBooks: [{ id: 'wb_1', name: '测试', characters }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    })
+    await db.reviewFacts.bulkAdd(
+      characters.map((character, index) => ({
+        childId: 'child_test',
+        character,
+        dayKey: '2026-07-02',
+        timestamp: index + 1,
+        grade: 'a' as const,
+        isNew: true,
+      })),
+    )
+    await db.dailyReviewStats.add({
+      childId: 'child_test',
+      dayKey: '2026-07-02',
+      newChars: { a: characters.length, b: 0, c: 0, d: 0 },
+      learnedChars: { a: 0, b: 0, c: 0, d: 0 },
+    })
+    await db.meta.put({
+      key: 'learningAnalyticsBackfill',
+      value: { ready: true, processed: characters.length, total: characters.length },
+    })
+
+    const progress: string[] = []
+    await backfillLearningAnalytics(status => {
+      progress.push(`${status.phase}:${status.processed}/${status.total}`)
+    })
+
+    const [day] = await getDailyReviewStatsInRange('child_test', '2026-07-02', '2026-07-02')
+    expect(day.newChars.a).toBe(0)
+    expect(day.learnedChars.a).toBe(characters.length)
+    expect(progress).toContain('facts:500/501')
+  })
+
   it('projects batch-imported review facts with learned-character categories', async () => {
     await appendLogs(
       [makeReviewEntry({ timestamp: 5, grade: 'b', dayKey: '2026-07-01' })],
@@ -584,6 +806,8 @@ describe('learning analytics projection', () => {
     await db.meta.put({
       key: 'learningAnalyticsBackfill',
       value: {
+        version: 3,
+        phase: 'logs',
         ready: true,
         processed: 500,
         total: 500,

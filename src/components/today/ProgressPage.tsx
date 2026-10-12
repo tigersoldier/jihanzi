@@ -278,17 +278,18 @@ function LearningStatistics({
     },
     { title: '较弱', characters: analytics.characters.filter(item => item.proficiency === 'weak') },
   ]
+  let backfillMessage = `正在初始化学习统计：${analytics.backfill.processed.toLocaleString()} / ${analytics.backfill.total.toLocaleString()} 条日志`
+  if (analytics.backfill.ready) backfillMessage = '正在加载学习统计…'
+  else if (analytics.backfill.phase === 'facts') {
+    backfillMessage = `正在校正已有统计：${analytics.backfill.processed.toLocaleString()} / ${analytics.backfill.total.toLocaleString()} 条事实`
+  }
 
   return (
     <div className="space-y-4">
       <h3 className="text-base font-semibold text-gray-800">学习统计</h3>
       {analytics.loading ? (
         <div className="bg-white rounded-2xl border border-gray-100 p-4" role="status">
-          <p className="text-sm text-gray-600">
-            {analytics.backfill.ready
-              ? '正在加载学习统计…'
-              : `正在初始化学习统计：${analytics.backfill.processed.toLocaleString()} / ${analytics.backfill.total.toLocaleString()} 条日志`}
-          </p>
+          <p className="text-sm text-gray-600">{backfillMessage}</p>
           {!analytics.backfill.ready && analytics.backfill.total > 0 && (
             <progress
               className="w-full mt-2 accent-indigo-600"

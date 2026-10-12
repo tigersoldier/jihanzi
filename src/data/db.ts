@@ -228,6 +228,24 @@ async function upsertReviewFact(entry: ReviewEntry, isNew: boolean): Promise<voi
   }
 }
 
+async function reclassifyReviewFact(fact: ReviewFactRow, isNew: boolean): Promise<void> {
+  const stats =
+    (await db.dailyReviewStats
+      .where('[childId+dayKey]')
+      .equals([fact.childId, fact.dayKey])
+      .first()) ??
+    ({
+      childId: fact.childId,
+      dayKey: fact.dayKey,
+      ...emptyCategoryCounts(),
+    } satisfies DailyReviewStatsRow)
+  const corrected = { ...fact, isNew }
+  applyFactDelta(stats, fact, -1)
+  applyFactDelta(stats, corrected, 1)
+  await db.dailyReviewStats.put(stats)
+  await db.reviewFacts.put(corrected)
+}
+
 async function updateMasteryRelapse(
   entry: ReviewEntry,
   update: AnalyticsReviewUpdate,
@@ -418,15 +436,20 @@ export interface AnalyticsBackfillStatus {
   ready: boolean
   processed: number
   total: number
+  phase?: 'facts' | 'logs'
 }
 
 interface AnalyticsBackfillCheckpoint extends AnalyticsBackfillStatus {
+  version: number
+  phase: 'facts' | 'logs'
+  lastFactId?: number
   lastTimestamp?: number
   lastId?: number
   replayState?: AppState
 }
 
 const ANALYTICS_BACKFILL_KEY = 'learningAnalyticsBackfill'
+const ANALYTICS_BACKFILL_VERSION = 3
 const ANALYTICS_BACKFILL_BATCH_SIZE = 500
 
 function emptyReplayState(): AppState {
@@ -439,22 +462,53 @@ function emptyReplayState(): AppState {
 
 export async function getAnalyticsBackfillStatus(): Promise<AnalyticsBackfillStatus> {
   const checkpoint = await getMeta<AnalyticsBackfillCheckpoint>(ANALYTICS_BACKFILL_KEY)
-  return checkpoint
-    ? { ready: checkpoint.ready, processed: checkpoint.processed, total: checkpoint.total }
-    : { ready: false, processed: 0, total: 0 }
+  return checkpoint?.version === ANALYTICS_BACKFILL_VERSION
+    ? {
+        ready: checkpoint.ready,
+        processed: checkpoint.processed,
+        total: checkpoint.total,
+        phase: checkpoint.phase,
+      }
+    : { ready: false, processed: 0, total: 0, phase: 'facts' }
 }
 
 const backfillListeners = new Set<(status: AnalyticsBackfillStatus) => void>()
 let backfillPromise: Promise<void> | null = null
 
-/** 按时间戳顺序分批回填统计投影，支持中断后续跑。 */
+/** 分批校正已有事实并回填日志投影，支持中断后续跑。 */
 async function runLearningAnalyticsBackfill(): Promise<void> {
+  const existingCheckpoint = await getMeta<AnalyticsBackfillCheckpoint>(ANALYTICS_BACKFILL_KEY)
+  if (
+    existingCheckpoint?.version === ANALYTICS_BACKFILL_VERSION &&
+    existingCheckpoint.ready &&
+    !existingCheckpoint.replayState
+  )
+    return
+
+  const snapshot = await getLatestSnapshot()
+  const snapshotFirstReviewDays = new Map<string, string>()
+  for (const child of snapshot?.state.children ?? []) {
+    for (const [character, progress] of Object.entries(child.progress)) {
+      snapshotFirstReviewDays.set(JSON.stringify([child.id, character]), progress.firstReviewDay)
+    }
+  }
+
   while (true) {
     const result = (await db.transaction('rw', [...analyticsTables, db.meta], async () => {
       let checkpoint = await db.meta
         .get(ANALYTICS_BACKFILL_KEY)
         .then(row => row?.value as AnalyticsBackfillCheckpoint | undefined)
-      if (checkpoint?.ready) {
+      if (!checkpoint || checkpoint.version !== ANALYTICS_BACKFILL_VERSION) {
+        // 投影算法升级时先重分类已有事实，再从日志起点幂等重放并保留持久化状态。
+        checkpoint = {
+          version: ANALYTICS_BACKFILL_VERSION,
+          phase: 'facts',
+          ready: false,
+          processed: 0,
+          total: await db.reviewFacts.count(),
+        }
+      }
+      if (checkpoint.ready) {
         if (checkpoint.replayState) {
           const { replayState: _completedReplayState, ...completed } = checkpoint
           await db.meta.put({ key: ANALYTICS_BACKFILL_KEY, value: completed })
@@ -462,13 +516,47 @@ async function runLearningAnalyticsBackfill(): Promise<void> {
         }
         return { status: checkpoint, finished: true }
       }
-      if (!checkpoint) {
-        checkpoint = {
-          ready: false,
-          processed: 0,
-          total: await db.logs.count(),
-          replayState: emptyReplayState(),
+
+      if (checkpoint.phase === 'facts') {
+        const facts =
+          checkpoint.lastFactId !== undefined
+            ? await db.reviewFacts
+                .where('id')
+                .above(checkpoint.lastFactId)
+                .limit(ANALYTICS_BACKFILL_BATCH_SIZE)
+                .toArray()
+            : await db.reviewFacts.orderBy('id').limit(ANALYTICS_BACKFILL_BATCH_SIZE).toArray()
+        const changedCharacters = new Map<string, { childId: string; character: string }>()
+        for (const fact of facts) {
+          const firstReviewDay = snapshotFirstReviewDays.get(
+            JSON.stringify([fact.childId, fact.character]),
+          )
+          if (firstReviewDay === undefined) continue
+          const isNew = firstReviewDay === fact.dayKey
+          if (isNew === fact.isNew) continue
+          await reclassifyReviewFact(fact, isNew)
+          changedCharacters.set(JSON.stringify([fact.childId, fact.character]), {
+            childId: fact.childId,
+            character: fact.character,
+          })
         }
+        for (const { childId, character } of changedCharacters.values()) {
+          await recomputeRecentFacts(childId, character)
+        }
+
+        const lastFact = facts[facts.length - 1]
+        const factsReady = facts.length < ANALYTICS_BACKFILL_BATCH_SIZE
+        const { lastFactId: _lastFactId, ...checkpointFields } = checkpoint
+        const updated: AnalyticsBackfillCheckpoint = {
+          ...checkpointFields,
+          phase: factsReady ? 'logs' : 'facts',
+          processed: factsReady ? 0 : checkpoint.processed + facts.length,
+          total: factsReady ? await db.logs.count() : checkpoint.total,
+        }
+        if (factsReady) updated.replayState = emptyReplayState()
+        else if (lastFact?.id !== undefined) updated.lastFactId = lastFact.id
+        await db.meta.put({ key: ANALYTICS_BACKFILL_KEY, value: updated })
+        return { status: updated, finished: false }
       }
 
       const batch =
@@ -490,8 +578,13 @@ async function runLearningAnalyticsBackfill(): Promise<void> {
           const current = replayState.children.find(item => item.id === row.childId)?.progress[
             row.character
           ]
+          const snapshotFirstReviewDay = snapshotFirstReviewDays.get(
+            JSON.stringify([row.childId, row.character]),
+          )
+          const firstReviewDay = snapshotFirstReviewDay ?? previous?.firstReviewDay
           await projectReviewEntry(row, {
-            isNew: previous ? previous.firstReviewDay === row.dayKey : true,
+            isNew:
+              firstReviewDay !== undefined ? firstReviewDay === row.dayKey : previous === undefined,
             accepted,
             wasMastered,
             isMastered: getProficiency(current) === 'mastered',
@@ -509,8 +602,11 @@ async function runLearningAnalyticsBackfill(): Promise<void> {
         ...checkpointFields,
         ready,
         processed,
-        ...(!ready ? { replayState } : {}),
-        ...(last ? { lastTimestamp: last.timestamp, lastId: last.id } : {}),
+      }
+      if (!ready) updated.replayState = replayState
+      if (last) {
+        updated.lastTimestamp = last.timestamp
+        updated.lastId = last.id
       }
       await db.meta.put({ key: ANALYTICS_BACKFILL_KEY, value: updated })
       return { status: updated, finished: updated.ready }
@@ -519,6 +615,7 @@ async function runLearningAnalyticsBackfill(): Promise<void> {
       ready: result.status.ready,
       processed: result.status.processed,
       total: result.status.total,
+      phase: result.status.phase,
     }
     backfillListeners.forEach(listener => listener(status))
     if (result.finished) return
