@@ -26,6 +26,7 @@ import type {
 } from '../core/types'
 import { DEFAULT_SETTINGS } from '../core/types'
 import { applyEntry, deepCloneState } from '../core/log'
+import { getProficiency } from '../core/proficiency'
 import { generateTimestamp } from '../core/log'
 import db, {
   appendLog,
@@ -36,9 +37,11 @@ import db, {
   pruneOldSnapshots,
   getLogCount,
   pruneOldestLogs,
+  type AnalyticsReviewUpdate,
+  reconstructReviewAnalyticsUpdates,
 } from '../data/db'
 import { getIntervalKey } from '../utils/date'
-import { dedupeLogEntries } from '../utils/logKey'
+import { dedupeLogEntries, makeDiffKey } from '../utils/logKey'
 import { validateAddChar } from '../utils/chars'
 import { useAuth } from './AuthContext'
 import { notifyDataChanged, repairSnapshotProgress, salvageUnverifiableHeavy } from '../data/sync'
@@ -158,42 +161,72 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let changed = false
     let newState: AppState = EMPTY_STATE
 
-    await db.transaction('rw', db.logs, db.snapshot, async () => {
-      // Read snapshot INSIDE the transaction to avoid TOCTOU races
-      // with other tabs or sync-driven snapshot writes.
-      const currentSnapshot = await getLatestSnapshot()
-      const prevState = currentSnapshot?.state || EMPTY_STATE
-      const cloned = deepCloneState(prevState)
-      changed = applyEntry(cloned, entry)
-      newState = cloned
+    await db.transaction(
+      'rw',
+      db.logs,
+      db.snapshot,
+      db.reviewFacts,
+      db.dailyReviewStats,
+      db.characterAnalytics,
+      async () => {
+        // 在事务内读取快照，避免与其他标签页或同步流程写入快照时发生竞态。
+        const currentSnapshot = await getLatestSnapshot()
+        const prevState = currentSnapshot?.state || EMPTY_STATE
+        const cloned = deepCloneState(prevState)
+        const previousReviewState =
+          entry.type === 'review'
+            ? prevState.children.find(child => child.id === entry.childId)?.progress[
+                entry.character
+              ]
+            : undefined
+        const wasMastered = getProficiency(previousReviewState) === 'mastered'
+        changed = applyEntry(cloned, entry)
+        newState = cloned
 
-      await appendLog(entry)
+        const updatedReviewState =
+          entry.type === 'review'
+            ? cloned.children.find(child => child.id === entry.childId)?.progress[entry.character]
+            : undefined
+        await appendLog(
+          entry,
+          entry.type === 'review'
+            ? {
+                isNew:
+                  previousReviewState === undefined ||
+                  previousReviewState.firstReviewDay === entry.dayKey,
+                accepted: changed && entry.round === 1,
+                wasMastered,
+                isMastered: getProficiency(updatedReviewState) === 'mastered',
+              }
+            : undefined,
+        )
 
-      if (changed) {
-        // Check if we've crossed a UTC date anchor
-        const snapshotInterval = currentSnapshot
-          ? getIntervalKey(currentSnapshot.timestamp)
-          : getIntervalKey(now)
-        const currentInterval = getIntervalKey(now)
+        if (changed) {
+          // 检查是否跨过 UTC 日期锚点。
+          const snapshotInterval = currentSnapshot
+            ? getIntervalKey(currentSnapshot.timestamp)
+            : getIntervalKey(now)
+          const currentInterval = getIntervalKey(now)
 
-        if (snapshotInterval !== currentInterval && currentSnapshot) {
-          await saveHistoricalSnapshot({
-            timestamp: currentSnapshot.timestamp,
-            appliedThrough: currentSnapshot.appliedThrough,
-            state: currentSnapshot.state,
+          if (snapshotInterval !== currentInterval && currentSnapshot) {
+            await saveHistoricalSnapshot({
+              timestamp: currentSnapshot.timestamp,
+              appliedThrough: currentSnapshot.appliedThrough,
+              state: currentSnapshot.state,
+            })
+            await pruneOldSnapshots(5)
+          }
+
+          // 水位：本次条目的 timestamp 与保存时刻的较大者——时钟回拨时
+          // 水位不回退，保证"水位之前的日志都已应用"这个不变式
+          await saveCurrentSnapshot({
+            timestamp: now,
+            appliedThrough: Math.max(currentSnapshot?.appliedThrough ?? 0, now, entry.timestamp),
+            state: newState,
           })
-          await pruneOldSnapshots(5)
         }
-
-        // 水位：本次条目的 timestamp 与保存时刻的较大者——时钟回拨时
-        // 水位不回退，保证"水位之前的日志都已应用"这个不变式
-        await saveCurrentSnapshot({
-          timestamp: now,
-          appliedThrough: Math.max(currentSnapshot?.appliedThrough ?? 0, now, entry.timestamp),
-          state: newState,
-        })
-      }
-    })
+      },
+    )
 
     if (changed) {
       setState(newState)
@@ -435,11 +468,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
       //    水位之后的日志不可能已被快照包含，必须重放以补全新进度。
       const watermark = snapshot.appliedThrough ?? snapshot.timestamp
       const newState = deepCloneState(snapshot.state)
+      const acceptedUpdates = new Map<AnyLogEntry, AnalyticsReviewUpdate>()
       const pendingLogs = uniqueLogs
         .filter(e => e.timestamp > watermark)
         .sort((a, b) => a.timestamp - b.timestamp)
       for (const entry of pendingLogs) {
-        applyEntry(newState, entry)
+        const previous =
+          entry.type === 'review'
+            ? newState.children.find(child => child.id === entry.childId)?.progress[entry.character]
+            : undefined
+        const wasMastered = getProficiency(previous) === 'mastered'
+        const accepted = applyEntry(newState, entry)
+        if (entry.type === 'review') {
+          const current = newState.children.find(child => child.id === entry.childId)?.progress[
+            entry.character
+          ]
+          acceptedUpdates.set(entry, {
+            isNew: previous === undefined || previous.firstReviewDay === entry.dayKey,
+            accepted: accepted && entry.round === 1,
+            wasMastered,
+            isMastered: getProficiency(current) === 'mastered',
+          })
+        }
       }
 
       // 2. 修订：导入旧代码产物（无 appliedThrough 水位）的快照时逐字校验修复——
@@ -462,12 +512,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      const coveredOutcomes = await reconstructReviewAnalyticsUpdates(uniqueLogs, watermark)
+      for (const entry of uniqueLogs) {
+        if (entry.type !== 'review' || entry.round !== 1 || entry.timestamp > watermark) continue
+        const outcome = coveredOutcomes.get(makeDiffKey(entry))
+        if (!outcome) continue
+        const firstReviewDay = finalState.children.find(child => child.id === entry.childId)
+          ?.progress[entry.character]?.firstReviewDay
+        acceptedUpdates.set(entry, {
+          ...outcome,
+          isNew: firstReviewDay === undefined || firstReviewDay === entry.dayKey,
+        })
+      }
+
       // 3. Save the merged snapshot as current
       await saveCurrentSnapshot({ timestamp: Date.now(), appliedThrough, state: finalState })
 
       // 4. Append all log entries（去重后的全集：同步载体 + 审计线索）
       if (uniqueLogs.length > 0) {
-        await appendLogs(uniqueLogs)
+        await appendLogs(
+          uniqueLogs,
+          uniqueLogs.map(entry => acceptedUpdates.get(entry)),
+        )
       }
 
       // 5. Update React state

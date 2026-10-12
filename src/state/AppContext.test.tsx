@@ -48,22 +48,28 @@ vi.mock('../data/gapi', () => ({
 }))
 
 // Mock db with state accumulation so applyAndPersist can read the latest snapshot
-const { mockTransaction, mockGetLatestSnapshot, mockSaveCurrentSnapshot, mockAppendLogs } =
-  vi.hoisted(() => {
-    let savedSnapshot: { timestamp: number; state: any } | null = null
+const {
+  mockTransaction,
+  mockGetLatestSnapshot,
+  mockSaveCurrentSnapshot,
+  mockAppendLogs,
+  mockReconstructReviewAnalyticsUpdates,
+} = vi.hoisted(() => {
+  let savedSnapshot: { timestamp: number; state: any } | null = null
 
-    return {
-      mockTransaction: vi.fn((...args: unknown[]) => {
-        const fn = args[args.length - 1] as () => Promise<void>
-        return fn()
-      }),
-      mockGetLatestSnapshot: vi.fn(async () => savedSnapshot),
-      mockSaveCurrentSnapshot: vi.fn(async (snap: { timestamp: number; state: any }) => {
-        savedSnapshot = snap
-      }),
-      mockAppendLogs: vi.fn().mockResolvedValue(undefined),
-    }
-  })
+  return {
+    mockTransaction: vi.fn((...args: unknown[]) => {
+      const fn = args[args.length - 1] as () => Promise<void>
+      return fn()
+    }),
+    mockGetLatestSnapshot: vi.fn(async () => savedSnapshot),
+    mockSaveCurrentSnapshot: vi.fn(async (snap: { timestamp: number; state: any }) => {
+      savedSnapshot = snap
+    }),
+    mockAppendLogs: vi.fn().mockResolvedValue(undefined),
+    mockReconstructReviewAnalyticsUpdates: vi.fn().mockResolvedValue(new Map()),
+  }
+})
 
 vi.mock('../data/db', () => ({
   default: {
@@ -74,6 +80,7 @@ vi.mock('../data/db', () => ({
   },
   appendLog: vi.fn().mockResolvedValue(undefined),
   appendLogs: mockAppendLogs,
+  reconstructReviewAnalyticsUpdates: mockReconstructReviewAnalyticsUpdates,
   getLatestSnapshot: mockGetLatestSnapshot,
   saveCurrentSnapshot: mockSaveCurrentSnapshot,
   saveHistoricalSnapshot: vi.fn().mockResolvedValue(undefined),
@@ -248,6 +255,7 @@ describe('AppContext — sync triggers', () => {
 describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockReconstructReviewAnalyticsUpdates.mockResolvedValue(new Map())
   })
 
   async function renderWithBulkImport() {
@@ -573,6 +581,69 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
     expect(saved.state.children[0].progress['二']).toBeDefined()
     // 保存的水位推进到重放条目的最大 timestamp
     expect(saved.appliedThrough).toBe(6000)
+  })
+
+  it('为导入快照水位内的遗忘复习恢复统计应用结果，但不重放实际快照', async () => {
+    const result = await renderWithBulkImport()
+    const snapshot = {
+      timestamp: 2000,
+      appliedThrough: 2000,
+      state: {
+        children: [
+          {
+            id: 'child_1',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: 1,
+            progress: {
+              一: {
+                ease: 2.5,
+                interval: 8,
+                repetitions: 3,
+                nextReview: '2026-07-13',
+                lastGrade: 'a',
+                firstReviewDay: '2026-07-01',
+              },
+            },
+          },
+        ],
+        wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    }
+    const logs = [
+      {
+        timestamp: 1500,
+        type: 'review',
+        childId: 'child_1',
+        character: '一',
+        grade: 'd',
+        round: 1,
+        dayKey: '2026-07-13',
+      },
+    ]
+    mockReconstructReviewAnalyticsUpdates.mockResolvedValue(
+      new Map([
+        ['1500:review:child_1:一', { accepted: true, wasMastered: true, isMastered: false }],
+      ]),
+    )
+
+    await act(async () => {
+      await result.current.bulkImport(snapshot, logs)
+    })
+
+    const projectionUpdates = mockAppendLogs.mock.calls.at(-1)[1]
+    expect(projectionUpdates[0]).toMatchObject({
+      isNew: false,
+      accepted: true,
+      wasMastered: true,
+      isMastered: false,
+    })
+    const saved = mockSaveCurrentSnapshot.mock.calls.at(-1)[0]
+    expect(saved.state.children[0].progress['一']).toMatchObject({
+      repetitions: 3,
+      lastGrade: 'a',
+    })
   })
 
   it('导入旧版污染快照（无 appliedThrough）时逐字校验修复', async () => {

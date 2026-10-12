@@ -47,13 +47,19 @@ const { mockReadFile } = vi.hoisted(() => ({
   mockReadFile: vi.fn(),
 }))
 
-const { mockPullAllData, mockSaveCurrentSnapshot, mockAppendLogs, mockGetHistoricalSnapshots } =
-  vi.hoisted(() => ({
-    mockPullAllData: vi.fn(),
-    mockSaveCurrentSnapshot: vi.fn(),
-    mockAppendLogs: vi.fn(),
-    mockGetHistoricalSnapshots: vi.fn().mockResolvedValue([]),
-  }))
+const {
+  mockPullAllData,
+  mockSaveCurrentSnapshot,
+  mockAppendLogs,
+  mockGetHistoricalSnapshots,
+  mockReconstructReviewAnalyticsUpdates,
+} = vi.hoisted(() => ({
+  mockPullAllData: vi.fn(),
+  mockSaveCurrentSnapshot: vi.fn(),
+  mockAppendLogs: vi.fn(),
+  mockGetHistoricalSnapshots: vi.fn().mockResolvedValue([]),
+  mockReconstructReviewAnalyticsUpdates: vi.fn().mockResolvedValue(new Map()),
+}))
 
 vi.mock('./drive', () => ({
   findOrCreateRootFolder: (...args: any[]) => mockFindOrCreateRootFolder(...args),
@@ -85,6 +91,8 @@ vi.mock('./db', () => ({
   getHistoricalSnapshots: () => mockGetHistoricalSnapshots(),
   appendLog: vi.fn(),
   appendLogs: (...args: any[]) => mockAppendLogs(...args),
+  reconstructReviewAnalyticsUpdates: (...args: any[]) =>
+    mockReconstructReviewAnalyticsUpdates(...args),
   dedupeLocalLogs: vi.fn().mockResolvedValue(0),
 }))
 
@@ -402,6 +410,7 @@ const MOCK_REMOTE_CHILD_DATA = {
 describe('initialPull', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockReconstructReviewAnalyticsUpdates.mockResolvedValue(new Map())
     mockHasValidToken.mockReturnValue(true)
     mockGetLatestSnapshot.mockResolvedValue(null)
     mockGetLogsAfter.mockResolvedValue([])
@@ -530,6 +539,105 @@ describe('initialPull', () => {
     expect(savedChild.progress['二'].lastGrade).toBe('b')
     expect(savedChild.progress['三']).toBeDefined()
     expect(savedChild.progress['三'].lastGrade).toBe('c')
+    const projectionUpdates = mockAppendLogs.mock.calls[0][1] as Array<
+      { accepted?: boolean } | undefined
+    >
+    expect(projectionUpdates.filter(update => update?.accepted)).toHaveLength(3)
+  })
+
+  it('derives new and learned projection metadata for a log-only pull without a snapshot', async () => {
+    const firstReview = {
+      timestamp: 2003,
+      type: 'review',
+      childId: 'child_x',
+      character: '一',
+      grade: 'a',
+      round: 1,
+      dayKey: '2026-07-01',
+    }
+    const laterReview = {
+      ...firstReview,
+      timestamp: 2006,
+      grade: 'c',
+      dayKey: '2026-07-04',
+    }
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
+      childData: {
+        小明: { logs: [JSON.stringify(firstReview), JSON.stringify(laterReview)] },
+      },
+    })
+    mockReconstructReviewAnalyticsUpdates.mockResolvedValue(
+      new Map([
+        [
+          '2003:review:child_x:一',
+          { isNew: true, accepted: true, wasMastered: false, isMastered: false },
+        ],
+        [
+          '2006:review:child_x:一',
+          { isNew: false, accepted: true, wasMastered: false, isMastered: false },
+        ],
+      ]),
+    )
+
+    await initialPull()
+
+    expect(mockReconstructReviewAnalyticsUpdates).toHaveBeenCalledWith(expect.any(Array))
+    expect(mockSaveCurrentSnapshot).not.toHaveBeenCalled()
+    const updates = mockAppendLogs.mock.calls[0][1]
+    expect(updates).toEqual([
+      expect.objectContaining({ isNew: true, accepted: true }),
+      expect.objectContaining({ isNew: false, accepted: true }),
+    ])
+  })
+
+  it('reconstructs relapse metadata for remote reviews already covered by the snapshot watermark', async () => {
+    const entry = {
+      timestamp: 1900,
+      type: 'review',
+      childId: 'child_x',
+      character: '一',
+      grade: 'd',
+      round: 1,
+      dayKey: '2026-07-13',
+    }
+    const remoteSnapshot = structuredClone(MOCK_REMOTE_SNAPSHOT)
+    remoteSnapshot.state.children[0].progress = {
+      一: {
+        ease: 2.5,
+        interval: 8,
+        repetitions: 3,
+        nextReview: '2026-07-13',
+        lastGrade: 'a',
+        firstReviewDay: '2026-07-01',
+      },
+    }
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
+      childData: {
+        小明: { snapshot: JSON.stringify(remoteSnapshot), logs: [JSON.stringify(entry)] },
+      },
+    })
+    mockReconstructReviewAnalyticsUpdates.mockResolvedValue(
+      new Map([
+        ['1900:review:child_x:一', { accepted: true, wasMastered: true, isMastered: false }],
+      ]),
+    )
+
+    await initialPull()
+
+    const updates = mockAppendLogs.mock.calls[0][1] as Array<any>
+    expect(updates[0]).toMatchObject({
+      isNew: false,
+      accepted: true,
+      wasMastered: true,
+      isMastered: false,
+    })
+    const saved = mockSaveCurrentSnapshot.mock.calls[0][0]
+    expect(saved.state.children[0].progress['一']).toMatchObject({
+      repetitions: 3,
+      lastGrade: 'a',
+    })
   })
 
   it('全新浏览器全量拉取时不重复重放快照已物化的日志（回归：途 3 次不被算成 6 次）', async () => {

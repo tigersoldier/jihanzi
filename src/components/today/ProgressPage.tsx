@@ -4,6 +4,12 @@ import { useToday, useDayType } from '../../hooks/useToday'
 import { useRoute } from '../../hooks/useRoute'
 import type { ProgressRoute } from '../../router'
 import { useHistory, type DaySummary } from '../../hooks/useStats'
+import { useLearningAnalytics } from '../../hooks/useLearningAnalytics'
+import type {
+  CategoryCounts,
+  CharacterClassification,
+  GradeCounts,
+} from '../../core/learningAnalytics'
 import { formatDateLabel, getDayTypeLabel } from '../../utils/date'
 import { GRADE_LABELS, GRADE_COLORS, type Grade } from '../../core/types'
 import ProgressBar from './ProgressBar'
@@ -37,6 +43,354 @@ function nextMonth(ym: string): string {
   const [y, m] = ym.split('-').map(Number)
   if (m === 12) return `${y + 1}-01`
   return `${y}-${String(m + 1).padStart(2, '0')}`
+}
+
+type ReviewCategoryFilter = 'all' | 'newChars' | 'learnedChars'
+
+type ChartPoint = {
+  label: string
+  categories: CategoryCounts
+  outsideMonth?: CategoryCounts
+}
+
+const CHART_GRADES: Array<{ grade: keyof GradeCounts; color: string; label: string }> = [
+  { grade: 'a', color: '#22c55e', label: 'a' },
+  { grade: 'b', color: '#3b82f6', label: 'b' },
+  { grade: 'c', color: '#eab308', label: 'c' },
+  { grade: 'd', color: '#ef4444', label: 'd' },
+]
+
+function getChartCounts(counts: CategoryCounts, filter: ReviewCategoryFilter): GradeCounts {
+  const result = { a: 0, b: 0, c: 0, d: 0 }
+  const categories = filter === 'all' ? (['newChars', 'learnedChars'] as const) : [filter]
+  for (const category of categories) {
+    for (const grade of ['a', 'b', 'c', 'd'] as const) result[grade] += counts[category][grade]
+  }
+  return result
+}
+
+function StackedBarChart({
+  title,
+  data,
+  filter,
+}: {
+  title: string
+  data: ChartPoint[]
+  filter: ReviewCategoryFilter
+}) {
+  const innerWidth = 336
+  const baseline = 118
+  const plotHeight = 100
+  const slot = innerWidth / Math.max(data.length, 1)
+  const barWidth = Math.max(3, Math.min(18, slot * 0.62))
+  const max = Math.max(
+    1,
+    ...data.map(point => {
+      const inside = getChartCounts(point.categories, filter)
+      const outside = point.outsideMonth ? getChartCounts(point.outsideMonth, filter) : null
+      return CHART_GRADES.reduce(
+        (sum, item) => sum + inside[item.grade] + (outside?.[item.grade] ?? 0),
+        0,
+      )
+    }),
+  )
+
+  return (
+    <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+      <h4 className="text-sm font-medium text-gray-700 mb-2">{title}</h4>
+      <svg
+        viewBox="0 0 360 150"
+        role="img"
+        aria-label={title}
+        className="w-full h-auto overflow-visible"
+      >
+        <line x1="12" y1={baseline} x2="348" y2={baseline} stroke="#e5e7eb" />
+        {data.map((point, index) => {
+          const inside = getChartCounts(point.categories, filter)
+          const outside = point.outsideMonth ? getChartCounts(point.outsideMonth, filter) : null
+          let currentY = baseline
+          const x = 12 + index * slot + (slot - barWidth) / 2
+          const bars = CHART_GRADES.flatMap(item => {
+            const segments = []
+            const insideHeight = (inside[item.grade] / max) * plotHeight
+            if (insideHeight > 0) {
+              currentY -= insideHeight
+              segments.push(
+                <rect
+                  key={`${item.grade}-inside`}
+                  x={x}
+                  y={currentY}
+                  width={barWidth}
+                  height={insideHeight}
+                  fill={item.color}
+                />,
+              )
+            }
+            const outsideHeight = ((outside?.[item.grade] ?? 0) / max) * plotHeight
+            if (outsideHeight > 0) {
+              currentY -= outsideHeight
+              segments.push(
+                <rect
+                  key={`${item.grade}-outside`}
+                  x={x}
+                  y={currentY}
+                  width={barWidth}
+                  height={outsideHeight}
+                  fill={item.color}
+                  opacity="0.35"
+                />,
+              )
+            }
+            return segments
+          })
+          const total = CHART_GRADES.reduce(
+            (sum, item) => sum + inside[item.grade] + (outside?.[item.grade] ?? 0),
+            0,
+          )
+          const gradeSummary = CHART_GRADES.map(item => {
+            const count = inside[item.grade] + (outside?.[item.grade] ?? 0)
+            const percent = total > 0 ? Math.round((count / total) * 100) : 0
+            return `${item.label} ${count}（${percent}%）`
+          }).join('、')
+          return (
+            <g key={point.label}>
+              <title>{`${point.label}：${total} 次；${gradeSummary}`}</title>
+              {bars}
+              <text
+                x={x + barWidth / 2}
+                y="137"
+                textAnchor="middle"
+                fontSize={data.length > 20 ? 6 : 8}
+                fill="#6b7280"
+              >
+                {point.label}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-gray-500 mt-1">
+        {CHART_GRADES.map(item => (
+          <span key={item.grade} className="inline-flex items-center gap-1">
+            <i
+              className="inline-block w-2.5 h-2.5 rounded-sm"
+              style={{ backgroundColor: item.color }}
+            />
+            {item.label}
+          </span>
+        ))}
+        {data.some(point => point.outsideMonth) && <span>浅色：本月外日期</span>}
+      </div>
+    </section>
+  )
+}
+
+function CharacterClassificationGroup({
+  title,
+  characters,
+  onCharacterSelect,
+}: {
+  title: string
+  characters: CharacterClassification[]
+  onCharacterSelect: (character: string) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const visible = expanded ? characters : characters.slice(0, 5)
+  return (
+    <section className="rounded-xl border border-gray-100 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <h5 className="text-sm font-medium text-gray-700">{title}</h5>
+        <span className="text-xs text-gray-400">{characters.length} 字</span>
+      </div>
+      {characters.length === 0 ? (
+        <p className="text-xs text-gray-400">暂无</p>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {visible.map(item => (
+            <button
+              key={item.character}
+              onClick={() => onCharacterSelect(item.character)}
+              className="inline-flex items-center gap-1 rounded-lg bg-gray-50 px-2.5 py-1.5 text-base text-gray-800 hover:bg-indigo-50"
+            >
+              {item.character}
+              {item.commonMistake && <span className="text-[10px] text-amber-700">常错</span>}
+              {item.forgottenAfterMastery && (
+                <span className="text-[10px] text-red-700">掌握后遗忘</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+      {characters.length > 5 && (
+        <button
+          onClick={() => setExpanded(value => !value)}
+          className="text-xs text-indigo-600 mt-2"
+        >
+          {expanded ? '收起' : `展开全部 ${characters.length} 字`}
+        </button>
+      )}
+    </section>
+  )
+}
+
+function LearningStatistics({
+  analytics,
+  yearMonth,
+  onCharacterSelect,
+}: {
+  analytics: ReturnType<typeof useLearningAnalytics>
+  yearMonth: string
+  onCharacterSelect: (character: string) => void
+}) {
+  const [filter, setFilter] = useState<ReviewCategoryFilter>('all')
+  const chartData = [
+    {
+      title: '按日',
+      data: analytics.charts.days.map(day => ({
+        label: String(Number(day.dayKey.slice(-2))),
+        categories: day.inMonth,
+      })),
+    },
+    {
+      title: '按周',
+      data: analytics.charts.weeks.map(week => ({
+        label: `${week.startDay.slice(5).replace('-', '/')}–${week.endDay.slice(5).replace('-', '/')}`,
+        categories: week.inMonth,
+        outsideMonth: week.outsideMonth,
+      })),
+    },
+    {
+      title: `${yearMonth.slice(0, 4)} 年度（月）`,
+      data: analytics.charts.months.map(month => ({
+        label: `${month.month}月`,
+        categories: month.categories,
+      })),
+    },
+  ]
+  const groups = [
+    {
+      title: '熟练',
+      characters: analytics.characters.filter(item => item.proficiency === 'mastered'),
+    },
+    {
+      title: '学习中',
+      characters: analytics.characters.filter(item => item.proficiency === 'progressing'),
+    },
+    { title: '较弱', characters: analytics.characters.filter(item => item.proficiency === 'weak') },
+  ]
+
+  return (
+    <div className="space-y-4">
+      <h3 className="text-base font-semibold text-gray-800">学习统计</h3>
+      {analytics.loading ? (
+        <div className="bg-white rounded-2xl border border-gray-100 p-4" role="status">
+          <p className="text-sm text-gray-600">
+            {analytics.backfill.ready
+              ? '正在加载学习统计…'
+              : `正在初始化学习统计：${analytics.backfill.processed.toLocaleString()} / ${analytics.backfill.total.toLocaleString()} 条日志`}
+          </p>
+          {!analytics.backfill.ready && analytics.backfill.total > 0 && (
+            <progress
+              className="w-full mt-2 accent-indigo-600"
+              value={analytics.backfill.processed}
+              max={analytics.backfill.total}
+            />
+          )}
+        </div>
+      ) : analytics.error ? (
+        <div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800" role="alert">
+          统计数据暂时无法读取，请稍后重新打开学习进度。
+        </div>
+      ) : (
+        <>
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+            <div className="flex flex-wrap gap-2 mb-3" role="group" aria-label="学习表现筛选">
+              {(
+                [
+                  ['all', '全部'],
+                  ['newChars', '新字学习'],
+                  ['learnedChars', '已学字复习'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  aria-pressed={filter === value}
+                  onClick={() => setFilter(value)}
+                  className={`rounded-full px-3 py-1 text-xs ${filter === value ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="grid gap-3 lg:grid-cols-3">
+              {chartData.map(chart => (
+                <StackedBarChart
+                  key={chart.title}
+                  title={chart.title}
+                  data={chart.data}
+                  filter={filter}
+                />
+              ))}
+            </div>
+            <p className="text-[11px] text-gray-400 mt-2">
+              仅统计首轮评级；同一字每天取最早一次，巩固轮不计入。
+            </p>
+          </div>
+
+          <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 space-y-3">
+            <div>
+              <h4 className="text-sm font-medium text-gray-700">当前字词分类</h4>
+              <p className="text-xs text-gray-400 mt-1">
+                包含已学过的全部汉字，不受当前生字本影响；常错与熟练状态可以并存。
+              </p>
+            </div>
+            {groups.map(group => (
+              <CharacterClassificationGroup
+                key={group.title}
+                title={group.title}
+                characters={group.characters}
+                onCharacterSelect={onCharacterSelect}
+              />
+            ))}
+            {analytics.characters.length === 0 && (
+              <p className="text-sm text-gray-400">尚无已学汉字</p>
+            )}
+          </section>
+
+          <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+            <h4 className="text-sm font-medium text-gray-700">未来 7 天复习容量预测</h4>
+            <p className="text-xs text-gray-400 mt-1 mb-3">
+              按最早到期优先，超出每日上限的字结转；新字与巩固轮不占复习容量。
+            </p>
+            <div className="space-y-2">
+              {analytics.forecast.map(day => (
+                <div
+                  key={day.dayKey}
+                  className="flex items-start justify-between gap-3 border-t border-gray-50 pt-2 text-sm"
+                >
+                  <span className="shrink-0 text-gray-600">{formatDateLabel(day.dayKey)}</span>
+                  <span className="text-right text-gray-500">
+                    {day.scheduled.length} / {day.capacity} 个容量
+                    {day.scheduled.length > 0 && (
+                      <span className="block text-xs">
+                        {day.scheduled.slice(0, 8).join('、')}
+                        {day.scheduled.length > 8 ? '…' : ''}
+                      </span>
+                    )}
+                    {day.remainingDue > 0 && (
+                      <span className="block text-xs text-amber-700">
+                        日末仍有 {day.remainingDue} 字待安排
+                      </span>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  )
 }
 
 // ============================================================
@@ -285,6 +639,7 @@ export default function ProgressPage() {
 
   // ---- Monthly history ----
   const history = useHistory(activeChildId, viewMonth)
+  const analytics = useLearningAnalytics(activeChildId, viewMonth)
   const selectedDaySummary = useMemo(() => {
     if (!selectedDay) return null
     return history.days.find(d => d.dayKey === selectedDay) ?? null
@@ -322,17 +677,6 @@ export default function ProgressPage() {
         icon="👶"
         title="还没有学习记录"
         description="去「孩子」添加学习者，去「生字本」准备字库吧。"
-      />
-    )
-  }
-
-  // No word books
-  if (state.wordBooks.length === 0) {
-    return (
-      <EmptyState
-        icon="📚"
-        title="还没有生字本"
-        description="先去「生字本」创建或导入生字本，为学习准备字库。"
       />
     )
   }
@@ -378,6 +722,20 @@ export default function ProgressPage() {
       {/* ---- Today's tasks (only in current month) ---- */}
       {isCurrentMonth && <TodaySession />}
       {isCurrentMonth && <div className="border-t border-gray-200" />}
+
+      {state.wordBooks.length === 0 && (
+        <div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800">
+          还没有可用于新字学习的生字本；此处仍会显示已有汉字的学习统计。
+        </div>
+      )}
+
+      <LearningStatistics
+        analytics={analytics}
+        yearMonth={viewMonth}
+        onCharacterSelect={character =>
+          navigate({ name: 'progress', month: viewMonth, char: character })
+        }
+      />
 
       {/* ---- Monthly history ---- */}
       <div>

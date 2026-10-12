@@ -8,14 +8,22 @@
  */
 
 import Dexie, { type Table } from 'dexie'
-import type { AnyLogEntry, ReviewEntry, Snapshot } from '../core/types'
+import type { AnyLogEntry, AppState, ReviewEntry, Snapshot } from '../core/types'
+import { DEFAULT_SETTINGS } from '../core/types'
+import { applyEntry } from '../core/log'
+import { getProficiency } from '../core/proficiency'
+import type { CharacterAnalytics, DailyReviewStats, ReviewFact } from '../core/learningAnalytics'
+import { emptyCategoryCounts } from '../core/learningAnalytics'
 import { makeDiffKey } from '../utils/logKey'
 
 /** Database schema version and definition */
 class JihanziDB extends Dexie {
   logs!: Table<LogRow, number> // Auto-incrementing primary key
   snapshot!: Table<Snapshot & { type: string; id?: number }, number> // Snapshot table; type: 'current' | 'historical'
-  meta!: Table<{ key: string; value: unknown }, string> // Key-value metadata
+  meta!: Table<{ key: string; value: unknown }, string> // 键值元数据表
+  reviewFacts!: Table<ReviewFactRow, number>
+  dailyReviewStats!: Table<DailyReviewStatsRow, number>
+  characterAnalytics!: Table<CharacterAnalyticsRow, number>
 
   constructor() {
     super('jihanzi')
@@ -57,13 +65,214 @@ class JihanziDB extends Dexie {
         // Drive encoding bug — iterate oldest-first, stop at first clean.
         await repairCorruptedLogs()
       })
+
+    this.version(4).stores({
+      logs: '++id, timestamp, type, childId, wordBookId, character, dayKey, [childId+dayKey], [childId+character], [timestamp+id]',
+      snapshot: '++id, timestamp, type',
+      meta: 'key',
+      reviewFacts: '++id, &[childId+character+dayKey], [childId+dayKey], [childId+character]',
+      dailyReviewStats: '++id, &[childId+dayKey]',
+      characterAnalytics: '++id, &[childId+character], childId',
+    })
   }
 }
 
 /** IndexedDB 日志行：Dexie 自动附加的自增主键 id */
 type LogRow = AnyLogEntry & { id?: number }
+type ReviewFactRow = ReviewFact & { id?: number }
+type DailyReviewStatsRow = DailyReviewStats & { id?: number }
+type CharacterAnalyticsRow = CharacterAnalytics & { id?: number }
 
 const db = new JihanziDB()
+
+function withoutLocalLogId(entry: AnyLogEntry): AnyLogEntry {
+  const copy = { ...entry } as AnyLogEntry & { id?: number }
+  delete copy.id
+  return copy
+}
+
+export interface AnalyticsReviewUpdate {
+  isNew: boolean
+  accepted?: boolean
+  wasMastered?: boolean
+  isMastered?: boolean
+}
+
+const analyticsTables = [
+  db.logs,
+  db.snapshot,
+  db.reviewFacts,
+  db.dailyReviewStats,
+  db.characterAnalytics,
+] as const
+
+function applyFactDelta(row: DailyReviewStatsRow, fact: ReviewFact, delta: number): void {
+  const category = fact.isNew ? row.newChars : row.learnedChars
+  category[fact.grade] = Math.max(0, category[fact.grade] + delta)
+}
+
+function compareRecentFacts(
+  a: CharacterAnalytics['recentLearnedFacts'][number],
+  b: CharacterAnalytics['recentLearnedFacts'][number],
+): number {
+  return b.dayKey.localeCompare(a.dayKey) || b.timestamp - a.timestamp
+}
+
+async function recomputeRecentFacts(childId: string, character: string): Promise<void> {
+  const row =
+    (await db.characterAnalytics
+      .where('[childId+character]')
+      .equals([childId, character])
+      .first()) ??
+    ({
+      childId,
+      character,
+      recentLearnedFacts: [],
+      everForgottenAfterMastery: false,
+      currentlyForgottenAfterMastery: false,
+    } satisfies CharacterAnalyticsRow)
+  // 每字只有一个初学日事实；反向最多取六条即可跳过它并保留最近五条已学事实。
+  const facts = await db.reviewFacts
+    .where('[childId+character+dayKey]')
+    .between([childId, character, ''], [childId, character, '\uffff'], true, true)
+    .reverse()
+    .limit(6)
+    .toArray()
+  row.recentLearnedFacts = facts
+    .filter(fact => !fact.isNew)
+    .slice(0, 5)
+    .map(({ dayKey, timestamp, grade, isNew }) => ({ dayKey, timestamp, grade, isNew }))
+  await db.characterAnalytics.put(row)
+}
+
+async function upsertReviewFact(entry: ReviewEntry, isNew: boolean): Promise<void> {
+  if (entry.round !== 1) return
+  const candidate: ReviewFact = {
+    childId: entry.childId,
+    character: entry.character,
+    dayKey: entry.dayKey,
+    timestamp: entry.timestamp,
+    grade: entry.grade,
+    isNew,
+  }
+  const existing = await db.reviewFacts
+    .where('[childId+character+dayKey]')
+    .equals([entry.childId, entry.character, entry.dayKey])
+    .first()
+  let shouldRecompute = false
+  if (existing && existing.timestamp < candidate.timestamp) return
+  if (existing && existing.timestamp === candidate.timestamp && existing.grade !== candidate.grade)
+    return
+  if (
+    existing &&
+    existing.timestamp === candidate.timestamp &&
+    existing.grade === candidate.grade &&
+    existing.isNew === candidate.isNew
+  )
+    return
+
+  const stats =
+    (await db.dailyReviewStats
+      .where('[childId+dayKey]')
+      .equals([entry.childId, entry.dayKey])
+      .first()) ??
+    ({
+      childId: entry.childId,
+      dayKey: entry.dayKey,
+      ...emptyCategoryCounts(),
+    } satisfies DailyReviewStatsRow)
+  if (existing) {
+    applyFactDelta(stats, existing, -1)
+    shouldRecompute = true
+  }
+  applyFactDelta(stats, candidate, 1)
+  await db.dailyReviewStats.put(stats)
+  await db.reviewFacts.put({
+    ...candidate,
+    ...(existing?.id !== undefined ? { id: existing.id } : {}),
+  })
+
+  if (shouldRecompute) {
+    await recomputeRecentFacts(entry.childId, entry.character)
+  } else if (!isNew) {
+    const row =
+      (await db.characterAnalytics
+        .where('[childId+character]')
+        .equals([entry.childId, entry.character])
+        .first()) ??
+      ({
+        childId: entry.childId,
+        character: entry.character,
+        recentLearnedFacts: [],
+        everForgottenAfterMastery: false,
+        currentlyForgottenAfterMastery: false,
+      } satisfies CharacterAnalyticsRow)
+    row.recentLearnedFacts = [...row.recentLearnedFacts, candidate]
+      .sort(compareRecentFacts)
+      .slice(0, 5)
+    await db.characterAnalytics.put(row)
+  } else {
+    const existingAnalytics = await db.characterAnalytics
+      .where('[childId+character]')
+      .equals([entry.childId, entry.character])
+      .first()
+    if (!existingAnalytics) {
+      await db.characterAnalytics.add({
+        childId: entry.childId,
+        character: entry.character,
+        recentLearnedFacts: [],
+        everForgottenAfterMastery: false,
+        currentlyForgottenAfterMastery: false,
+      })
+    }
+  }
+}
+
+async function updateMasteryRelapse(
+  entry: ReviewEntry,
+  update: AnalyticsReviewUpdate,
+): Promise<void> {
+  if (entry.round !== 1 || !update.accepted) return
+  const row =
+    (await db.characterAnalytics
+      .where('[childId+character]')
+      .equals([entry.childId, entry.character])
+      .first()) ??
+    ({
+      childId: entry.childId,
+      character: entry.character,
+      recentLearnedFacts: [],
+      everForgottenAfterMastery: false,
+      currentlyForgottenAfterMastery: false,
+    } satisfies CharacterAnalyticsRow)
+  if (entry.grade === 'd' && update.wasMastered && !update.isMastered) {
+    row.everForgottenAfterMastery = true
+    if (
+      row.lastMasteryStatusTimestamp === undefined ||
+      entry.timestamp >= row.lastMasteryStatusTimestamp
+    ) {
+      row.currentlyForgottenAfterMastery = true
+      row.lastMasteryStatusTimestamp = entry.timestamp
+    }
+  } else if (
+    update.isMastered &&
+    (row.lastMasteryStatusTimestamp === undefined ||
+      entry.timestamp >= row.lastMasteryStatusTimestamp)
+  ) {
+    row.currentlyForgottenAfterMastery = false
+    row.lastMasteryStatusTimestamp = entry.timestamp
+  }
+  await db.characterAnalytics.put(row)
+}
+
+async function projectReviewEntry(
+  entry: AnyLogEntry,
+  update?: AnalyticsReviewUpdate,
+): Promise<void> {
+  if (entry.type !== 'review' || entry.round !== 1) return
+  await upsertReviewFact(entry, update?.isNew ?? false)
+  if (update) await updateMasteryRelapse(entry, update)
+}
 
 /** Type guard: filter AnyLogEntry[] down to ReviewEntry[] at runtime */
 function filterReviews(entries: AnyLogEntry[]): ReviewEntry[] {
@@ -144,9 +353,16 @@ export async function repairCorruptedLogs(): Promise<number> {
 // Log Operations
 // ============================================================
 
-/** Append a single log entry to IndexedDB */
-export async function appendLog(entry: AnyLogEntry): Promise<number> {
-  return db.logs.add(entry)
+/** 追加日志并在同一事务中更新本地统计投影。 */
+export async function appendLog(
+  entry: AnyLogEntry,
+  analyticsUpdate?: AnalyticsReviewUpdate,
+): Promise<number> {
+  return db.transaction('rw', ...analyticsTables, async () => {
+    const id = await db.logs.add(withoutLocalLogId(entry))
+    await projectReviewEntry(entry, analyticsUpdate)
+    return id
+  })
 }
 
 /**
@@ -174,9 +390,267 @@ export async function dedupeLocalLogs(): Promise<number> {
   return toDelete.length
 }
 
-/** Append multiple log entries (e.g., from sync) */
-export async function appendLogs(entries: AnyLogEntry[]): Promise<number> {
-  return db.logs.bulkAdd(entries)
+/** 批量追加日志（如同步导入），并幂等更新统计投影。 */
+export async function appendLogs(
+  entries: AnyLogEntry[],
+  analyticsUpdates: Array<AnalyticsReviewUpdate | undefined> = [],
+): Promise<number> {
+  if (entries.length === 0) return 0
+  return db.transaction('rw', ...analyticsTables, async () => {
+    const snapshot = await getLatestSnapshot()
+    const children = new Map(snapshot?.state.children.map(child => [child.id, child]) ?? [])
+    await db.logs.bulkAdd(entries.map(withoutLocalLogId))
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index]
+      let update = analyticsUpdates[index]
+      if (!update && entry.type === 'review' && entry.round === 1) {
+        const firstReviewDay = children.get(entry.childId)?.progress[entry.character]
+          ?.firstReviewDay
+        update = { isNew: firstReviewDay === undefined || firstReviewDay === entry.dayKey }
+      }
+      await projectReviewEntry(entry, update)
+    }
+    return entries.length
+  })
+}
+
+export interface AnalyticsBackfillStatus {
+  ready: boolean
+  processed: number
+  total: number
+}
+
+interface AnalyticsBackfillCheckpoint extends AnalyticsBackfillStatus {
+  lastTimestamp?: number
+  lastId?: number
+  replayState?: AppState
+}
+
+const ANALYTICS_BACKFILL_KEY = 'learningAnalyticsBackfill'
+const ANALYTICS_BACKFILL_BATCH_SIZE = 500
+
+function emptyReplayState(): AppState {
+  return {
+    children: [],
+    wordBooks: [],
+    settings: { ...DEFAULT_SETTINGS },
+  }
+}
+
+export async function getAnalyticsBackfillStatus(): Promise<AnalyticsBackfillStatus> {
+  const checkpoint = await getMeta<AnalyticsBackfillCheckpoint>(ANALYTICS_BACKFILL_KEY)
+  return checkpoint
+    ? { ready: checkpoint.ready, processed: checkpoint.processed, total: checkpoint.total }
+    : { ready: false, processed: 0, total: 0 }
+}
+
+const backfillListeners = new Set<(status: AnalyticsBackfillStatus) => void>()
+let backfillPromise: Promise<void> | null = null
+
+/** 按时间戳顺序分批回填统计投影，支持中断后续跑。 */
+async function runLearningAnalyticsBackfill(): Promise<void> {
+  while (true) {
+    const result = (await db.transaction('rw', [...analyticsTables, db.meta], async () => {
+      let checkpoint = await db.meta
+        .get(ANALYTICS_BACKFILL_KEY)
+        .then(row => row?.value as AnalyticsBackfillCheckpoint | undefined)
+      if (checkpoint?.ready) {
+        if (checkpoint.replayState) {
+          const { replayState: _completedReplayState, ...completed } = checkpoint
+          await db.meta.put({ key: ANALYTICS_BACKFILL_KEY, value: completed })
+          return { status: completed, finished: true }
+        }
+        return { status: checkpoint, finished: true }
+      }
+      if (!checkpoint) {
+        checkpoint = {
+          ready: false,
+          processed: 0,
+          total: await db.logs.count(),
+          replayState: emptyReplayState(),
+        }
+      }
+
+      const batch =
+        checkpoint.lastTimestamp !== undefined && checkpoint.lastId !== undefined
+          ? await db.logs
+              .where('[timestamp+id]')
+              .above([checkpoint.lastTimestamp, checkpoint.lastId])
+              .limit(ANALYTICS_BACKFILL_BATCH_SIZE)
+              .toArray()
+          : await db.logs.orderBy('[timestamp+id]').limit(ANALYTICS_BACKFILL_BATCH_SIZE).toArray()
+      const replayState = checkpoint.replayState ?? emptyReplayState()
+
+      for (const row of batch) {
+        if (row.type === 'review' && row.round === 1) {
+          const child = replayState.children.find(item => item.id === row.childId)
+          const previous = child?.progress[row.character]
+          const wasMastered = getProficiency(previous) === 'mastered'
+          const accepted = applyEntry(replayState, row)
+          const current = replayState.children.find(item => item.id === row.childId)?.progress[
+            row.character
+          ]
+          await projectReviewEntry(row, {
+            isNew: previous ? previous.firstReviewDay === row.dayKey : true,
+            accepted,
+            wasMastered,
+            isMastered: getProficiency(current) === 'mastered',
+          })
+        } else {
+          applyEntry(replayState, row)
+        }
+      }
+
+      const last = batch[batch.length - 1]
+      const processed = checkpoint.processed + batch.length
+      const ready = batch.length < ANALYTICS_BACKFILL_BATCH_SIZE
+      const { replayState: _previousReplayState, ...checkpointFields } = checkpoint
+      const updated: AnalyticsBackfillCheckpoint = {
+        ...checkpointFields,
+        ready,
+        processed,
+        ...(!ready ? { replayState } : {}),
+        ...(last ? { lastTimestamp: last.timestamp, lastId: last.id } : {}),
+      }
+      await db.meta.put({ key: ANALYTICS_BACKFILL_KEY, value: updated })
+      return { status: updated, finished: updated.ready }
+    })) as { status: AnalyticsBackfillCheckpoint; finished: boolean }
+    const status = {
+      ready: result.status.ready,
+      processed: result.status.processed,
+      total: result.status.total,
+    }
+    backfillListeners.forEach(listener => listener(status))
+    if (result.finished) return
+  }
+}
+
+export function backfillLearningAnalytics(
+  onProgress?: (status: AnalyticsBackfillStatus) => void,
+): Promise<void> {
+  if (onProgress) backfillListeners.add(onProgress)
+  if (!backfillPromise) {
+    backfillPromise = runLearningAnalyticsBackfill().finally(() => {
+      backfillPromise = null
+    })
+  }
+  const running = backfillPromise
+  return running.finally(() => {
+    if (onProgress) backfillListeners.delete(onProgress)
+  })
+}
+
+export async function getDailyReviewStatsForDay(
+  childId: string,
+  dayKey: string,
+): Promise<DailyReviewStats | undefined> {
+  return db.dailyReviewStats.where('[childId+dayKey]').equals([childId, dayKey]).first()
+}
+
+export async function getDailyReviewStatsInRange(
+  childId: string,
+  fromDay: string,
+  toDay: string,
+): Promise<DailyReviewStats[]> {
+  return db.dailyReviewStats
+    .where('[childId+dayKey]')
+    .between([childId, fromDay], [childId, toDay], true, true)
+    .toArray()
+}
+
+export async function getCharacterAnalyticsForChild(
+  childId: string,
+): Promise<CharacterAnalytics[]> {
+  return db.characterAnalytics.where('childId').equals(childId).toArray()
+}
+
+export interface ReconstructedReviewUpdate extends AnalyticsReviewUpdate {
+  accepted: boolean
+  wasMastered: boolean
+  isMastered: boolean
+}
+
+/** 用每个受影响汉字的现有日志历史，在临时状态上重建待导入评级的统计结果。 */
+export async function reconstructReviewAnalyticsUpdates(
+  incoming: AnyLogEntry[],
+  watermark?: number,
+): Promise<Map<string, ReconstructedReviewUpdate>> {
+  const affected = new Map<
+    string,
+    { childId: string; character: string; targets: Set<string>; incoming: ReviewEntry[] }
+  >()
+  for (const entry of incoming) {
+    if (entry.type !== 'review') continue
+    const key = JSON.stringify([entry.childId, entry.character])
+    let group = affected.get(key)
+    if (!group) {
+      group = {
+        childId: entry.childId,
+        character: entry.character,
+        targets: new Set(),
+        incoming: [],
+      }
+      affected.set(key, group)
+    }
+    group.incoming.push(entry)
+    if (entry.round === 1 && (watermark === undefined || entry.timestamp <= watermark)) {
+      group.targets.add(makeDiffKey(entry))
+    }
+  }
+
+  const outcomes = new Map<string, ReconstructedReviewUpdate>()
+  for (const group of affected.values()) {
+    if (group.targets.size === 0) continue
+    const history = new Map<string, ReviewEntry>()
+    for (const entry of await getReviewsForChildChar(group.childId, group.character)) {
+      history.set(makeDiffKey(entry), entry)
+    }
+    for (const entry of group.incoming) {
+      const key = makeDiffKey(entry)
+      if (!history.has(key)) history.set(key, entry)
+    }
+    const orderedHistory = [...history.values()].sort((a, b) => a.timestamp - b.timestamp)
+    const wordBookId = `analytics_${group.childId}`
+    const replayState: AppState = {
+      children: [
+        {
+          id: group.childId,
+          name: '',
+          wordBookId,
+          nextCharIndex: 0,
+          progress: {},
+        },
+      ],
+      wordBooks: [{ id: wordBookId, name: '', characters: [group.character] }],
+      settings: { ...DEFAULT_SETTINGS },
+    }
+
+    for (const entry of orderedHistory) {
+      const before = replayState.children[0].progress[group.character]
+      const wasMastered = getProficiency(before) === 'mastered'
+      const accepted = applyEntry(replayState, entry)
+      const after = replayState.children[0].progress[group.character]
+      if (group.targets.has(makeDiffKey(entry))) {
+        outcomes.set(makeDiffKey(entry), {
+          isNew: before === undefined || before.firstReviewDay === entry.dayKey,
+          accepted: accepted && entry.round === 1,
+          wasMastered,
+          isMastered: getProficiency(after) === 'mastered',
+        })
+      }
+    }
+  }
+  return outcomes
+}
+
+export async function recordAppliedReviewAnalytics(
+  entry: ReviewEntry,
+  wasMastered: boolean,
+  isMastered: boolean,
+): Promise<void> {
+  await db.transaction('rw', db.characterAnalytics, async () => {
+    await updateMasteryRelapse(entry, { isNew: false, accepted: true, wasMastered, isMastered })
+  })
 }
 
 /** Get log entries after a specific timestamp */

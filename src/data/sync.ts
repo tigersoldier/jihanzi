@@ -11,6 +11,7 @@
 import type { AnyLogEntry, AppState, SM2State, Snapshot } from '../core/types'
 import { SM2_INITIAL_EASE, SM2_INITIAL_INTERVAL } from '../core/types'
 import { applyEntry, deepCloneState } from '../core/log'
+import { getProficiency } from '../core/proficiency'
 import { MAX_SANE_INTERVAL_DAYS, toDateKey } from '../core/sm2'
 import {
   appendLogs,
@@ -23,6 +24,8 @@ import {
   getLogsAfterPaginated,
   getLastKnownRemoteTime,
   dedupeLocalLogs,
+  type AnalyticsReviewUpdate,
+  reconstructReviewAnalyticsUpdates,
 } from './db'
 import {
   findOrCreateRootFolder,
@@ -410,16 +413,70 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
       return true
     })
 
-    // Append remote-only entries to local IndexedDB
-    if (dedupedRemoteOnly.length > 0) {
-      dedupedRemoteOnly.sort((a, b) => a.timestamp - b.timestamp)
-      await appendLogs(dedupedRemoteOnly)
+    // 在写日志前，按原有 SM-2 应用路径推导统计状态；facts 与遗忘标记随后同事务写入。
+    const analyticsUpdates = new Map<AnyLogEntry, AnalyticsReviewUpdate>()
+    if (bestSnapshot) {
+      const projectionState = deepCloneState(bestSnapshot.state)
+      const watermark = bestSnapshot.appliedThrough ?? bestSnapshot.timestamp
+      const appliedEntries = dedupedRemoteOnly
+        .filter(entry => entry.timestamp > watermark)
+        .sort((a, b) => a.timestamp - b.timestamp)
+      for (const entry of appliedEntries) {
+        const previous =
+          entry.type === 'review'
+            ? projectionState.children.find(child => child.id === entry.childId)?.progress[
+                entry.character
+              ]
+            : undefined
+        const wasMastered = getProficiency(previous) === 'mastered'
+        const accepted = applyEntry(projectionState, entry)
+        if (entry.type === 'review') {
+          const current = projectionState.children.find(child => child.id === entry.childId)
+            ?.progress[entry.character]
+          analyticsUpdates.set(entry, {
+            isNew: previous === undefined || previous.firstReviewDay === entry.dayKey,
+            accepted: accepted && entry.round === 1,
+            wasMastered,
+            isMastered: getProficiency(current) === 'mastered',
+          })
+        }
+      }
     }
 
-    // Replay remote-only entries into the snapshot so that in-memory
-    // state (SM-2 progress, nextCharIndex, etc.) reflects the merged
-    // logs. Without this, the snapshot would be stale after a first
-    // import or after pulling reviews produced on another device.
+    if (bestSnapshot) {
+      const watermark = bestSnapshot.appliedThrough ?? bestSnapshot.timestamp
+      const coveredOutcomes = await reconstructReviewAnalyticsUpdates(dedupedRemoteOnly, watermark)
+      for (const entry of dedupedRemoteOnly) {
+        if (entry.type !== 'review' || entry.round !== 1 || entry.timestamp > watermark) continue
+        const outcome = coveredOutcomes.get(makeDiffKey(entry))
+        if (!outcome) continue
+        const firstReviewDay = bestSnapshot.state.children.find(child => child.id === entry.childId)
+          ?.progress[entry.character]?.firstReviewDay
+        analyticsUpdates.set(entry, {
+          ...outcome,
+          isNew: firstReviewDay === undefined || firstReviewDay === entry.dayKey,
+        })
+      }
+    } else {
+      const reconstructed = await reconstructReviewAnalyticsUpdates(dedupedRemoteOnly)
+      for (const entry of dedupedRemoteOnly) {
+        if (entry.type !== 'review' || entry.round !== 1) continue
+        const outcome = reconstructed.get(makeDiffKey(entry))
+        if (outcome) analyticsUpdates.set(entry, outcome)
+      }
+    }
+
+    // 仅在临时单字重放中恢复水位内的应用结果，再与日志投影原子写入。
+    if (dedupedRemoteOnly.length > 0) {
+      dedupedRemoteOnly.sort((a, b) => a.timestamp - b.timestamp)
+      await appendLogs(
+        dedupedRemoteOnly,
+        dedupedRemoteOnly.map(entry => analyticsUpdates.get(entry)),
+      )
+    }
+
+    // 将仅远程存在的日志重放进快照，使内存状态（SM-2 进度、下一个汉字索引等）
+    // 与合并后的日志一致；否则首次导入或拉取其他设备的复习后，快照会过期。
     // 修订：采纳了旧代码产物（无 appliedThrough 水位）的快照时，用本地
     // 日志并集逐字校验修复——旧代码的中度污染（×3、interval 封顶）会绕过
     // 廉价阈值，不能在采纳时直接进入本地状态，也不能继续流转。

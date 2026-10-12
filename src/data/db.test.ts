@@ -94,6 +94,12 @@ import db, {
   getReviewsForChildChar,
   getReviewsForChildCharPaginated,
   dedupeLocalLogs,
+  appendLogs,
+  backfillLearningAnalytics,
+  getDailyReviewStatsInRange,
+  getCharacterAnalyticsForChild,
+  recordAppliedReviewAnalytics,
+  reconstructReviewAnalyticsUpdates,
 } from './db'
 
 function makeReviewEntry(overrides: Partial<AnyLogEntry> = {}): AnyLogEntry {
@@ -473,6 +479,232 @@ describe('getReviewsForChildCharPaginated', () => {
     expect(next.entries).toHaveLength(0)
     expect(next.hasMore).toBe(false)
     expect(next.cursor).toBeNull()
+  })
+})
+
+describe('learning analytics projection', () => {
+  beforeEach(async () => {
+    await db.logs.clear()
+    await db.snapshot.clear()
+    await db.meta.clear()
+    await db.reviewFacts.clear()
+    await db.dailyReviewStats.clear()
+    await db.characterAnalytics.clear()
+  })
+
+  it('projects batch-imported review facts with learned-character categories', async () => {
+    await appendLogs(
+      [makeReviewEntry({ timestamp: 5, grade: 'b', dayKey: '2026-07-01' })],
+      [{ isNew: false }],
+    )
+    const [day] = await getDailyReviewStatsInRange('child_test', '2026-07-01', '2026-07-01')
+    expect(day.learnedChars.b).toBe(1)
+  })
+
+  it('keeps the earliest same-day round-one fact and corrects its daily count idempotently', async () => {
+    const later = makeReviewEntry({ timestamp: 200, grade: 'a', dayKey: '2026-07-01' })
+    const earlier = makeReviewEntry({ timestamp: 100, grade: 'd', dayKey: '2026-07-01' })
+    await appendLog(later, { isNew: true })
+    await appendLog(earlier, { isNew: true })
+    await appendLog({ ...earlier, timestamp: 300 }, { isNew: true })
+    await appendLog(makeReviewEntry({ timestamp: 400, round: 2, dayKey: '2026-07-01' }))
+
+    const facts = await db.reviewFacts.toArray()
+    expect(facts).toHaveLength(1)
+    expect(facts[0]).toMatchObject({ timestamp: 100, grade: 'd', isNew: true })
+    const [day] = await getDailyReviewStatsInRange('child_test', '2026-07-01', '2026-07-01')
+    expect(day.newChars).toEqual({ a: 0, b: 0, c: 0, d: 1 })
+    expect(day.learnedChars).toEqual({ a: 0, b: 0, c: 0, d: 0 })
+  })
+
+  it('only marks accepted d relapse transitions and preserves history after re-mastery', async () => {
+    for (const grade of ['b', 'c'] as const) {
+      await appendLog(makeReviewEntry({ timestamp: grade === 'b' ? 10 : 15, grade }), {
+        isNew: false,
+        accepted: true,
+        wasMastered: true,
+        isMastered: false,
+      })
+    }
+    expect((await getCharacterAnalyticsForChild('child_test'))[0]?.everForgottenAfterMastery).toBe(
+      false,
+    )
+
+    const unapplied = makeReviewEntry({ timestamp: 18, grade: 'd' })
+    await appendLog(unapplied, {
+      isNew: false,
+      accepted: false,
+      wasMastered: true,
+      isMastered: false,
+    })
+    expect((await getCharacterAnalyticsForChild('child_test'))[0]?.everForgottenAfterMastery).toBe(
+      false,
+    )
+
+    const relapse = makeReviewEntry({ timestamp: 20, grade: 'd', dayKey: '2026-07-05' })
+    await appendLog(relapse, {
+      isNew: false,
+      accepted: true,
+      wasMastered: true,
+      isMastered: false,
+    })
+    let analytics = (await getCharacterAnalyticsForChild('child_test'))[0]
+    expect(analytics).toMatchObject({
+      everForgottenAfterMastery: true,
+      currentlyForgottenAfterMastery: true,
+    })
+
+    await recordAppliedReviewAnalytics(
+      makeReviewEntry({ timestamp: 30, grade: 'a', dayKey: '2026-07-06' }) as Extract<
+        AnyLogEntry,
+        { type: 'review' }
+      >,
+      false,
+      true,
+    )
+    analytics = (await getCharacterAnalyticsForChild('child_test'))[0]
+    expect(analytics).toMatchObject({
+      everForgottenAfterMastery: true,
+      currentlyForgottenAfterMastery: false,
+    })
+    await appendLog(makeReviewEntry({ timestamp: 25, grade: 'd', dayKey: '2026-07-05' }), {
+      isNew: false,
+      accepted: true,
+      wasMastered: true,
+      isMastered: false,
+    })
+    analytics = (await getCharacterAnalyticsForChild('child_test'))[0]
+    expect(analytics).toMatchObject({
+      everForgottenAfterMastery: true,
+      currentlyForgottenAfterMastery: false,
+    })
+  })
+
+  it('removes replay state from an already completed backfill checkpoint', async () => {
+    await db.meta.put({
+      key: 'learningAnalyticsBackfill',
+      value: {
+        ready: true,
+        processed: 500,
+        total: 500,
+        replayState: { children: [], wordBooks: [], settings: {} },
+      },
+    })
+
+    await backfillLearningAnalytics()
+
+    expect(await db.meta.get('learningAnalyticsBackfill')).toMatchObject({
+      value: { ready: true, processed: 500, total: 500 },
+    })
+    expect((await db.meta.get('learningAnalyticsBackfill'))?.value).not.toHaveProperty(
+      'replayState',
+    )
+  })
+
+  it('reconstructs watermark-covered outcomes from only the character review history', async () => {
+    const history = [
+      makeReviewEntry({ timestamp: 10, dayKey: '2026-07-01', grade: 'a' }),
+      makeReviewEntry({ timestamp: 20, dayKey: '2026-07-04', grade: 'a' }),
+      makeReviewEntry({ timestamp: 30, dayKey: '2026-07-12', grade: 'a' }),
+    ]
+    const coveredRelapse = makeReviewEntry({
+      timestamp: 40,
+      dayKey: '2026-08-03',
+      grade: 'd',
+    })
+    await db.logs.bulkAdd(history)
+
+    const outcomes = await reconstructReviewAnalyticsUpdates([coveredRelapse], 50)
+    expect(outcomes.get('40:review:child_test:花')).toMatchObject({
+      accepted: true,
+      wasMastered: true,
+      isMastered: false,
+    })
+  })
+
+  it('derives new-versus-learned metadata for all incoming reviews without a snapshot watermark', async () => {
+    const incoming = [
+      makeReviewEntry({ timestamp: 10, dayKey: '2026-07-01', grade: 'a' }),
+      makeReviewEntry({ timestamp: 20, dayKey: '2026-07-04', grade: 'c' }),
+    ]
+
+    const updates = await reconstructReviewAnalyticsUpdates(incoming)
+
+    expect(updates.get('10:review:child_test:花')).toMatchObject({
+      isNew: true,
+      accepted: true,
+      wasMastered: false,
+      isMastered: false,
+    })
+    expect(updates.get('20:review:child_test:花')).toMatchObject({
+      isNew: false,
+      accepted: true,
+      wasMastered: false,
+      isMastered: false,
+    })
+  })
+
+  it('recomputes only the latest five learned facts after a late same-day correction', async () => {
+    await appendLog(makeReviewEntry({ timestamp: 10, dayKey: '2026-07-01', grade: 'd' }), {
+      isNew: true,
+    })
+    for (let day = 2; day <= 8; day++) {
+      await appendLog(
+        makeReviewEntry({
+          timestamp: day * 10,
+          dayKey: `2026-07-${String(day).padStart(2, '0')}`,
+          grade: day % 2 === 0 ? 'c' : 'a',
+        }),
+        { isNew: false },
+      )
+    }
+    await appendLog(makeReviewEntry({ timestamp: 69, dayKey: '2026-07-06', grade: 'd' }), {
+      isNew: false,
+    })
+
+    const analytics = (await getCharacterAnalyticsForChild('child_test'))[0]
+    expect(analytics.recentLearnedFacts.map(fact => fact.dayKey)).toEqual([
+      '2026-07-08',
+      '2026-07-07',
+      '2026-07-06',
+      '2026-07-05',
+      '2026-07-04',
+    ])
+    expect(analytics.recentLearnedFacts).toHaveLength(5)
+    expect(analytics.recentLearnedFacts.some(fact => fact.isNew)).toBe(false)
+  })
+
+  it('backfills existing logs once and is idempotent', async () => {
+    await db.logs.bulkAdd([
+      {
+        timestamp: 1,
+        type: 'create_wordbook',
+        wordBookId: 'wb_1',
+        name: '测试',
+        characters: ['花'],
+      },
+      {
+        timestamp: 2,
+        type: 'create_child',
+        childId: 'child_test',
+        name: '小明',
+        wordBookId: 'wb_1',
+      },
+      makeReviewEntry({ timestamp: 10, grade: 'a', dayKey: '2026-07-01' }),
+      makeReviewEntry({ timestamp: 11, grade: 'd', round: 2, dayKey: '2026-07-01' }),
+      makeReviewEntry({ timestamp: 20, grade: 'c', dayKey: '2026-07-02' }),
+    ] as AnyLogEntry[])
+
+    await backfillLearningAnalytics()
+    await backfillLearningAnalytics()
+
+    expect(await db.reviewFacts.count()).toBe(2)
+    const rows = await getDailyReviewStatsInRange('child_test', '2026-07-01', '2026-07-02')
+    expect(rows).toHaveLength(2)
+    expect(rows.find(row => row.dayKey === '2026-07-01')?.newChars.a).toBe(1)
+    expect(rows.find(row => row.dayKey === '2026-07-02')?.learnedChars.c).toBe(1)
+    const checkpoint = await db.meta.get('learningAnalyticsBackfill')
+    expect(checkpoint?.value).not.toHaveProperty('replayState')
   })
 })
 
