@@ -4,7 +4,7 @@ interface ProgressBarProps {
 }
 
 export default function ProgressBar({ current, total }: ProgressBarProps) {
-  const percent = total > 0 ? Math.round((current / total) * 100) : 0
+  const percent = total > 1 ? Math.round((current / (total - 1)) * 100) : total === 1 ? 100 : 0
 
   return (
     <div className="flex items-center gap-3">
