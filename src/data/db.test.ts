@@ -9,6 +9,7 @@ import 'fake-indexeddb/auto'
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { AnyLogEntry } from '../core/types'
 import { buildHistoricalCharts } from '../core/learningAnalytics'
+import { makeDiffKey } from '../utils/logKey'
 
 // ============================================================
 // isUTF8Corrupted — pure function tests
@@ -94,6 +95,9 @@ import db, {
   getReviewsForChild,
   getReviewsForChildChar,
   getReviewsForChildCharPaginated,
+  getReviewCountsForChild,
+  backfillReviewCounts,
+  pruneOldestLogs,
   dedupeLocalLogs,
   appendLogs,
   backfillLearningAnalytics,
@@ -278,6 +282,9 @@ describe('v2→v3 snapshot migration', () => {
 describe('getReviewsForChild', () => {
   beforeEach(async () => {
     await db.logs.clear()
+    await db.reviewCounts.clear()
+    await db.reviewCountEvents.clear()
+    await db.meta.delete('wordBookReviewCountsBackfill')
   })
 
   it('returns review entries for a specific child', async () => {
@@ -297,6 +304,251 @@ describe('getReviewsForChild', () => {
 
     const result = await getReviewsForChild('child_a')
     expect(result).toHaveLength(0)
+  })
+
+  it('persists review totals across pruning and counts later local reviews', async () => {
+    const reviews = [
+      makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1, round: 1 }),
+      makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 2, round: 2 }),
+      makeReviewEntry({ childId: 'child_a', character: '山', timestamp: 3, round: 1 }),
+      makeReviewEntry({ childId: 'child_b', character: '花', timestamp: 4, round: 1 }),
+    ]
+    const nonReview = {
+      timestamp: 5,
+      type: 'create_child',
+      childId: 'child_a',
+      name: '小明',
+      wordBookId: 'wb_1',
+    } as AnyLogEntry
+    await db.logs.bulkAdd([...reviews, reviews[0], nonReview])
+
+    await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 2, 山: 1 })
+    await appendLog(makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 6 }))
+    await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 3, 山: 1 })
+
+    await pruneOldestLogs(2)
+    const logCountAfterPruning = await db.logs.count()
+    await expect(appendLogs([reviews[0]])).resolves.toEqual({
+      appendedCount: 0,
+      projectionsChanged: true,
+    })
+    await expect(appendLogs([reviews[0]])).resolves.toEqual({
+      appendedCount: 0,
+      projectionsChanged: false,
+    })
+    await expect(appendLog(reviews[0])).resolves.toBeNull()
+    expect(await db.logs.count()).toBe(logCountAfterPruning)
+    await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 3, 山: 1 })
+  })
+
+  it('removes retained copies when a prune window splits one event duplicate', async () => {
+    const duplicate = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1 })
+    const next = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 2 })
+    await db.logs.bulkAdd([duplicate, duplicate, next])
+    await db.reviewCounts.put({ childId: 'child_a', character: '花', count: 2 })
+    await db.meta.put({
+      key: 'wordBookReviewCountsBackfill',
+      value: { version: 2, phase: 'logs', lastId: 3, processed: 3, ready: true },
+    })
+
+    await expect(pruneOldestLogs(1)).resolves.toBe(2)
+    expect(await db.logs.count()).toBe(1)
+    await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 2 })
+  })
+
+  it('does not count repeated batch imports twice', async () => {
+    await getReviewCountsForChild('child_a')
+    const review = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 10 })
+
+    await expect(appendLogs([review])).resolves.toMatchObject({ appendedCount: 1 })
+    await expect(appendLogs([review])).resolves.toEqual({
+      appendedCount: 0,
+      projectionsChanged: false,
+    })
+    await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 1 })
+  })
+
+  it('updates counts when appendLog runs inside the AppContext transaction scope', async () => {
+    await getReviewCountsForChild('child_a')
+    const review = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 11 })
+
+    await db.transaction(
+      'rw',
+      [
+        db.logs,
+        db.snapshot,
+        db.reviewFacts,
+        db.dailyReviewStats,
+        db.characterAnalytics,
+        db.reviewCounts,
+        db.reviewCountEvents,
+        db.meta,
+      ],
+      async () => appendLog(review),
+    )
+
+    await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 1 })
+  })
+
+  it('backfills counts across multiple indexed batches', async () => {
+    const reviews = Array.from({ length: 501 }, (_, index) =>
+      makeReviewEntry({
+        childId: 'child_a',
+        character: '花',
+        timestamp: index + 1,
+        round: (index % 3) + 1,
+      }),
+    )
+    await db.logs.bulkAdd(reviews)
+
+    await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 501 })
+  })
+
+  it('deduplicates repeated imports across the 500-entry batch boundary', async () => {
+    await getReviewCountsForChild('child_a')
+    const entries = Array.from({ length: 501 }, (_, index) =>
+      makeReviewEntry({
+        childId: 'child_a',
+        character: '花',
+        timestamp: index + 1,
+        round: 2,
+      }),
+    )
+    entries[500] = entries[0]
+
+    const result = await appendLogs(entries)
+
+    expect(result.appendedCount).toBe(500)
+    expect(await db.logs.count()).toBe(500)
+    await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 500 })
+  })
+
+  it('resumes from a partially processed prune-ledger checkpoint', async () => {
+    const firstPruned = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1 })
+    const secondPruned = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 2 })
+    const retained = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 3 })
+    await db.reviewCountEvents.bulkPut([
+      {
+        eventKey: makeDiffKey(firstPruned),
+        timestamp: firstPruned.timestamp,
+        childId: firstPruned.childId,
+        character: firstPruned.character,
+      },
+      {
+        eventKey: makeDiffKey(secondPruned),
+        timestamp: secondPruned.timestamp,
+        childId: secondPruned.childId,
+        character: secondPruned.character,
+      },
+    ])
+    await db.logs.add(retained)
+    await db.reviewCounts.put({ childId: 'child_a', character: '花', count: 1 })
+    await db.meta.put({
+      key: 'wordBookReviewCountsBackfill',
+      value: {
+        version: 2,
+        phase: 'ledger',
+        lastEventKey: makeDiffKey(firstPruned),
+        lastId: 0,
+        processed: 1,
+        ready: false,
+      },
+    })
+
+    await backfillReviewCounts()
+
+    await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 3 })
+  })
+
+  it('counts a review appended during the ledger phase exactly once', async () => {
+    const pruned = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1 })
+    const appended = makeReviewEntry({
+      childId: 'child_a',
+      character: '花',
+      timestamp: 2,
+      round: 2,
+    })
+    await db.reviewCountEvents.put({
+      eventKey: makeDiffKey(pruned),
+      timestamp: pruned.timestamp,
+      childId: pruned.childId,
+      character: pruned.character,
+    })
+    await db.meta.put({
+      key: 'wordBookReviewCountsBackfill',
+      value: {
+        version: 2,
+        phase: 'ledger',
+        lastEventKey: '',
+        lastId: 0,
+        processed: 0,
+        ready: false,
+      },
+    })
+
+    await Promise.all([backfillReviewCounts(), appendLog(appended)])
+
+    await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 2 })
+  })
+
+  it('counts a review appended while backfill is in progress exactly once', async () => {
+    const existing = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1 })
+    const appended = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 2 })
+    await db.logs.add(existing)
+    await db.meta.put({
+      key: 'wordBookReviewCountsBackfill',
+      value: { version: 2, phase: 'logs', lastId: 0, processed: 0, ready: false },
+    })
+
+    await Promise.all([backfillReviewCounts(), appendLog(appended)])
+
+    await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 2 })
+  })
+
+  it('reconciles ready counts from the unique ledger/log union after dedupe', async () => {
+    const first = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1 })
+    const duplicate = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 1 })
+    const second = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 2 })
+    const pruned = makeReviewEntry({ childId: 'child_a', character: '花', timestamp: 3 })
+    await db.logs.bulkAdd([first, duplicate, second])
+    await db.reviewCountEvents.put({
+      eventKey: makeDiffKey(pruned),
+      timestamp: pruned.timestamp,
+      childId: pruned.childId,
+      character: pruned.character,
+    })
+    await db.reviewCounts.put({ childId: 'child_a', character: '花', count: 99 })
+    await db.meta.put({
+      key: 'wordBookReviewCountsBackfill',
+      value: { version: 2, phase: 'logs', lastId: 3, processed: 3, ready: true },
+    })
+
+    await dedupeLocalLogs(true)
+
+    expect(await db.logs.count()).toBe(2)
+    await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 3 })
+  })
+
+  it('resumes a partial count backfill from its saved checkpoint', async () => {
+    const reviews = Array.from({ length: 501 }, (_, index) =>
+      makeReviewEntry({
+        childId: 'child_a',
+        character: '花',
+        timestamp: index + 1,
+      }),
+    )
+    await db.logs.bulkAdd(reviews)
+    const firstPage = await db.logs.orderBy('id').limit(250).toArray()
+    const lastId = firstPage.at(-1)?.id
+    expect(lastId).toBeDefined()
+
+    await db.reviewCounts.put({ childId: 'child_a', character: '花', count: 250 })
+    await db.meta.put({
+      key: 'wordBookReviewCountsBackfill',
+      value: { version: 1, lastId, processed: 250, ready: false },
+    })
+
+    await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 501 })
   })
 })
 
@@ -491,6 +743,8 @@ describe('learning analytics projection', () => {
     await db.reviewFacts.clear()
     await db.dailyReviewStats.clear()
     await db.characterAnalytics.clear()
+    await db.reviewCounts.clear()
+    await db.reviewCountEvents.clear()
   })
 
   it('classifies retained learned-character reviews from the snapshot when earlier logs were pruned', async () => {
@@ -721,6 +975,215 @@ describe('learning analytics projection', () => {
     )
     const [day] = await getDailyReviewStatsInRange('child_test', '2026-07-01', '2026-07-01')
     expect(day.learnedChars.b).toBe(1)
+  })
+
+  it('corrects a marker-suppressed event when its review category changes', async () => {
+    await db.snapshot.put({
+      type: 'current',
+      timestamp: 50,
+      state: {
+        children: [
+          {
+            id: 'child_test',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: 0,
+            progress: {
+              花: {
+                ease: 2.5,
+                interval: 1,
+                repetitions: 1,
+                nextReview: '2026-07-02',
+                lastGrade: 'a',
+                firstReviewDay: '2026-06-30',
+              },
+            },
+          },
+        ],
+        wordBooks: [{ id: 'wb_1', name: '测试', characters: ['花'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    })
+    const review = makeReviewEntry({ timestamp: 100, grade: 'a', dayKey: '2026-07-01' })
+    await appendLog(review, { isNew: true })
+    await expect(pruneOldestLogs(1)).resolves.toBe(1)
+
+    const result = await appendLogs([review], [{ isNew: false }])
+
+    expect(result).toEqual({ appendedCount: 0, projectionsChanged: true })
+    const [day] = await getDailyReviewStatsInRange('child_test', '2026-07-01', '2026-07-01')
+    expect(day.newChars.a).toBe(0)
+    expect(day.learnedChars.a).toBe(1)
+    expect(await db.reviewFacts.toArray()).toMatchObject([{ isNew: false }])
+    await expect(getReviewCountsForChild('child_test')).resolves.toEqual({ 花: 1 })
+
+    await expect(appendLogs([review], [{ isNew: false }])).resolves.toEqual({
+      appendedCount: 0,
+      projectionsChanged: false,
+    })
+    await expect(getReviewCountsForChild('child_test')).resolves.toEqual({ 花: 1 })
+  })
+
+  it('uses snapshot, incoming update, and existing-fact fallbacks for pruned events', async () => {
+    const scenarios = [
+      {
+        childId: 'child_snapshot_new',
+        character: '花',
+        firstReviewDay: '2026-07-01',
+        initialIsNew: false,
+        update: undefined,
+        expectedIsNew: true,
+      },
+      {
+        childId: 'child_snapshot_learned',
+        character: '山',
+        firstReviewDay: '2026-06-30',
+        initialIsNew: true,
+        update: undefined,
+        expectedIsNew: false,
+      },
+      {
+        childId: 'child_incoming_precedence',
+        character: '水',
+        firstReviewDay: '2026-06-30',
+        initialIsNew: false,
+        update: { isNew: true },
+        expectedIsNew: true,
+      },
+      {
+        childId: 'child_existing_fallback',
+        character: '火',
+        firstReviewDay: undefined,
+        initialIsNew: false,
+        update: undefined,
+        expectedIsNew: false,
+      },
+    ] as const
+    await db.snapshot.put({
+      type: 'current',
+      timestamp: 50,
+      state: {
+        children: scenarios.map(scenario => ({
+          id: scenario.childId,
+          name: scenario.childId,
+          wordBookId: 'wb_1',
+          nextCharIndex: 0,
+          progress: scenario.firstReviewDay
+            ? {
+                [scenario.character]: {
+                  ease: 2.5,
+                  interval: 1,
+                  repetitions: 1,
+                  nextReview: '2026-07-02',
+                  lastGrade: 'a',
+                  firstReviewDay: scenario.firstReviewDay,
+                },
+              }
+            : {},
+        })),
+        wordBooks: [
+          { id: 'wb_1', name: '测试', characters: scenarios.map(scenario => scenario.character) },
+        ],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    })
+
+    for (const [index, scenario] of scenarios.entries()) {
+      const review = makeReviewEntry({
+        childId: scenario.childId,
+        character: scenario.character,
+        timestamp: 100 + index,
+        dayKey: '2026-07-01',
+      })
+      await appendLog(review, { isNew: scenario.initialIsNew })
+      await expect(pruneOldestLogs(1)).resolves.toBe(1)
+      await appendLogs([review], scenario.update ? [scenario.update] : undefined)
+
+      const [day] = await getDailyReviewStatsInRange(scenario.childId, '2026-07-01', '2026-07-01')
+      expect(day.newChars.a).toBe(scenario.expectedIsNew ? 1 : 0)
+      expect(day.learnedChars.a).toBe(scenario.expectedIsNew ? 0 : 1)
+      await expect(getReviewCountsForChild(scenario.childId)).resolves.toEqual({
+        [scenario.character]: 1,
+      })
+    }
+  })
+
+  it('classifies stored round-one imports without supplied updates from the snapshot', async () => {
+    await db.snapshot.put({
+      type: 'current',
+      timestamp: 50,
+      state: {
+        children: [
+          {
+            id: 'child_test',
+            name: '小明',
+            wordBookId: 'wb_1',
+            nextCharIndex: 0,
+            progress: {
+              花: {
+                ease: 2.5,
+                interval: 1,
+                repetitions: 1,
+                nextReview: '2026-07-02',
+                lastGrade: 'a',
+                firstReviewDay: '2026-06-30',
+              },
+            },
+          },
+        ],
+        wordBooks: [{ id: 'wb_1', name: '测试', characters: ['花'] }],
+        settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+      },
+    })
+    const learned = makeReviewEntry({
+      childId: 'child_test',
+      character: '花',
+      timestamp: 100,
+      dayKey: '2026-07-01',
+    })
+    const newCharacter = makeReviewEntry({
+      childId: 'child_missing_snapshot',
+      character: '山',
+      timestamp: 101,
+      dayKey: '2026-07-01',
+    })
+
+    const result = await appendLogs([learned, newCharacter])
+
+    expect(result).toEqual({ appendedCount: 2, projectionsChanged: true })
+    const [learnedDay] = await getDailyReviewStatsInRange('child_test', '2026-07-01', '2026-07-01')
+    expect(learnedDay.learnedChars.a).toBe(1)
+    expect(learnedDay.newChars.a).toBe(0)
+    const [newDay] = await getDailyReviewStatsInRange(
+      'child_missing_snapshot',
+      '2026-07-01',
+      '2026-07-01',
+    )
+    expect(newDay.newChars.a).toBe(1)
+    expect(newDay.learnedChars.a).toBe(0)
+  })
+
+  it('defaults marker-replayed events to new when there is no fact or snapshot day', async () => {
+    const review = makeReviewEntry({
+      childId: 'child_missing_fact',
+      timestamp: 100,
+      dayKey: '2026-07-01',
+    })
+    await db.reviewCountEvents.add({
+      eventKey: makeDiffKey(review),
+      timestamp: review.timestamp,
+      childId: review.childId,
+      character: review.character,
+    })
+
+    const result = await appendLogs([review])
+
+    expect(result).toEqual({ appendedCount: 0, projectionsChanged: true })
+    const [day] = await getDailyReviewStatsInRange('child_missing_fact', '2026-07-01', '2026-07-01')
+    expect(day.newChars.a).toBe(1)
+    expect(day.learnedChars.a).toBe(0)
+    expect(await db.reviewFacts.toArray()).toMatchObject([{ isNew: true }])
+    await expect(getReviewCountsForChild('child_missing_fact')).resolves.toEqual({ 花: 1 })
   })
 
   it('keeps the earliest same-day round-one fact and corrects its daily count idempotently', async () => {

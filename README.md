@@ -2,6 +2,12 @@
 
 基于 Web 的汉字学习 PWA，帮助学龄儿童通过 SM-2 间隔重复算法科学地学习和复习汉字。家长在手机或电脑上操作，孩子在纸上书写，app 负责安排复习节奏和追踪进度。
 
+## 生字本排序与筛选
+
+生字本可按全部／已学／未学和熟悉程度筛选；已学汉字支持按复习次数（多到少）或下次复习时间（近到远）排序，未学字始终排在后面。复习次数按孩子和汉字累计所有复习轮次。
+
+复习次数汇总及已裁剪事件保存在当前设备，不加入 Drive 同步或备份文件；设备之间、恢复备份后的计数可能不同。升级前已被裁剪的日志无法恢复。若本地迁移无法安全完成，复习次数排序会标记为不可用，而不会显示成零次。
+
 ## 快速开始
 
 ```bash
@@ -44,10 +50,11 @@ src/
 │   ├── types.ts            # 全部类型定义、常量、默认设置
 │   ├── sm2.ts              # SM-2 间隔重复算法（ease/间隔更新）
 │   ├── scheduler.ts        # 每日任务调度（学新/复习交替、排序、配额）
+│   ├── wordbook.ts         # 生字本汉字排序与熟悉程度筛选
 │   ├── log.ts              # 追加日志操作（重放、状态重建、快照生成）
 │   └── snapshot.ts         # 日志压缩（快照生成、阈值判断）
 ├── data/                   # 数据持久化层
-│   ├── db.ts               # Dexie IndexedDB（日志表、快照表、元数据表）
+│   ├── db.ts               # Dexie IndexedDB（日志、快照、元数据、复习次数汇总）
 │   ├── gapi.ts             # Google Identity Services OAuth + gapi 初始化
 │   ├── drive.ts            # Google Drive API（文件夹/文件读写、追加日志）
 │   └── sync.ts             # 同步编排器（推/拉/合并、5 分钟定时、在线离线监听）
@@ -58,7 +65,8 @@ src/
 ├── hooks/                  # 自定义 Hooks
 │   ├── useToday.ts         # 今日任务流（阶段切换、评分动画、轮次、统计）
 │   ├── useChild.ts         # 孩子选择与统计查询
-│   └── useWordBook.ts      # 生字本 CRUD 操作
+│   ├── useWordBook.ts      # 生字本 CRUD 操作
+│   └── useWordBookReviewCounts.ts # 生字本复习次数读取
 ├── components/
 │   ├── layout/             # Layout / TopBar / BottomNav（三 Tab 导航）
 │   ├── auth/LoginPage.tsx  # Google 登录欢迎页
@@ -73,9 +81,9 @@ src/
 │   │   ├── ChildPage.tsx   # 统计面板（掌握度分布、进度条）
 │   │   └── ChildSwitcher.tsx   # ◀ 名字 ▶ 切换器
 │   ├── wordbook/           # 生字本 Tab
-│   │   ├── WordBookPage.tsx    # 编辑器（添加/删除/切换生字本）
+│   │   ├── WordBookPage.tsx    # 编辑器（添加/删除/切换、排序与筛选）
 │   │   ├── WordBookSwitcher.tsx
-│   │   └── CharacterList.tsx   # 可拖拽排序的字列表（@dnd-kit）
+│   │   └── CharacterList.tsx   # 可手动拖拽排序的字列表（@dnd-kit）
 │   ├── settings/SettingsPage.tsx  # 设置页（配额/导入导出/同步状态/关于）
 │   └── common/             # 通用组件
 │       ├── EmptyState.tsx  # 空状态引导

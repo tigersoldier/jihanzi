@@ -1,20 +1,28 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import WordBookPage from './WordBookPage'
 
-const { mockUseApp, mockUseWordBook, mockUseCharacterStats } = vi.hoisted(() => ({
-  mockUseApp: vi.fn(),
-  mockUseWordBook: vi.fn(),
-  mockUseCharacterStats: vi.fn(),
-}))
+const { mockUseApp, mockUseWordBook, mockUseCharacterStats, mockUseReviewCounts } = vi.hoisted(
+  () => ({
+    mockUseApp: vi.fn(),
+    mockUseWordBook: vi.fn(),
+    mockUseCharacterStats: vi.fn(),
+    mockUseReviewCounts: vi.fn(),
+  }),
+)
 
 vi.mock('../../state/AppContext', () => ({ useApp: mockUseApp }))
 vi.mock('../../hooks/useWordBook', () => ({ useWordBook: mockUseWordBook }))
 vi.mock('../../hooks/useStats', () => ({ useCharacterStats: mockUseCharacterStats }))
+vi.mock('../../hooks/useWordBookReviewCounts', () => ({
+  useWordBookReviewCounts: mockUseReviewCounts,
+}))
 
 describe('WordBookPage', () => {
+  afterEach(cleanup)
+
   beforeEach(() => {
     window.location.hash = '#/wordbook/wb/wb-1'
 
@@ -44,6 +52,7 @@ describe('WordBookPage', () => {
       reorderCharacters: vi.fn(),
       createWB: vi.fn(),
     })
+    mockUseReviewCounts.mockReturnValue({ status: 'ready', counts: {} })
     mockUseCharacterStats.mockReturnValue({
       sm2State: null,
       totalReviews: 0,
@@ -62,6 +71,107 @@ describe('WordBookPage', () => {
         document.documentElement.scrollTop = typeof x === 'number' ? (y ?? 0) : (x.top ?? 0)
       },
     })
+  })
+
+  it('按复习次数排序并可筛选薄弱字，排序时关闭手动拖动', () => {
+    const characters = ['山', '花', '雨', '水']
+    const progress = {
+      花: {
+        ease: 2.5,
+        interval: 8,
+        repetitions: 3,
+        nextReview: '2026-06-08',
+        lastGrade: 'a',
+        firstReviewDay: '2026-05-01',
+      },
+      山: {
+        ease: 2.5,
+        interval: 1,
+        repetitions: 0,
+        nextReview: '2026-06-02',
+        lastGrade: 'd',
+        firstReviewDay: '2026-05-02',
+      },
+      水: {
+        ease: 2.5,
+        interval: 2,
+        repetitions: 1,
+        nextReview: '2026-06-05',
+        lastGrade: 'b',
+        firstReviewDay: '2026-05-03',
+      },
+    } as const
+    const wordBook = { id: 'wb-1', name: '测试生字本', characters }
+    mockUseApp.mockReturnValue({
+      state: {
+        children: [{ id: 'child-1', name: '孩子', wordBookId: 'wb-1', nextCharIndex: 0, progress }],
+        wordBooks: [wordBook],
+      },
+      selectedChildId: 'child-1',
+      setSelectedChildId: vi.fn(),
+    })
+    mockUseWordBook.mockReturnValue({
+      selectedWBId: 'wb-1',
+      setSelectedWBId: vi.fn(),
+      wbList: [{ id: 'wb-1', name: '测试生字本', count: characters.length }],
+      currentWB: wordBook,
+      addCharacter: vi.fn(),
+      removeCharacter: vi.fn(),
+      reorderCharacters: vi.fn(),
+      createWB: vi.fn(),
+    })
+    mockUseReviewCounts.mockReturnValue({ status: 'ready', counts: { 花: 9, 山: 4, 水: 4 } })
+
+    render(<WordBookPage />)
+
+    const sortSelect = screen.getByLabelText('排序汉字')
+    const listedCharacters = () =>
+      screen
+        .getAllByRole('button', { name: /^删除 / })
+        .map(button => button.getAttribute('aria-label')?.replace('删除 ', ''))
+    expect((sortSelect as HTMLSelectElement).value).toBe('manual')
+    expect(listedCharacters()).toEqual(['山', '花', '雨', '水'])
+
+    fireEvent.change(sortSelect, { target: { value: 'nextReview' } })
+    expect(listedCharacters()).toEqual(['山', '水', '花', '雨'])
+    expect(screen.queryByLabelText('拖动排序')).toBeNull()
+
+    fireEvent.change(sortSelect, { target: { value: 'reviewCount' } })
+    expect(listedCharacters()).toEqual(['花', '山', '水', '雨'])
+    expect(screen.queryByLabelText('拖动排序')).toBeNull()
+
+    fireEvent.change(screen.getByLabelText('按熟悉程度筛选'), {
+      target: { value: 'weak' },
+    })
+    expect(listedCharacters()).toEqual(['山'])
+  })
+
+  it('首次读取计数时解释复习次数排序为何不可用', () => {
+    mockUseReviewCounts.mockReturnValue({ status: 'loading', counts: {} })
+    render(<WordBookPage />)
+
+    expect(screen.getByText(/正在读取复习次数，复习次数排序暂不可用/)).toBeTruthy()
+    const sortSelect = screen.getByLabelText('排序汉字') as HTMLSelectElement
+    expect(sortSelect.querySelector('option[value="reviewCount"]')?.hasAttribute('disabled')).toBe(
+      true,
+    )
+  })
+
+  it('计数读取失败时显示不可用状态并回退到字本顺序', () => {
+    mockUseReviewCounts.mockReturnValue({ status: 'ready', counts: { 花: 1 } })
+    const { rerender } = render(<WordBookPage />)
+    fireEvent.change(screen.getByLabelText('排序汉字'), { target: { value: 'reviewCount' } })
+
+    mockUseReviewCounts.mockReturnValue({ status: 'unavailable', counts: {} })
+    rerender(<WordBookPage />)
+
+    expect(screen.getByText(/复习次数暂不可用/)).toBeTruthy()
+    const sortSelect = screen.getByLabelText('排序汉字') as HTMLSelectElement
+    expect(sortSelect.value).toBe('reviewCount')
+    expect(sortSelect.querySelector('option[value="reviewCount"]')?.hasAttribute('disabled')).toBe(
+      true,
+    )
+    expect(screen.getByLabelText('拖动排序')).toBeTruthy()
   })
 
   it('打开生字详情时滚动回页面顶部', async () => {

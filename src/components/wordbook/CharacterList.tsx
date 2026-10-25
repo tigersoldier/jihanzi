@@ -25,6 +25,8 @@ interface CharacterListProps {
   onRemove: (char: string, index: number) => void
   /** Map of character → proficiency level for color coding */
   proficiencyMap?: Record<string, Proficiency>
+  /** Whether users can manually reorder the displayed characters */
+  reorderable?: boolean
   /** Called when a character is clicked */
   onCharClick?: (char: string) => void
 }
@@ -34,6 +36,7 @@ export default function CharacterList({
   onReorder,
   onRemove,
   proficiencyMap,
+  reorderable = true,
   onCharClick,
 }: CharacterListProps) {
   const sensors = useSensors(
@@ -79,6 +82,7 @@ export default function CharacterList({
               index={index}
               onRemove={() => onRemove(char, index)}
               proficiency={proficiencyMap?.[char]}
+              reorderable={reorderable}
               onClick={onCharClick ? () => onCharClick(char) : undefined}
             />
           ))}
@@ -94,6 +98,7 @@ function SortableCharItem({
   index,
   onRemove,
   proficiency,
+  reorderable,
   onClick,
 }: {
   id: string
@@ -101,6 +106,7 @@ function SortableCharItem({
   index: number
   onRemove: () => void
   proficiency?: Proficiency
+  reorderable: boolean
   onClick?: () => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -125,17 +131,19 @@ function SortableCharItem({
       onClick={onClick}
     >
       {/* Drag handle */}
-      <button
-        {...attributes}
-        {...listeners}
-        className="text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing touch-none"
-        aria-label="拖动排序"
-        onClick={e => e.stopPropagation()}
-      >
-        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-          <path d="M7 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
-        </svg>
-      </button>
+      {reorderable && (
+        <button
+          {...attributes}
+          {...listeners}
+          className="text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing touch-none"
+          aria-label="拖动排序"
+          onClick={e => e.stopPropagation()}
+        >
+          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+            <path d="M7 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
+          </svg>
+        </button>
+      )}
 
       {/* Proficiency dot */}
       {proficiency && (

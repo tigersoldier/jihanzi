@@ -16,6 +16,16 @@ import type { CharacterAnalytics, DailyReviewStats, ReviewFact } from '../core/l
 import { emptyCategoryCounts } from '../core/learningAnalytics'
 import { makeDiffKey } from '../utils/logKey'
 
+function parseReviewEventKey(
+  eventKey: string,
+): { timestamp: number; childId: string; character: string } | undefined {
+  const [timestampText, type, childId, ...characterParts] = eventKey.split(':')
+  const timestamp = Number(timestampText)
+  const character = characterParts.join(':')
+  if (type !== 'review' || !Number.isFinite(timestamp) || !childId || !character) return undefined
+  return { timestamp, childId, character }
+}
+
 /** Database schema version and definition */
 class JihanziDB extends Dexie {
   logs!: Table<LogRow, number> // Auto-incrementing primary key
@@ -24,6 +34,8 @@ class JihanziDB extends Dexie {
   reviewFacts!: Table<ReviewFactRow, number>
   dailyReviewStats!: Table<DailyReviewStatsRow, number>
   characterAnalytics!: Table<CharacterAnalyticsRow, number>
+  reviewCounts!: Table<ReviewCountRow, [string, string]>
+  reviewCountEvents!: Table<ReviewCountEventRow, string>
 
   constructor() {
     super('jihanzi')
@@ -74,6 +86,41 @@ class JihanziDB extends Dexie {
       dailyReviewStats: '++id, &[childId+dayKey]',
       characterAnalytics: '++id, &[childId+character], childId',
     })
+
+    this.version(5).stores({
+      logs: '++id, timestamp, type, childId, wordBookId, character, dayKey, [childId+dayKey], [childId+character], [timestamp+id]',
+      snapshot: '++id, timestamp, type',
+      meta: 'key',
+      reviewFacts: '++id, &[childId+character+dayKey], [childId+dayKey], [childId+character]',
+      dailyReviewStats: '++id, &[childId+dayKey]',
+      characterAnalytics: '++id, &[childId+character], childId',
+      reviewCounts: '[childId+character], childId',
+    })
+
+    // v6: retain identities of pruned reviews to avoid double-counting on sync re-import.
+    this.version(6).stores({ reviewCountEvents: 'eventKey' })
+
+    // v7: add attribution fields so count projections can be rebuilt from prune markers.
+    this.version(7)
+      .stores({
+        reviewCountEvents:
+          'eventKey, timestamp, childId, [childId+character], legacyUnattributable',
+      })
+      .upgrade(async tx => {
+        await tx
+          .table('reviewCountEvents')
+          .toCollection()
+          .modify(row => {
+            const parsed = parseReviewEventKey(row.eventKey)
+            if (parsed) {
+              Object.assign(row, parsed)
+              delete row.logId
+            } else {
+              row.legacyUnattributable = 1
+              delete row.logId
+            }
+          })
+      })
   }
 }
 
@@ -82,6 +129,14 @@ type LogRow = AnyLogEntry & { id?: number }
 type ReviewFactRow = ReviewFact & { id?: number }
 type DailyReviewStatsRow = DailyReviewStats & { id?: number }
 type CharacterAnalyticsRow = CharacterAnalytics & { id?: number }
+type ReviewCountRow = { childId: string; character: string; count: number }
+type ReviewCountEventRow = {
+  eventKey: string
+  timestamp?: number
+  childId?: string
+  character?: string
+  legacyUnattributable?: 1
+}
 
 const db = new JihanziDB()
 
@@ -104,6 +159,7 @@ const analyticsTables = [
   db.reviewFacts,
   db.dailyReviewStats,
   db.characterAnalytics,
+  db.reviewCounts,
 ] as const
 
 function applyFactDelta(row: DailyReviewStatsRow, fact: ReviewFact, delta: number): void {
@@ -145,8 +201,8 @@ async function recomputeRecentFacts(childId: string, character: string): Promise
   await db.characterAnalytics.put(row)
 }
 
-async function upsertReviewFact(entry: ReviewEntry, isNew: boolean): Promise<void> {
-  if (entry.round !== 1) return
+async function upsertReviewFact(entry: ReviewEntry, isNew: boolean): Promise<boolean> {
+  if (entry.round !== 1) return false
   const candidate: ReviewFact = {
     childId: entry.childId,
     character: entry.character,
@@ -160,16 +216,16 @@ async function upsertReviewFact(entry: ReviewEntry, isNew: boolean): Promise<voi
     .equals([entry.childId, entry.character, entry.dayKey])
     .first()
   let shouldRecompute = false
-  if (existing && existing.timestamp < candidate.timestamp) return
+  if (existing && existing.timestamp < candidate.timestamp) return false
   if (existing && existing.timestamp === candidate.timestamp && existing.grade !== candidate.grade)
-    return
+    return false
   if (
     existing &&
     existing.timestamp === candidate.timestamp &&
     existing.grade === candidate.grade &&
     existing.isNew === candidate.isNew
   )
-    return
+    return false
 
   const stats =
     (await db.dailyReviewStats
@@ -226,6 +282,7 @@ async function upsertReviewFact(entry: ReviewEntry, isNew: boolean): Promise<voi
       })
     }
   }
+  return true
 }
 
 async function reclassifyReviewFact(fact: ReviewFactRow, isNew: boolean): Promise<void> {
@@ -249,13 +306,14 @@ async function reclassifyReviewFact(fact: ReviewFactRow, isNew: boolean): Promis
 async function updateMasteryRelapse(
   entry: ReviewEntry,
   update: AnalyticsReviewUpdate,
-): Promise<void> {
-  if (entry.round !== 1 || !update.accepted) return
+): Promise<boolean> {
+  if (entry.round !== 1 || !update.accepted) return false
+  const existing = await db.characterAnalytics
+    .where('[childId+character]')
+    .equals([entry.childId, entry.character])
+    .first()
   const row =
-    (await db.characterAnalytics
-      .where('[childId+character]')
-      .equals([entry.childId, entry.character])
-      .first()) ??
+    existing ??
     ({
       childId: entry.childId,
       character: entry.character,
@@ -263,6 +321,7 @@ async function updateMasteryRelapse(
       everForgottenAfterMastery: false,
       currentlyForgottenAfterMastery: false,
     } satisfies CharacterAnalyticsRow)
+  const before = JSON.stringify(row)
   if (entry.grade === 'd' && update.wasMastered && !update.isMastered) {
     row.everForgottenAfterMastery = true
     if (
@@ -280,16 +339,19 @@ async function updateMasteryRelapse(
     row.currentlyForgottenAfterMastery = false
     row.lastMasteryStatusTimestamp = entry.timestamp
   }
+  if (existing && JSON.stringify(row) === before) return false
   await db.characterAnalytics.put(row)
+  return true
 }
 
 async function projectReviewEntry(
   entry: AnyLogEntry,
   update?: AnalyticsReviewUpdate,
-): Promise<void> {
-  if (entry.type !== 'review' || entry.round !== 1) return
-  await upsertReviewFact(entry, update?.isNew ?? false)
-  if (update) await updateMasteryRelapse(entry, update)
+): Promise<boolean> {
+  if (entry.type !== 'review' || entry.round !== 1) return false
+  let changed = await upsertReviewFact(entry, update?.isNew ?? false)
+  if (update) changed = (await updateMasteryRelapse(entry, update)) || changed
+  return changed
 }
 
 /** Type guard: filter AnyLogEntry[] down to ReviewEntry[] at runtime */
@@ -371,65 +433,516 @@ export async function repairCorruptedLogs(): Promise<number> {
 // Log Operations
 // ============================================================
 
-/** 追加日志并在同一事务中更新本地统计投影。 */
+interface ReviewCountBackfillCheckpoint {
+  version: number
+  phase: 'ledger' | 'logs'
+  lastEventKey?: string
+  lastId: number
+  processed: number
+  ready: boolean
+}
+
+interface ReviewCountDelta {
+  childId: string
+  character: string
+  delta: number
+}
+
+interface ReviewCountPair {
+  childId: string
+  character: string
+}
+
+interface LogDedupeStamp {
+  count: number
+  lastId: number | null
+}
+
+export class ReviewCountMigrationError extends Error {
+  constructor(message = '复习次数数据无法安全迁移，请先修复本地数据库。') {
+    super(message)
+    this.name = 'ReviewCountMigrationError'
+  }
+}
+
+const REVIEW_COUNT_BACKFILL_KEY = 'wordBookReviewCountsBackfill'
+const REVIEW_COUNT_BACKFILL_VERSION = 2
+const REVIEW_COUNT_BACKFILL_BATCH_SIZE = 500
+let reviewCountBackfillPromise: Promise<void> | null = null
+let logDedupeStamp: LogDedupeStamp | null = null
+let logDedupePromise: Promise<{ deleted: number; deferred: boolean }> | null = null
+
+async function getReviewCountBackfillCheckpoint(): Promise<
+  ReviewCountBackfillCheckpoint | undefined
+> {
+  const row = await db.meta.get(REVIEW_COUNT_BACKFILL_KEY)
+  return row?.value as ReviewCountBackfillCheckpoint | undefined
+}
+
+function countPairKey(childId: string, character: string): string {
+  return JSON.stringify([childId, character])
+}
+
+function collectReviewCountDeltas(
+  entries: AnyLogEntry[],
+  delta: number,
+): Map<string, ReviewCountDelta> {
+  const deltas = new Map<string, ReviewCountDelta>()
+  for (const entry of entries) {
+    if (entry.type !== 'review') continue
+    const key = countPairKey(entry.childId, entry.character)
+    const existing = deltas.get(key)
+    if (existing) existing.delta += delta
+    else deltas.set(key, { childId: entry.childId, character: entry.character, delta })
+  }
+  return deltas
+}
+
+function collectReviewEventDeltas(events: ReviewCountEventRow[]): Map<string, ReviewCountDelta> {
+  const deltas = new Map<string, ReviewCountDelta>()
+  for (const event of events) {
+    if (event.childId === undefined || event.character === undefined) continue
+    const key = countPairKey(event.childId, event.character)
+    const existing = deltas.get(key)
+    if (existing) existing.delta++
+    else deltas.set(key, { childId: event.childId, character: event.character, delta: 1 })
+  }
+  return deltas
+}
+
+/** 在包含 reviewCounts 的写事务中应用累计次数增量。 */
+async function applyReviewCountDeltas(deltas: Map<string, ReviewCountDelta>): Promise<void> {
+  for (const { childId, character, delta } of deltas.values()) {
+    const key: [string, string] = [childId, character]
+    const existing = await db.reviewCounts.get(key)
+    const count = Math.max(0, (existing?.count ?? 0) + delta)
+    if (count === 0) await db.reviewCounts.delete(key)
+    else await db.reviewCounts.put({ childId, character, count })
+  }
+}
+
+async function getReviewCountEventRows(
+  keys: string[],
+): Promise<Array<ReviewCountEventRow | undefined>> {
+  const rows: Array<ReviewCountEventRow | undefined> = []
+  for (let i = 0; i < keys.length; i += REVIEW_COUNT_BACKFILL_BATCH_SIZE) {
+    rows.push(
+      ...((await db.reviewCountEvents.bulkGet(
+        keys.slice(i, i + REVIEW_COUNT_BACKFILL_BATCH_SIZE),
+      )) as Array<ReviewCountEventRow | undefined>),
+    )
+  }
+  return rows
+}
+
+async function hasUnattributableReviewCountEvents(): Promise<boolean> {
+  return (await db.reviewCountEvents.where('legacyUnattributable').equals(1).count()) > 0
+}
+
+async function reconcileReviewCountPairs(pairs: Map<string, ReviewCountPair>): Promise<void> {
+  for (const { childId, character } of pairs.values()) {
+    const [logs, events] = await Promise.all([
+      db.logs.where('[childId+character]').equals([childId, character]).toArray(),
+      db.reviewCountEvents.where('[childId+character]').equals([childId, character]).toArray(),
+    ])
+    const eventKeys = new Set<string>()
+    for (const entry of logs) {
+      if (entry.type === 'review') eventKeys.add(makeDiffKey(entry))
+    }
+    for (const event of events) eventKeys.add(event.eventKey)
+
+    const key: [string, string] = [childId, character]
+    const count = eventKeys.size
+    if (count === 0) await db.reviewCounts.delete(key)
+    else await db.reviewCounts.put({ childId, character, count })
+  }
+}
+
+async function addReviewCountDeltasIfReady(entries: AnyLogEntry[]): Promise<void> {
+  if (!entries.some(entry => entry.type === 'review')) return
+  const checkpoint = await getReviewCountBackfillCheckpoint()
+  if (checkpoint?.version !== REVIEW_COUNT_BACKFILL_VERSION || !checkpoint.ready) return
+  await applyReviewCountDeltas(collectReviewCountDeltas(entries, 1))
+}
+
+interface FilteredReviewEntries {
+  toAppend: Array<{ entry: AnyLogEntry; index: number }>
+  pruned: Array<{ entry: ReviewEntry; index: number }>
+}
+
+/** 按有界批次查重；裁剪标记只阻止重复存储，仍允许状态投影重放。 */
+async function filterExistingReviewEntries(
+  entries: AnyLogEntry[],
+  hasLogs: boolean,
+  hasPrunedEvents: boolean,
+): Promise<FilteredReviewEntries> {
+  const reviewEntries = entries.filter((entry): entry is ReviewEntry => entry.type === 'review')
+  const timestamps = [...new Set(reviewEntries.map(entry => entry.timestamp))]
+  const reviewEventKeys = [...new Set(reviewEntries.map(makeDiffKey))]
+  const existingReviewKeys = new Set<string>()
+
+  if (timestamps.length > 0 && hasLogs) {
+    for (let i = 0; i < timestamps.length; i += REVIEW_COUNT_BACKFILL_BATCH_SIZE) {
+      const rows = await db.logs
+        .where('timestamp')
+        .anyOf(timestamps.slice(i, i + REVIEW_COUNT_BACKFILL_BATCH_SIZE))
+        .toArray()
+      for (const entry of rows) {
+        if (entry.type === 'review') existingReviewKeys.add(makeDiffKey(entry))
+      }
+    }
+  }
+
+  const prunedEventKeys = new Set<string>()
+  if (reviewEventKeys.length > 0 && hasPrunedEvents) {
+    const events = await getReviewCountEventRows(reviewEventKeys)
+    for (const event of events) {
+      if (event) prunedEventKeys.add(event.eventKey)
+    }
+  }
+
+  const seen = new Set([...existingReviewKeys, ...prunedEventKeys])
+  const projectedPruned = new Set<string>()
+  const result: FilteredReviewEntries = { toAppend: [], pruned: [] }
+  for (const [index, entry] of entries.entries()) {
+    if (entry.type !== 'review') {
+      result.toAppend.push({ entry, index })
+      continue
+    }
+
+    const key = makeDiffKey(entry)
+    if (seen.has(key)) {
+      if (prunedEventKeys.has(key) && !existingReviewKeys.has(key) && !projectedPruned.has(key)) {
+        result.pruned.push({ entry, index })
+        projectedPruned.add(key)
+      }
+      continue
+    }
+    seen.add(key)
+    result.toAppend.push({ entry, index })
+  }
+  return result
+}
+
+async function getLogDedupeStampInTransaction(): Promise<LogDedupeStamp> {
+  const [count, last] = await Promise.all([db.logs.count(), db.logs.orderBy('id').last()])
+  return { count, lastId: last?.id ?? null }
+}
+
+function sameLogDedupeStamp(a: LogDedupeStamp | null, b: LogDedupeStamp): boolean {
+  return a !== null && a.count === b.count && a.lastId === b.lastId
+}
+
+async function dedupeLogsInTransaction(): Promise<{
+  deleted: number
+  pairs: Map<string, ReviewCountPair>
+}> {
+  let currentTimestamp: number | undefined
+  const seenAtTimestamp = new Set<string>()
+  const toDelete: number[] = []
+  const pairs = new Map<string, ReviewCountPair>()
+  // Identical makeDiffKey values always share a timestamp. Ordering by timestamp
+  // keeps the seen set bounded to one timestamp group; ties retain the lowest id.
+  await db.logs.orderBy('timestamp').each(entry => {
+    if (entry.timestamp !== currentTimestamp) {
+      currentTimestamp = entry.timestamp
+      seenAtTimestamp.clear()
+    }
+    const key = makeDiffKey(entry)
+    if (!seenAtTimestamp.has(key)) {
+      seenAtTimestamp.add(key)
+      return
+    }
+    if (entry.type === 'review') {
+      pairs.set(countPairKey(entry.childId, entry.character), {
+        childId: entry.childId,
+        character: entry.character,
+      })
+    }
+    if (typeof entry.id === 'number') toDelete.push(entry.id)
+  })
+  if (toDelete.length > 0) await db.logs.bulkDelete(toDelete)
+  return { deleted: toDelete.length, pairs }
+}
+
+async function runDedupeTransaction(
+  force: boolean,
+): Promise<{ deleted: number; deferred: boolean; stamp?: LogDedupeStamp }> {
+  return db.transaction(
+    'rw',
+    [db.logs, db.reviewCounts, db.reviewCountEvents, db.meta],
+    async () => {
+      const checkpoint = await getReviewCountBackfillCheckpoint()
+      if (checkpoint?.version === REVIEW_COUNT_BACKFILL_VERSION && !checkpoint.ready) {
+        return { deleted: 0, deferred: true }
+      }
+
+      const before = await getLogDedupeStampInTransaction()
+      if (!force && sameLogDedupeStamp(logDedupeStamp, before)) {
+        return { deleted: 0, deferred: false, stamp: before }
+      }
+
+      const { deleted, pairs } = await dedupeLogsInTransaction()
+      if (checkpoint?.ready && !(await hasUnattributableReviewCountEvents())) {
+        await reconcileReviewCountPairs(pairs)
+      }
+      return {
+        deleted,
+        deferred: false,
+        stamp: await getLogDedupeStampInTransaction(),
+      }
+    },
+  )
+}
+
+async function runDedupe(force = false): Promise<{ deleted: number; deferred: boolean }> {
+  if (!logDedupePromise) {
+    logDedupePromise = runDedupeTransaction(force)
+      .then(result => {
+        if (result.stamp) logDedupeStamp = result.stamp
+        return { deleted: result.deleted, deferred: result.deferred }
+      })
+      .finally(() => {
+        logDedupePromise = null
+      })
+  }
+  return logDedupePromise
+}
+
+/** 修复重复日志；回填期间先等待，避免与分阶段重建交错。 */
+export async function dedupeLocalLogs(force = false): Promise<number> {
+  const checkpoint = await getReviewCountBackfillCheckpoint()
+  if (checkpoint?.version === REVIEW_COUNT_BACKFILL_VERSION && !checkpoint.ready) {
+    await backfillReviewCounts()
+  }
+  const result = await runDedupe(force)
+  if (result.deferred) {
+    await backfillReviewCounts()
+    return dedupeLocalLogs(force)
+  }
+  return result.deleted
+}
+
+async function initializeReviewCountBackfill(): Promise<ReviewCountBackfillCheckpoint> {
+  const result = await db.transaction(
+    'rw',
+    [db.logs, db.reviewCounts, db.reviewCountEvents, db.meta],
+    async () => {
+      const existing = await getReviewCountBackfillCheckpoint()
+      if (existing?.version === REVIEW_COUNT_BACKFILL_VERSION) {
+        return { checkpoint: existing, stamp: await getLogDedupeStampInTransaction() }
+      }
+
+      if (await hasUnattributableReviewCountEvents()) {
+        throw new ReviewCountMigrationError()
+      }
+
+      const currentStamp = await getLogDedupeStampInTransaction()
+      if (!sameLogDedupeStamp(logDedupeStamp, currentStamp)) {
+        await dedupeLogsInTransaction()
+      }
+      await db.reviewCounts.clear()
+      const checkpoint: ReviewCountBackfillCheckpoint = {
+        version: REVIEW_COUNT_BACKFILL_VERSION,
+        phase: 'ledger',
+        lastEventKey: undefined,
+        lastId: 0,
+        processed: 0,
+        ready: false,
+      }
+      await db.meta.put({ key: REVIEW_COUNT_BACKFILL_KEY, value: checkpoint })
+      return { checkpoint, stamp: await getLogDedupeStampInTransaction() }
+    },
+  )
+  logDedupeStamp = result.stamp
+  return result.checkpoint
+}
+
+async function runReviewCountBackfill(): Promise<void> {
+  const checkpoint = await getReviewCountBackfillCheckpoint()
+  if (checkpoint?.version === REVIEW_COUNT_BACKFILL_VERSION && checkpoint.ready) return
+
+  if (checkpoint?.version !== REVIEW_COUNT_BACKFILL_VERSION) {
+    const dedupe = await runDedupe()
+    if (!dedupe.deferred) await initializeReviewCountBackfill()
+  }
+
+  while (true) {
+    const ready = await db.transaction(
+      'rw',
+      [db.logs, db.reviewCounts, db.reviewCountEvents, db.meta],
+      async () => {
+        const current = await getReviewCountBackfillCheckpoint()
+        if (!current || current.version !== REVIEW_COUNT_BACKFILL_VERSION) {
+          throw new ReviewCountMigrationError(
+            '复习次数回填检查点已丢失或版本不匹配，请重新加载后重试。',
+          )
+        }
+        if (current.ready) return true
+
+        if (current.phase === 'ledger') {
+          const batch = await db.reviewCountEvents
+            .where('eventKey')
+            .above(current.lastEventKey ?? '')
+            .limit(REVIEW_COUNT_BACKFILL_BATCH_SIZE)
+            .toArray()
+          if (batch.length > 0) {
+            await applyReviewCountDeltas(collectReviewEventDeltas(batch))
+            current.lastEventKey = batch[batch.length - 1].eventKey
+            current.processed += batch.length
+          }
+          if (batch.length < REVIEW_COUNT_BACKFILL_BATCH_SIZE) {
+            current.phase = 'logs'
+            current.lastId = 0
+          }
+          await db.meta.put({ key: REVIEW_COUNT_BACKFILL_KEY, value: current })
+          return false
+        }
+
+        const batch = await db.logs
+          .where('id')
+          .above(current.lastId)
+          .limit(REVIEW_COUNT_BACKFILL_BATCH_SIZE)
+          .toArray()
+        if (batch.length > 0) {
+          const keys = [...new Set(batch.filter(entry => entry.type === 'review').map(makeDiffKey))]
+          const markerRows = await getReviewCountEventRows(keys)
+          const prunedKeys = new Set(markerRows.flatMap(event => (event ? [event.eventKey] : [])))
+          const countable = batch.filter(
+            entry => entry.type !== 'review' || !prunedKeys.has(makeDiffKey(entry)),
+          )
+          await applyReviewCountDeltas(collectReviewCountDeltas(countable, 1))
+          current.lastId = batch[batch.length - 1].id ?? current.lastId
+          current.processed += batch.length
+        }
+        current.ready = batch.length < REVIEW_COUNT_BACKFILL_BATCH_SIZE
+        await db.meta.put({ key: REVIEW_COUNT_BACKFILL_KEY, value: current })
+        return current.ready
+      },
+    )
+    if (ready) return
+  }
+}
+
+/** 先迁移裁剪事件，再扫描保留日志；检查点允许中断后续跑。 */
+export function backfillReviewCounts(): Promise<void> {
+  if (!reviewCountBackfillPromise) {
+    reviewCountBackfillPromise = runReviewCountBackfill().finally(() => {
+      reviewCountBackfillPromise = null
+    })
+  }
+  return reviewCountBackfillPromise
+}
+
+/** 追加日志并在同一事务中更新本地统计投影；重复复习返回 null。 */
 export async function appendLog(
   entry: AnyLogEntry,
   analyticsUpdate?: AnalyticsReviewUpdate,
-): Promise<number> {
-  return db.transaction('rw', ...analyticsTables, async () => {
-    const id = await db.logs.add(withoutLocalLogId(entry))
-    await projectReviewEntry(entry, analyticsUpdate)
-    return id
-  })
+): Promise<number | null> {
+  const id = await db.transaction(
+    'rw',
+    [...analyticsTables, db.meta, db.reviewCountEvents],
+    async () => {
+      if (entry.type === 'review') {
+        const key = makeDiffKey(entry)
+        if (await db.reviewCountEvents.get(key)) return null
+
+        const existing = await db.logs
+          .where('timestamp')
+          .equals(entry.timestamp)
+          .filter(row => row.type === 'review' && makeDiffKey(row) === key)
+          .first()
+        if (existing) return null
+      }
+
+      const newId = await db.logs.add(withoutLocalLogId(entry))
+      await projectReviewEntry(entry, analyticsUpdate)
+      await addReviewCountDeltasIfReady([entry])
+      return newId
+    },
+  )
+  if (id !== null) logDedupeStamp = null
+  return id
 }
 
-/**
- * 清理本地日志表中的重复条目（历史同步 bug 的遗留污染）。
- *
- * 按 makeDiffKey 保留每个键 id 最小（最先写入）的一条，删除其余副本。
- * 返回删除的条数。数据干净时返回 0。
- */
-export async function dedupeLocalLogs(): Promise<number> {
-  const seen = new Set<string>()
-  const toDelete: number[] = []
-  // each 按主键（id）升序遍历，保证每个键首次遇到的是最早写入的副本
-  await db.logs.each(entry => {
-    const key = makeDiffKey(entry)
-    if (seen.has(key)) {
-      const id = entry.id
-      if (typeof id === 'number') toDelete.push(id)
-    } else {
-      seen.add(key)
-    }
-  })
-  if (toDelete.length > 0) {
-    await db.logs.bulkDelete(toDelete)
-  }
-  return toDelete.length
+async function projectPrunedReviewEntry(
+  entry: ReviewEntry,
+  analyticsUpdate: AnalyticsReviewUpdate | undefined,
+  children: Map<string, AppState['children'][number]>,
+): Promise<boolean> {
+  if (entry.round !== 1) return false
+  const existingFact = await db.reviewFacts
+    .where('[childId+character+dayKey]')
+    .equals([entry.childId, entry.character, entry.dayKey])
+    .first()
+  const firstReviewDay = children.get(entry.childId)?.progress[entry.character]?.firstReviewDay
+  const isNew =
+    analyticsUpdate?.isNew ??
+    (firstReviewDay !== undefined ? firstReviewDay === entry.dayKey : (existingFact?.isNew ?? true))
+  const update = analyticsUpdate ? { ...analyticsUpdate, isNew } : { isNew }
+  return projectReviewEntry(entry, update)
 }
 
-/** 批量追加日志（如同步导入），并幂等更新统计投影。 */
+export interface AppendLogsResult {
+  appendedCount: number
+  projectionsChanged: boolean
+}
+
+/** 批量追加日志；裁剪标记不挡住状态投影重放。 */
 export async function appendLogs(
   entries: AnyLogEntry[],
   analyticsUpdates: Array<AnalyticsReviewUpdate | undefined> = [],
-): Promise<number> {
-  if (entries.length === 0) return 0
-  return db.transaction('rw', ...analyticsTables, async () => {
-    const snapshot = await getLatestSnapshot()
-    const children = new Map(snapshot?.state.children.map(child => [child.id, child]) ?? [])
-    await db.logs.bulkAdd(entries.map(withoutLocalLogId))
-    for (let index = 0; index < entries.length; index++) {
-      const entry = entries[index]
-      let update = analyticsUpdates[index]
-      if (!update && entry.type === 'review' && entry.round === 1) {
-        const firstReviewDay = children.get(entry.childId)?.progress[entry.character]
-          ?.firstReviewDay
-        update = { isNew: firstReviewDay === undefined || firstReviewDay === entry.dayKey }
+): Promise<AppendLogsResult> {
+  if (entries.length === 0) return { appendedCount: 0, projectionsChanged: false }
+
+  const result = await db.transaction(
+    'rw',
+    [...analyticsTables, db.meta, db.reviewCountEvents],
+    async () => {
+      const snapshot = await getLatestSnapshot()
+      const children = new Map(snapshot?.state.children.map(child => [child.id, child]) ?? [])
+      let appendedCount = 0
+      let projectionsChanged = false
+      let hasLogs = Boolean(await db.logs.orderBy('id').first())
+      const hasPrunedEvents = Boolean(await db.reviewCountEvents.orderBy('eventKey').first())
+
+      for (let offset = 0; offset < entries.length; offset += REVIEW_COUNT_BACKFILL_BATCH_SIZE) {
+        const batch = entries.slice(offset, offset + REVIEW_COUNT_BACKFILL_BATCH_SIZE)
+        const { toAppend, pruned } = await filterExistingReviewEntries(
+          batch,
+          hasLogs,
+          hasPrunedEvents,
+        )
+        if (toAppend.length > 0) {
+          await db.logs.bulkAdd(toAppend.map(({ entry }) => withoutLocalLogId(entry)))
+          hasLogs = true
+        }
+
+        for (const { entry, index } of toAppend) {
+          if (entry.type !== 'review' || entry.round !== 1) continue
+          let update = analyticsUpdates[offset + index]
+          if (!update && entry.type === 'review' && entry.round === 1) {
+            const firstReviewDay = children.get(entry.childId)?.progress[entry.character]
+              ?.firstReviewDay
+            update = { isNew: firstReviewDay === undefined || firstReviewDay === entry.dayKey }
+          }
+          projectionsChanged = (await projectReviewEntry(entry, update)) || projectionsChanged
+        }
+        for (const { entry, index } of pruned) {
+          if (entry.round !== 1) continue
+          projectionsChanged =
+            (await projectPrunedReviewEntry(entry, analyticsUpdates[offset + index], children)) ||
+            projectionsChanged
+        }
+
+        await addReviewCountDeltasIfReady(toAppend.map(({ entry }) => entry))
+        appendedCount += toAppend.length
       }
-      await projectReviewEntry(entry, update)
-    }
-    return entries.length
-  })
+      return { appendedCount, projectionsChanged }
+    },
+  )
+  if (result.appendedCount > 0) logDedupeStamp = null
+  return result
 }
 
 export interface AnalyticsBackfillStatus {
@@ -798,18 +1311,76 @@ export async function getLogCount(): Promise<number> {
   return db.logs.count()
 }
 
-/**
- * Prune the oldest N log entries.
- * Used when the total log count exceeds the threshold (500k).
- * Deletes entries ordered by timestamp ascending.
+/** 将裁剪复习转为可归因的事件标记，并移除本地重复副本。
+ * 返回实际删除的日志行数，可能因同事件重复副本而大于 count。
  */
 export async function pruneOldestLogs(count: number): Promise<number> {
-  return db.logs.orderBy('timestamp').limit(count).delete()
+  await backfillReviewCounts()
+  if (count <= 0) return 0
+
+  const deleted = await db.transaction(
+    'rw',
+    [db.logs, db.reviewCounts, db.reviewCountEvents],
+    async () => {
+      const oldestLogs = await db.logs.orderBy('timestamp').limit(count).toArray()
+      const markerByKey = new Map<string, ReviewCountEventRow>()
+      const affectedPairs = new Map<string, ReviewCountPair>()
+      for (const entry of oldestLogs) {
+        if (entry.type !== 'review') continue
+        const eventKey = makeDiffKey(entry)
+        markerByKey.set(eventKey, {
+          eventKey,
+          timestamp: entry.timestamp,
+          childId: entry.childId,
+          character: entry.character,
+        })
+        affectedPairs.set(countPairKey(entry.childId, entry.character), {
+          childId: entry.childId,
+          character: entry.character,
+        })
+      }
+      if (markerByKey.size > 0) await db.reviewCountEvents.bulkPut([...markerByKey.values()])
+
+      const matchedIds = new Set<number>()
+      for (const entry of oldestLogs) {
+        if (typeof entry.id === 'number') matchedIds.add(entry.id)
+      }
+      const keys = new Set(markerByKey.keys())
+      const timestamps = [...new Set([...markerByKey.values()].map(event => event.timestamp!))]
+      for (let i = 0; i < timestamps.length; i += REVIEW_COUNT_BACKFILL_BATCH_SIZE) {
+        const rows = await db.logs
+          .where('timestamp')
+          .anyOf(timestamps.slice(i, i + REVIEW_COUNT_BACKFILL_BATCH_SIZE))
+          .toArray()
+        for (const row of rows) {
+          if (row.type === 'review' && keys.has(makeDiffKey(row)) && typeof row.id === 'number') {
+            matchedIds.add(row.id)
+          }
+        }
+      }
+
+      if (matchedIds.size > 0) await db.logs.bulkDelete([...matchedIds])
+      if (!(await hasUnattributableReviewCountEvents())) {
+        await reconcileReviewCountPairs(affectedPairs)
+      }
+      return matchedIds.size
+    },
+  )
+  if (deleted > 0) logDedupeStamp = null
+  return deleted
 }
 
 /** Get reviews for a specific child — uses childId index, filterReviews 处理 type */
 export async function getReviewsForChild(childId: string): Promise<ReviewEntry[]> {
   return db.logs.where('childId').equals(childId).toArray().then(filterReviews)
+}
+
+/** Read the persistent per-character review totals for one child. */
+export async function getReviewCountsForChild(childId: string): Promise<Record<string, number>> {
+  await backfillReviewCounts()
+  if (await hasUnattributableReviewCountEvents()) throw new ReviewCountMigrationError()
+  const rows = await db.reviewCounts.where('childId').equals(childId).toArray()
+  return Object.fromEntries(rows.map(row => [row.character, row.count]))
 }
 
 /** Get all reviews for a specific child and character — uses [childId+character] index, filterReviews 处理 type */
@@ -912,15 +1483,23 @@ const SNAPSHOT_TYPE_HISTORICAL = 'historical'
 export async function getLatestSnapshot(): Promise<Snapshot | null> {
   const result = await db.snapshot.where('type').equals(SNAPSHOT_TYPE_CURRENT).first()
   if (!result) return null
-  // Strip the extra 'type' field before returning as Snapshot
-  return { timestamp: result.timestamp, state: result.state }
+  // Strip the extra 'type' field while preserving the replay watermark.
+  return {
+    timestamp: result.timestamp,
+    ...(result.appliedThrough !== undefined ? { appliedThrough: result.appliedThrough } : {}),
+    state: result.state,
+  }
 }
 
 /** Get all historical snapshots, newest first */
 export async function getHistoricalSnapshots(): Promise<Snapshot[]> {
   const rows = await db.snapshot.where('type').equals(SNAPSHOT_TYPE_HISTORICAL).sortBy('timestamp')
   // Most recent first
-  return rows.reverse().map(r => ({ timestamp: r.timestamp, state: r.state }))
+  return rows.reverse().map(r => ({
+    timestamp: r.timestamp,
+    ...(r.appliedThrough !== undefined ? { appliedThrough: r.appliedThrough } : {}),
+    state: r.state,
+  }))
 }
 
 /**

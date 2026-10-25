@@ -381,7 +381,8 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
         ? remoteSnapshot
         : localSnapshot
 
-    if (bestSnapshot && bestSnapshot !== localSnapshot) {
+    const snapshotAdopted = bestSnapshot !== null && bestSnapshot !== localSnapshot
+    if (snapshotAdopted) {
       // 采纳远程快照时保留其水位（旧版快照可能没有——用 ?? 回退）
       await saveCurrentSnapshot({
         timestamp: bestSnapshot.timestamp,
@@ -467,12 +468,16 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
     }
 
     // 仅在临时单字重放中恢复水位内的应用结果，再与日志投影原子写入。
+    let appendedCount = 0
+    let projectionsChanged = false
     if (dedupedRemoteOnly.length > 0) {
       dedupedRemoteOnly.sort((a, b) => a.timestamp - b.timestamp)
-      await appendLogs(
+      const appendResult = await appendLogs(
         dedupedRemoteOnly,
         dedupedRemoteOnly.map(entry => analyticsUpdates.get(entry)),
       )
+      appendedCount = appendResult.appendedCount
+      projectionsChanged = appendResult.projectionsChanged
     }
 
     // 将仅远程存在的日志重放进快照，使内存状态（SM-2 进度、下一个汉字索引等）
@@ -485,6 +490,7 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
       bestSnapshot !== localSnapshot &&
       bestSnapshot.appliedThrough === undefined
     const hadBestSnapshot = bestSnapshot !== null
+    let replayedSnapshot = false
     if (hadBestSnapshot && (dedupedRemoteOnly.length > 0 || adoptedLegacy)) {
       let mergedState = deepCloneState(bestSnapshot!.state)
       // 与导入同一规则：只重放快照水位之后的条目。
@@ -536,12 +542,13 @@ export async function initialPull(lastKnownRemoteTime?: number): Promise<PullRes
           appliedThrough,
           state: mergedState,
         })
+        replayedSnapshot = true
       }
     }
 
     setSyncStatus('online')
     return {
-      didMerge: dedupedRemoteOnly.length > 0 || bestSnapshot !== localSnapshot,
+      didMerge: appendedCount > 0 || projectionsChanged || snapshotAdopted || replayedSnapshot,
       driveIsEmpty: false,
       remoteSnapshot,
       remoteLogEntries,

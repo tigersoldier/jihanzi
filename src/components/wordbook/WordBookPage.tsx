@@ -8,6 +8,13 @@ import CharacterList from './CharacterList'
 import CharacterDetail from '../common/CharacterDetail'
 import EmptyState from '../common/EmptyState'
 import { getProficiency } from '../../core/proficiency'
+import {
+  filterCharactersByProficiency,
+  sortWordBookCharacters,
+  type WordBookProficiencyFilter,
+  type WordBookSortMode,
+} from '../../core/wordbook'
+import { useWordBookReviewCounts } from '../../hooks/useWordBookReviewCounts'
 
 type FilterMode = 'all' | 'learned' | 'unlearned'
 
@@ -31,6 +38,8 @@ export default function WordBookPage() {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newWBName, setNewWBName] = useState('')
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
+  const [sortMode, setSortMode] = useState<WordBookSortMode>('manual')
+  const [proficiencyFilter, setProficiencyFilter] = useState<WordBookProficiencyFilter>('all')
 
   // 查看的生字由 URL 驱动（#/wordbook/char/<字>）
   const detailChar = wbRoute.char ?? null
@@ -38,6 +47,8 @@ export default function WordBookPage() {
   // Get current child's progress for proficiency lookup
   const currentChild = state.children.find(c => c.id === selectedChildId)
   const progress = currentChild?.progress ?? {}
+  const reviewCountResult = useWordBookReviewCounts(selectedChildId || null)
+  const reviewCounts = reviewCountResult.counts
 
   const handleAddChar = async () => {
     if (!newCharInput.trim()) return
@@ -109,40 +120,63 @@ export default function WordBookPage() {
     )
   }
 
-  // Filter characters
+  // Filter characters by learned status and familiarity, then apply the selected sort.
   const allChars = currentWB?.characters ?? []
-  const filteredChars = allChars.filter(char => {
+  const statusFilteredChars = allChars.filter(char => {
     const learned = char in progress
     if (filterMode === 'learned') return learned
     if (filterMode === 'unlearned') return !learned
     return true
   })
+  const filteredChars = filterCharactersByProficiency(
+    statusFilteredChars,
+    progress,
+    proficiencyFilter,
+  )
+  const effectiveSortMode =
+    sortMode === 'reviewCount' && reviewCountResult.status !== 'ready' ? 'manual' : sortMode
+  const canReorder =
+    sortMode === 'manual' ||
+    (sortMode === 'reviewCount' && reviewCountResult.status === 'unavailable')
+  const displayedChars = sortWordBookCharacters(
+    filteredChars,
+    progress,
+    reviewCounts,
+    effectiveSortMode,
+  )
 
   // Build proficiency map
   const proficiencyMap: Record<string, ReturnType<typeof getProficiency>> = {}
-  for (const char of filteredChars) {
+  for (const char of displayedChars) {
     proficiencyMap[char] = getProficiency(progress[char])
   }
 
   const learnedCount = allChars.filter(c => c in progress).length
+  const isFilteredSubset = filterMode !== 'all' || proficiencyFilter !== 'all'
+  const emptyListMessage =
+    allChars.length === 0
+      ? '生字本为空，在上方输入框添加汉字'
+      : filterMode === 'learned' && learnedCount === 0
+        ? '还没有已学字'
+        : filterMode === 'unlearned' && learnedCount === allChars.length
+          ? '所有字都已学过 ✨'
+          : '没有符合筛选条件的汉字'
 
-  // Wrappers to translate filtered-list indices back to full-array indices.
-  // When filterMode !== 'all', filteredChars is a subset, so the index
-  // from CharacterList refers to a position in the subset, not the full array.
   const handleRemove = (char: string, _filteredIndex: number) => {
     const realIndex = allChars.indexOf(char)
     if (realIndex !== -1) removeCharacter(char, realIndex)
   }
 
   const handleReorder = (reorderedSubset: string[]) => {
-    if (filterMode === 'all') {
+    if (!canReorder) return
+    if (!isFilteredSubset) {
       reorderCharacters(reorderedSubset)
       return
     }
     // Reconstruct the full array: unfiltered chars stay in place;
     // filtered chars are placed in their new relative order at the
     // positions that originally held filtered chars.
-    const subsetSet = new Set(reorderedSubset)
+    const subsetSet = new Set(filteredChars)
     const result = [...allChars]
     let si = 0
     for (let i = 0; i < result.length; i++) {
@@ -237,23 +271,70 @@ export default function WordBookPage() {
         </div>
       )}
 
+      {/* Sort and familiarity filter */}
+      {currentWB && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+          <label className="flex items-center gap-2 text-gray-500">
+            排序
+            <select
+              aria-label="排序汉字"
+              value={sortMode}
+              onChange={e => setSortMode(e.target.value as WordBookSortMode)}
+              className="border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-700"
+            >
+              <option value="manual">字本顺序</option>
+              <option value="reviewCount" disabled={reviewCountResult.status !== 'ready'}>
+                复习次数（多到少）
+              </option>
+              <option value="nextReview">下次复习时间（近到远）</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-2 text-gray-500">
+            熟悉程度
+            <select
+              aria-label="按熟悉程度筛选"
+              value={proficiencyFilter}
+              onChange={e => setProficiencyFilter(e.target.value as WordBookProficiencyFilter)}
+              className="border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-700"
+            >
+              <option value="all">不限</option>
+              <option value="mastered">熟练</option>
+              <option value="progressing">学习中</option>
+              <option value="weak">薄弱</option>
+            </select>
+          </label>
+          {reviewCountResult.status === 'loading' && (
+            <span className="text-xs text-gray-400">
+              {sortMode === 'reviewCount'
+                ? '正在读取复习次数，暂按字本顺序展示'
+                : '正在读取复习次数，复习次数排序暂不可用'}
+            </span>
+          )}
+          {reviewCountResult.status === 'unavailable' && (
+            <span role="status" className="text-xs text-amber-700">
+              {sortMode === 'reviewCount'
+                ? '复习次数暂不可用，当前按字本顺序展示，可拖动调整'
+                : '复习次数暂不可用，相关排序已禁用'}
+            </span>
+          )}
+          {sortMode !== 'manual' && reviewCountResult.status === 'ready' && (
+            <span className="text-xs text-gray-400">切换回字本顺序可手动拖动排序</span>
+          )}
+        </div>
+      )}
+
       {/* Character list */}
-      {currentWB && filteredChars.length > 0 ? (
+      {currentWB && displayedChars.length > 0 ? (
         <CharacterList
-          characters={filteredChars}
+          characters={displayedChars}
           onReorder={handleReorder}
           onRemove={handleRemove}
           proficiencyMap={proficiencyMap}
+          reorderable={canReorder}
           onCharClick={selectedChildId ? char => navigate({ name: 'wordbook', char }) : undefined}
         />
       ) : (
-        <div className="text-center py-12 text-gray-400 text-sm">
-          {filterMode === 'all'
-            ? '生字本为空，在上方输入框添加汉字'
-            : filterMode === 'learned'
-              ? '还没有已学字'
-              : '所有字都已学过 ✨'}
-        </div>
+        <div className="text-center py-12 text-gray-400 text-sm">{emptyListMessage}</div>
       )}
 
       {/* Create form */}

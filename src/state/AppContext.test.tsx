@@ -52,6 +52,7 @@ const {
   mockTransaction,
   mockGetLatestSnapshot,
   mockSaveCurrentSnapshot,
+  mockAppendLog,
   mockAppendLogs,
   mockReconstructReviewAnalyticsUpdates,
 } = vi.hoisted(() => {
@@ -66,6 +67,7 @@ const {
     mockSaveCurrentSnapshot: vi.fn(async (snap: { timestamp: number; state: any }) => {
       savedSnapshot = snap
     }),
+    mockAppendLog: vi.fn().mockResolvedValue(undefined),
     mockAppendLogs: vi.fn().mockResolvedValue(undefined),
     mockReconstructReviewAnalyticsUpdates: vi.fn().mockResolvedValue(new Map()),
   }
@@ -77,8 +79,10 @@ vi.mock('../data/db', () => ({
     logs: {},
     snapshot: {},
     meta: {},
+    reviewCounts: {},
+    reviewCountEvents: {},
   },
-  appendLog: vi.fn().mockResolvedValue(undefined),
+  appendLog: (...args: unknown[]) => mockAppendLog(...args),
   appendLogs: mockAppendLogs,
   reconstructReviewAnalyticsUpdates: mockReconstructReviewAnalyticsUpdates,
   getLatestSnapshot: mockGetLatestSnapshot,
@@ -98,6 +102,7 @@ function wrapper({ children }: { children: ReactNode }) {
 describe('AppContext — sync triggers', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockAppendLog.mockReset().mockResolvedValue(undefined)
   })
 
   it('triggers sync after bulkImport', async () => {
@@ -205,6 +210,18 @@ describe('AppContext — sync triggers', () => {
       const statsAfter = getChildStats(child)
       expect(statsAfter.total).toBe(1)
     }
+
+    const versionAfterFirstReview = result.current.app.dataVersion
+    mockAppendLog.mockResolvedValueOnce(null)
+    await act(async () => {
+      await result.current.app.submitReview(childId, '一', 'b', 2, '2026-07-01')
+    })
+    expect(result.current.app.dataVersion).toBe(versionAfterFirstReview)
+
+    await act(async () => {
+      await result.current.app.submitReview(childId, '一', 'b', 2, '2026-07-01')
+    })
+    expect(result.current.app.dataVersion).toBe(versionAfterFirstReview + 1)
   })
 
   it('IndexedDB 写入失败时 submitReview 传播错误且不更新 state', async () => {
@@ -235,8 +252,6 @@ describe('AppContext — sync triggers', () => {
     })
 
     // Make appendLog throw — the Dexie transaction will fail and error propagates
-    const { appendLog } = await import('../data/db')
-    const mockAppendLog = appendLog as ReturnType<typeof vi.fn>
     mockAppendLog.mockRejectedValueOnce(new Error('IndexedDB write failed'))
 
     // submitReview should reject because the transaction failed
@@ -255,6 +270,7 @@ describe('AppContext — sync triggers', () => {
 describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockAppendLog.mockReset().mockResolvedValue(undefined)
     mockReconstructReviewAnalyticsUpdates.mockResolvedValue(new Map())
   })
 
@@ -268,6 +284,41 @@ describe('bulkImport — 快照为准，只重放快照之后的日志', () => {
     )
     return result
   }
+
+  it('round-2 review logs imported from a backup refresh review-count hooks', async () => {
+    const result = await renderWithBulkImport()
+    const versionBeforeImport = result.current.dataVersion
+    mockAppendLogs.mockResolvedValueOnce({ appendedCount: 1, projectionsChanged: false })
+
+    await act(async () => {
+      await result.current.bulkImport(
+        {
+          timestamp: 1000,
+          appliedThrough: 1000,
+          state: {
+            children: [
+              { id: 'child_1', name: '小明', wordBookId: 'wb_1', nextCharIndex: 0, progress: {} },
+            ],
+            wordBooks: [{ id: 'wb_1', name: '生字本', characters: ['一'] }],
+            settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+          },
+        },
+        [
+          {
+            timestamp: 900,
+            type: 'review',
+            childId: 'child_1',
+            character: '一',
+            grade: 'a',
+            round: 2,
+            dayKey: '2026-07-01',
+          },
+        ],
+      )
+    })
+
+    expect(result.current.dataVersion).toBe(versionBeforeImport + 1)
+  })
 
   it('导入完整快照+日志时不重复计算学习次数（回归：途字 3 次被算成 6 次、interval 595 天）', async () => {
     const result = await renderWithBulkImport()

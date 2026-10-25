@@ -414,6 +414,10 @@ describe('initialPull', () => {
     mockHasValidToken.mockReturnValue(true)
     mockGetLatestSnapshot.mockResolvedValue(null)
     mockGetLogsAfter.mockResolvedValue([])
+    mockAppendLogs.mockImplementation(async (entries: unknown[]) => ({
+      appendedCount: entries.length,
+      projectionsChanged: false,
+    }))
     mockPullAllData.mockResolvedValue({
       meta: { lastKnownRemoteTime: Date.now(), version: '0.1.0' },
       childData: MOCK_REMOTE_CHILD_DATA,
@@ -444,6 +448,78 @@ describe('initialPull', () => {
     expect(appendedLogs.length).toBe(2)
     expect(appendedLogs[0]).toMatchObject({ timestamp: 2001, type: 'create_child' })
     expect(appendedLogs[1]).toMatchObject({ timestamp: 2002, type: 'create_wordbook' })
+  })
+
+  it('does not report a no-op pull as merged when every remote event is already projected', async () => {
+    const localSnapshot = JSON.parse(JSON.stringify(MOCK_REMOTE_SNAPSHOT))
+    mockGetLatestSnapshot.mockResolvedValue(localSnapshot)
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: 2000, version: '0.1.0' },
+      childData: {
+        小明: {
+          snapshot: JSON.stringify(MOCK_REMOTE_SNAPSHOT),
+          logs: [
+            JSON.stringify({
+              timestamp: 2000,
+              type: 'review',
+              childId: 'child_x',
+              character: '一',
+              grade: 'a',
+              round: 2,
+              dayKey: '2026-07-01',
+            }),
+          ],
+        },
+      },
+    })
+    mockAppendLogs.mockResolvedValue({ appendedCount: 0, projectionsChanged: false })
+
+    const result = await initialPull()
+
+    expect(mockAppendLogs).toHaveBeenCalledTimes(1)
+    expect(result.didMerge).toBe(false)
+    expect(mockSaveCurrentSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('replays remote reviews into the snapshot even when log storage skips them', async () => {
+    const localSnapshot = JSON.parse(JSON.stringify(MOCK_REMOTE_SNAPSHOT))
+    mockGetLatestSnapshot.mockResolvedValue(localSnapshot)
+    mockPullAllData.mockResolvedValue({
+      meta: { lastKnownRemoteTime: 2000, version: '0.1.0' },
+      childData: {
+        小明: {
+          snapshot: JSON.stringify(MOCK_REMOTE_SNAPSHOT),
+          logs: [
+            JSON.stringify({
+              timestamp: 2001,
+              type: 'review',
+              childId: 'child_x',
+              character: '一',
+              grade: 'a',
+              round: 1,
+              dayKey: '2026-07-01',
+            }),
+          ],
+        },
+      },
+    })
+    mockAppendLogs.mockResolvedValue({ appendedCount: 0, projectionsChanged: false })
+
+    const result = await initialPull()
+
+    expect(result.didMerge).toBe(true)
+    expect(mockSaveCurrentSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: expect.objectContaining({
+          children: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'child_x',
+              progress: expect.objectContaining({ 一: expect.any(Object) }),
+            }),
+          ]),
+        }),
+      }),
+    )
   })
 
   // ---- Edge: empty Drive (no child folders) ----

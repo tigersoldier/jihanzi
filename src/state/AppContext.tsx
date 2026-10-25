@@ -49,7 +49,7 @@ import { notifyDataChanged, repairSnapshotProgress, salvageUnverifiableHeavy } f
 export interface AppContextState {
   state: AppState
   loading: boolean
-  /** Incremented after each sync-driven reload — hooks can watch this to re-query IndexedDB */
+  /** Incremented after sync reloads and review writes so log-derived hooks can re-query IndexedDB */
   dataVersion: number
   /** Currently selected child — shared across tabs */
   selectedChildId: string
@@ -159,15 +159,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const applyAndPersist = useCallback(async (entry: AnyLogEntry): Promise<boolean> => {
     const now = Date.now()
     let changed = false
+    let reviewLogAppended = false
     let newState: AppState = EMPTY_STATE
 
     await db.transaction(
       'rw',
-      db.logs,
-      db.snapshot,
-      db.reviewFacts,
-      db.dailyReviewStats,
-      db.characterAnalytics,
+      [
+        db.logs,
+        db.snapshot,
+        db.reviewFacts,
+        db.dailyReviewStats,
+        db.characterAnalytics,
+        db.reviewCounts,
+        db.reviewCountEvents,
+        db.meta,
+      ],
       async () => {
         // 在事务内读取快照，避免与其他标签页或同步流程写入快照时发生竞态。
         const currentSnapshot = await getLatestSnapshot()
@@ -187,7 +193,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           entry.type === 'review'
             ? cloned.children.find(child => child.id === entry.childId)?.progress[entry.character]
             : undefined
-        await appendLog(
+        const appendedId = await appendLog(
           entry,
           entry.type === 'review'
             ? {
@@ -200,6 +206,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
               }
             : undefined,
         )
+        if (entry.type === 'review') {
+          if (appendedId === null) {
+            changed = false
+            return
+          }
+          reviewLogAppended = true
+        }
 
         if (changed) {
           // 检查是否跨过 UTC 日期锚点。
@@ -228,15 +241,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       },
     )
 
+    if (entry.type === 'review' && reviewLogAppended) {
+      // Review rounds after the first do not change the SM-2 snapshot, but do change log-derived totals.
+      setDataVersion(version => version + 1)
+    }
+
     if (changed) {
       setState(newState)
       // Trigger debounced push to Google Drive
       notifyDataChanged()
       // Prune logs if over threshold (500k), fire-and-forget
       getLogCount()
-        .then(count => {
-          if (count > 500_000) pruneOldestLogs(1000)
-        })
+        .then(count => (count > 500_000 ? pruneOldestLogs(1000) : undefined))
         .catch(err => {
           console.error('Log pruning failed:', err)
         })
@@ -529,15 +545,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await saveCurrentSnapshot({ timestamp: Date.now(), appliedThrough, state: finalState })
 
       // 4. Append all log entries（去重后的全集：同步载体 + 审计线索）
+      let reviewDataChanged = false
       if (uniqueLogs.length > 0) {
-        await appendLogs(
+        const appendResult = await appendLogs(
           uniqueLogs,
           uniqueLogs.map(entry => acceptedUpdates.get(entry)),
         )
+        reviewDataChanged =
+          (appendResult?.appendedCount ?? 0) > 0 || Boolean(appendResult?.projectionsChanged)
       }
 
-      // 5. Update React state
+      // 5. Update React state and refresh log-derived hooks after imported reviews.
       setState(finalState)
+      if (reviewDataChanged) setDataVersion(version => version + 1)
 
       // 6. Trigger sync to push imported data to Drive
       notifyDataChanged()
