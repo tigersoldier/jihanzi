@@ -17,9 +17,10 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { getPinyin } from '../../utils/chars'
-import { formatDateLabel } from '../../utils/date'
+import { formatDateLabel, formatReviewDueLabel } from '../../utils/date'
 import { PROFICIENCY_DOT, type Proficiency } from '../../core/proficiency'
 import type { ReviewCountStatus } from '../../hooks/useWordBookReviewCounts'
+import { useTodayDateKey } from '../../hooks/useTodayDateKey'
 
 interface CharacterReviewInfo {
   reviewCount: number
@@ -51,6 +52,7 @@ export default function CharacterList({
   reorderable = true,
   onCharClick,
 }: CharacterListProps) {
+  const todayDateKey = useTodayDateKey()
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 5 },
@@ -96,6 +98,7 @@ export default function CharacterList({
               proficiency={proficiencyMap?.[char]}
               reviewInfo={reviewInfoMap[char]}
               reviewCountStatus={reviewCountStatus}
+              todayDateKey={todayDateKey}
               reorderable={reorderable}
               onClick={onCharClick ? () => onCharClick(char) : undefined}
             />
@@ -114,6 +117,7 @@ function SortableCharItem({
   proficiency,
   reviewInfo,
   reviewCountStatus,
+  todayDateKey,
   reorderable,
   onClick,
 }: {
@@ -124,6 +128,7 @@ function SortableCharItem({
   proficiency?: Proficiency
   reviewInfo?: CharacterReviewInfo
   reviewCountStatus: ReviewCountStatus
+  todayDateKey: string
   reorderable: boolean
   onClick?: () => void
 }) {
@@ -143,7 +148,7 @@ function SortableCharItem({
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex items-center gap-3 bg-white rounded-xl border border-gray-100 px-4 py-3 shadow-sm hover:shadow-md transition-shadow ${
+      className={`flex items-center gap-3 bg-white rounded-xl border border-gray-100 px-3 py-2.5 shadow-sm hover:shadow-md transition-shadow ${
         onClick ? 'cursor-pointer' : ''
       }`}
       onClick={onClick}
@@ -173,29 +178,36 @@ function SortableCharItem({
       {/* Number */}
       <span className="text-xs text-gray-400 w-6 text-right tabular-nums">{index + 1}.</span>
 
-      {/* Character and learned review information */}
-      <div className="min-w-0 flex-1">
-        <span className="text-2xl text-gray-800">{char}</span>
+      {/* Character, pronunciation, and learned review information */}
+      <div className="flex min-w-0 flex-1 items-baseline gap-2">
+        <span className="shrink-0 text-2xl leading-none text-gray-800">{char}</span>
+        <span className="hidden shrink-0 text-xs text-gray-400 sm:inline">{pinyin}</span>
         {reviewInfo && (
-          <div
+          <span
             role="group"
             aria-label={`${char}学习信息`}
-            className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-gray-400"
+            className="min-w-0 truncate whitespace-nowrap text-xs text-gray-500"
           >
-            <span>
+            <span className="font-medium text-gray-700">
               {reviewCountStatus === 'ready'
-                ? `复习 ${reviewInfo.reviewCount} 次`
+                ? `${reviewInfo.reviewCount}次`
                 : reviewCountStatus === 'loading'
-                  ? '复习次数读取中'
-                  : '复习次数不可用'}
+                  ? '次数读取中'
+                  : '次数不可用'}
             </span>
-            <span>下次复习 {formatDateLabel(reviewInfo.nextReview)}</span>
-          </div>
+            <span className="mx-1 text-gray-300" aria-hidden="true">
+              ·
+            </span>
+            <time
+              dateTime={reviewInfo.nextReview}
+              title={formatDateLabel(reviewInfo.nextReview)}
+              className="text-gray-500"
+            >
+              {formatReviewDueLabel(reviewInfo.nextReview, todayDateKey)}
+            </time>
+          </span>
         )}
       </div>
-
-      {/* Pinyin */}
-      <span className="text-xs text-gray-400 hidden sm:block">{pinyin}</span>
 
       {/* Remove button */}
       <button

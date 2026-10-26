@@ -41,6 +41,8 @@ export function addDays(dateKey: string, days: number): string {
  * Get a human-readable date label.
  */
 export function formatDateLabel(dateKey: string): string {
+  if (dateKeyToUtcDayNumber(dateKey) === null) return '日期不可用'
+
   const d = parseDateKey(dateKey)
   const year = d.getFullYear()
   const month = d.getMonth() + 1
@@ -48,6 +50,28 @@ export function formatDateLabel(dateKey: string): string {
   const weekDays = ['日', '一', '二', '三', '四', '五', '六']
   const weekDay = weekDays[d.getDay()]
   return `${year}年${month}月${day}日 星期${weekDay}`
+}
+
+/** Show the relative review date, while making overdue reviews explicit. */
+export function formatReviewDueLabel(dateKey: string, referenceDateKey = todayKey()): string {
+  const reviewDayNumber = dateKeyToUtcDayNumber(dateKey)
+  const referenceDayNumber = dateKeyToUtcDayNumber(referenceDateKey)
+  if (reviewDayNumber === null || referenceDayNumber === null) return '日期不可用'
+
+  const daysUntil = reviewDayNumber - referenceDayNumber
+  if (daysUntil > 0) return `下次${daysUntil}天后`
+  if (daysUntil === 0) return '下次今天'
+  return `已逾期${-daysUntil}天`
+}
+
+function dateKeyToUtcDayNumber(dateKey: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return null
+
+  const timestamp = Date.parse(`${dateKey}T00:00:00.000Z`)
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== dateKey) {
+    return null
+  }
+  return timestamp / 86_400_000
 }
 
 /**
