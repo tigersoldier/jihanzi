@@ -578,11 +578,13 @@ export function TodaySession() {
           )}
           <ProgressBar current={taskIndex} total={totalTasks} />
           <CharacterCard
+            key={`${round}-${taskIndex}-${currentTask.character}`}
             character={currentTask.character}
             isNew={currentTask.isNew}
             sm2State={currentTask.sm2State}
             ratingAnimation={ratingAnimation}
             slideDirection="in"
+            autoHide
             onFontReadyChange={handleFontReadyChange}
           />
           <RatingButtons
