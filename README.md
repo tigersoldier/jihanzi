@@ -90,8 +90,13 @@ src/
 │       └── SyncIndicator.tsx   # 同步状态指示器
 └── utils/
     ├── date.ts             # 日期工具（日期键、学新/复习交替、格式化）
-    └── chars.ts            # 80+ 常用汉字拼音与组词数据库
+    ├── commonWords.ts      # 儿童常用词表，作为高频词例的优先补充
+    ├── subtlexWordExamples.json # SUBTLEX-CH 按字生成的离线词例索引
+    ├── mtehWordExamples.json    # MteH 补充词例索引（CC BY-SA 4.0）
+    └── chars.ts            # 拼音生成、精选例词优先级与按字索引
 ```
+
+组词示例优先使用人工精选词，再使用儿童常用词、SUBTLEX-CH 词频数据和 MteH 提示；全程离线，每字最多显示三词。复习卡片会把词例中的当前字替换为全角波浪号 `～`，字词详情页保留完整例词。词库许可和索引生成方式见 `docs/word-examples.md`。
 
 ## URL 路由
 

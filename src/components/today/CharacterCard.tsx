@@ -50,6 +50,7 @@ export default function CharacterCard({
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null)
   const pinyin = getPinyin(character)
   const words = getWords(character)
+  const maskedWords = words.map(word => word.split(character).join('～'))
 
   const hideCharacter = useCallback(() => {
     const hiddenAt = Date.now()
@@ -158,8 +159,10 @@ export default function CharacterCard({
             {/* Pinyin */}
             <p className="text-lg text-gray-500 mb-2 font-medium tracking-wide">{pinyin}</p>
 
-            {/* Example words */}
-            {words.length > 0 && <p className="text-sm text-gray-400">{words.join(' · ')}</p>}
+            {/* Example words with the current character masked */}
+            {maskedWords.length > 0 && (
+              <p className="text-sm text-gray-400">{maskedWords.join(' · ')}</p>
+            )}
           </div>
 
           {autoHide && !isRevealed && (

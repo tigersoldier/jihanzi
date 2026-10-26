@@ -169,7 +169,41 @@ export default function SettingsPage({ onClose }: SettingsPageProps) {
           </div>
 
           {/* About */}
-          <div className="text-center text-xs text-gray-400 py-4">记汉字 v0.1.0</div>
+          <div className="text-center text-xs text-gray-400 py-4 space-y-1">
+            <div>记汉字 v0.1.0</div>
+            <p>
+              组词词例改编自{' '}
+              <a
+                href="https://doi.org/10.1371/journal.pone.0010729"
+                target="_blank"
+                rel="noreferrer"
+                className="underline hover:text-gray-600"
+              >
+                SUBTLEX-CH（Cai & Brysbaert，PLOS ONE 2010）
+              </a>
+              ，CC BY
+            </p>
+            <p>
+              补充例词改编自{' '}
+              <a
+                href="https://github.com/becky82/mteh"
+                target="_blank"
+                rel="noreferrer"
+                className="underline hover:text-gray-600"
+              >
+                MteH v0.1.3（Rebecca J. Stones）
+              </a>
+              ，
+              <a
+                href="https://creativecommons.org/licenses/by-sa/4.0/"
+                target="_blank"
+                rel="noreferrer"
+                className="underline hover:text-gray-600"
+              >
+                CC BY-SA 4.0
+              </a>
+            </p>
+          </div>
         </div>
       </div>
     </div>

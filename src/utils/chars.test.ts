@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { isChineseChar, validateAddChar, getPinyin, getCharInfo, getWords } from './chars'
+import { COMMON_WORDS } from './commonWords'
+import SUBTLEX_WORD_EXAMPLES from './subtlexWordExamples.json'
+import MTEH_WORD_EXAMPLES from './mtehWordExamples.json'
+import UNSUITABLE_WORD_EXAMPLE_TERMS from '../../scripts/word-example-safety-terms.json'
 import type { WordBook } from '../core/types'
+
+const isUnsuitableWordExample = (word: string): boolean =>
+  UNSUITABLE_WORD_EXAMPLE_TERMS.some(term => word.includes(term))
 
 describe('isChineseChar', () => {
   it('BMP 基本区的汉字返回 true', () => {
@@ -86,7 +93,7 @@ describe('getCharInfo / getPinyin / getWords', () => {
   })
 
   it('字典外的常见汉字也返回有效拼音（非问号）', () => {
-    // 这些字在原有硬编码字典中不存在，应该通过拼音库获取
+    // 拼音由拼音库生成，与该字是否有组词数据无关
     const chars = ['旅', '途', '伴', '随', '璃', '蜗', '蜘', '蛛']
     for (const char of chars) {
       const pinyin = getPinyin(char)
@@ -114,11 +121,112 @@ describe('getCharInfo / getPinyin / getWords', () => {
     expect(getWords(char)).toBe(getCharInfo(char).words)
   })
 
-  it('未知字符的 words 返回空数组', () => {
-    // 对于字典中没有组词数据的字，words 可以为空但不影响拼音
-    const info = getCharInfo('蛛')
+  it('离线词表提供广泛覆盖且只索引短汉字词', () => {
+    const characters = new Set(COMMON_WORDS.flatMap(word => [...word]))
+
+    expect(COMMON_WORDS.length).toBeGreaterThan(1000)
+    expect(characters.size).toBeGreaterThan(800)
+    expect(
+      COMMON_WORDS.every(word => {
+        const length = [...word].length
+        return length >= 2 && length <= 4 && /^\p{Script=Han}+$/u.test(word)
+      }),
+    ).toBe(true)
+    expect(
+      [...characters].every(character => {
+        const words = getWords(character)
+        return (
+          words.length > 0 &&
+          words.length <= 3 &&
+          new Set(words).size === words.length &&
+          words.every(word => word.includes(character))
+        )
+      }),
+    ).toBe(true)
+  })
+
+  it('SUBTLEX-CH 高频索引覆盖数千个汉字', () => {
+    const entries = Object.entries(SUBTLEX_WORD_EXAMPLES)
+
+    expect(entries.length).toBeGreaterThan(3500)
+    expect(
+      entries.every(([character, words]) => {
+        return (
+          [...character].length === 1 &&
+          words.length > 0 &&
+          words.length <= 3 &&
+          words.every(word => word.includes(character) && /^\p{Script=Han}{2,4}$/u.test(word))
+        )
+      }),
+    ).toBe(true)
+    expect(getWords('亡')).toContain('死亡')
+  })
+
+  it('不适龄词例不会进入离线索引或复习卡片', () => {
+    const indexedWords = [
+      ...Object.values(SUBTLEX_WORD_EXAMPLES).flat(),
+      ...Object.values(MTEH_WORD_EXAMPLES).flat(),
+      ...COMMON_WORDS,
+    ]
+    const characters = new Set([
+      ...Object.keys(SUBTLEX_WORD_EXAMPLES),
+      ...Object.keys(MTEH_WORD_EXAMPLES),
+      ...COMMON_WORDS.flatMap(word => [...word]),
+    ])
+
+    expect(indexedWords.every(word => !isUnsuitableWordExample(word))).toBe(true)
+    expect([...characters].flatMap(getWords).every(word => !isUnsuitableWordExample(word))).toBe(
+      true,
+    )
+    expect(getWords('他')).not.toContain('他妈的')
+    expect(getWords('奸').every(word => !isUnsuitableWordExample(word))).toBe(true)
+  })
+
+  it('MteH 提示索引为 SUBTLEX 未覆盖的汉字补充例词', () => {
+    const entries = Object.entries(MTEH_WORD_EXAMPLES)
+
+    expect(entries.length).toBeGreaterThan(700)
+    expect(
+      entries.every(([character, words]) => {
+        return (
+          !SUBTLEX_WORD_EXAMPLES[character as keyof typeof SUBTLEX_WORD_EXAMPLES] &&
+          [...character].length === 1 &&
+          words.length === 1 &&
+          words[0].includes(character) &&
+          /^\p{Script=Han}{2,4}$/u.test(words[0]) &&
+          !isUnsuitableWordExample(words[0])
+        )
+      }),
+    ).toBe(true)
+    expect(getWords('丞')).toContain('东吴丞相')
+    expect(getWords('丞').length).toBeLessThanOrEqual(3)
+  })
+
+  it('常用词表为原先缺少组词的汉字补充例词', () => {
+    const expectedWords: Record<string, string> = {
+      旅: '旅途',
+      途: '旅途',
+      伴: '伙伴',
+      随: '随时',
+      璃: '玻璃',
+      蜗: '蜗牛',
+      蜘: '蜘蛛',
+      蛛: '蜘蛛',
+    }
+
+    for (const [character, word] of Object.entries(expectedWords)) {
+      const words = getWords(character)
+      expect(words).toContain(word)
+      expect(words.length).toBeLessThanOrEqual(3)
+      expect(new Set(words).size).toBe(words.length)
+      expect(words.every(example => example.includes(character))).toBe(true)
+    }
+  })
+
+  it('词表未覆盖的汉字仍可没有组词', () => {
+    const info = getCharInfo('鼍')
     expect(info.pinyin).not.toBe('?')
-    expect(Array.isArray(info.words)).toBe(true)
+    expect(info.words).toEqual([])
   })
 
   it('多音字返回全部读音，用 · 分隔', () => {

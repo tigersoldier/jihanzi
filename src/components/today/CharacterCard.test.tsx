@@ -48,15 +48,16 @@ describe('CharacterCard 自动隐藏', () => {
     expect(screen.getByText('草')).toBeDefined()
     expect(screen.getByText(getPinyin('草'))).toBeDefined()
     const words = getWords('草')
+    const maskedWords = words.map(word => word.split('草').join('～')).join(' · ')
     expect(words.length).toBeGreaterThan(0)
-    expect(screen.getByText(words.join(' · '))).toBeDefined()
+    expect(screen.getByText(maskedWords)).toBeDefined()
     act(() => vi.advanceTimersByTime(1000))
 
     const hiddenContent = screen.getByText('草').closest('[aria-hidden="true"]')
     expect(hiddenContent).not.toBeNull()
     expect(hiddenContent?.classList.contains('invisible')).toBe(true)
     expect(screen.getByText(getPinyin('草')).closest('[aria-hidden="true"]')).not.toBeNull()
-    expect(screen.getByText(words.join(' · ')).closest('[aria-hidden="true"]')).not.toBeNull()
+    expect(screen.getByText(maskedWords).closest('[aria-hidden="true"]')).not.toBeNull()
     act(() => vi.advanceTimersByTime(500))
     expect(onFontReadyChange).toHaveBeenCalledWith('草', true)
     const revealButton = screen.getByRole('button', { name: /长按显示生字/ })
@@ -105,6 +106,22 @@ describe('CharacterCard 自动隐藏', () => {
     expect(screen.getByRole('button', { name: '长按显示生字' }).hasAttribute('disabled')).toBe(
       false,
     )
+  })
+
+  it('复习卡片展示词组时将当前字替换为全角波浪号', () => {
+    render(<CharacterCard character="蜗" isNew={false} />)
+
+    expect(screen.getByText('～牛 · ～牛壳 · ～居')).toBeDefined()
+  })
+
+  it('词例中重复出现的当前字也全部替换', () => {
+    const words = getWords('爸')
+    const maskedWords = words.map(word => word.split('爸').join('～')).join(' · ')
+    render(<CharacterCard character="爸" isNew={false} />)
+
+    expect(maskedWords).toContain('～～')
+    expect(screen.getByText(maskedWords)).toBeDefined()
+    expect(screen.queryByText(words.join(' · '))).toBeNull()
   })
 
   it('切换到新任务时重新显示新字', () => {
