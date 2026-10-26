@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { useApp } from '../../state/AppContext'
+import { useApp } from '../../state/AppContextDefinition'
 import { useToday, useDayType } from '../../hooks/useToday'
 import { useRoute } from '../../hooks/useRoute'
 import type { ProgressRoute } from '../../router'

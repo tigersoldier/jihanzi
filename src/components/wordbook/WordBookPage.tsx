@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useWordBook } from '../../hooks/useWordBook'
 import { useRoute } from '../../hooks/useRoute'
-import { useApp } from '../../state/AppContext'
+import { useApp } from '../../state/AppContextDefinition'
 import type { WordBookRoute } from '../../router'
 import WordBookSwitcher from './WordBookSwitcher'
 import CharacterList from './CharacterList'
@@ -12,6 +12,7 @@ import {
   filterCharactersByProficiency,
   sortWordBookCharacters,
   type WordBookProficiencyFilter,
+  type WordBookSortDirection,
   type WordBookSortMode,
 } from '../../core/wordbook'
 import { useWordBookReviewCounts } from '../../hooks/useWordBookReviewCounts'
@@ -39,6 +40,9 @@ export default function WordBookPage() {
   const [newWBName, setNewWBName] = useState('')
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
   const [sortMode, setSortMode] = useState<WordBookSortMode>('manual')
+  const [sortDirections, setSortDirections] = useState<
+    Record<'reviewCount' | 'nextReview', WordBookSortDirection>
+  >({ reviewCount: 'desc', nextReview: 'asc' })
   const [proficiencyFilter, setProficiencyFilter] = useState<WordBookProficiencyFilter>('all')
 
   // 查看的生字由 URL 驱动（#/wordbook/char/<字>）
@@ -138,17 +142,34 @@ export default function WordBookPage() {
   const canReorder =
     sortMode === 'manual' ||
     (sortMode === 'reviewCount' && reviewCountResult.status === 'unavailable')
+  const sortDirection =
+    effectiveSortMode === 'reviewCount'
+      ? sortDirections.reviewCount
+      : effectiveSortMode === 'nextReview'
+        ? sortDirections.nextReview
+        : undefined
   const displayedChars = sortWordBookCharacters(
     filteredChars,
     progress,
     reviewCounts,
     effectiveSortMode,
+    sortDirection,
   )
 
   // Build proficiency map
   const proficiencyMap: Record<string, ReturnType<typeof getProficiency>> = {}
   for (const char of displayedChars) {
     proficiencyMap[char] = getProficiency(progress[char])
+  }
+
+  const reviewInfoMap: Record<string, { reviewCount: number; nextReview: string }> = {}
+  for (const char of displayedChars) {
+    const characterState = progress[char]
+    if (!characterState) continue
+    reviewInfoMap[char] = {
+      reviewCount: reviewCounts[char] ?? 0,
+      nextReview: characterState.nextReview,
+    }
   }
 
   const learnedCount = allChars.filter(c => c in progress).length
@@ -165,6 +186,11 @@ export default function WordBookPage() {
   const handleRemove = (char: string, _filteredIndex: number) => {
     const realIndex = allChars.indexOf(char)
     if (realIndex !== -1) removeCharacter(char, realIndex)
+  }
+
+  const handleSortDirectionChange = (direction: WordBookSortDirection) => {
+    if (effectiveSortMode === 'manual') return
+    setSortDirections(current => ({ ...current, [effectiveSortMode]: direction }))
   }
 
   const handleReorder = (reorderedSubset: string[]) => {
@@ -284,11 +310,25 @@ export default function WordBookPage() {
             >
               <option value="manual">字本顺序</option>
               <option value="reviewCount" disabled={reviewCountResult.status !== 'ready'}>
-                复习次数（多到少）
+                复习次数
               </option>
-              <option value="nextReview">下次复习时间（近到远）</option>
+              <option value="nextReview">下次复习时间</option>
             </select>
           </label>
+          {effectiveSortMode !== 'manual' && (
+            <label className="flex items-center gap-2 text-gray-500">
+              顺序
+              <select
+                aria-label="排序方向"
+                value={sortDirection}
+                onChange={e => handleSortDirectionChange(e.target.value as WordBookSortDirection)}
+                className="border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-700"
+              >
+                <option value="asc">升序</option>
+                <option value="desc">降序</option>
+              </select>
+            </label>
+          )}
           <label className="flex items-center gap-2 text-gray-500">
             熟悉程度
             <select
@@ -330,6 +370,8 @@ export default function WordBookPage() {
           onReorder={handleReorder}
           onRemove={handleRemove}
           proficiencyMap={proficiencyMap}
+          reviewInfoMap={reviewInfoMap}
+          reviewCountStatus={reviewCountResult.status}
           reorderable={canReorder}
           onCharClick={selectedChildId ? char => navigate({ name: 'wordbook', char }) : undefined}
         />

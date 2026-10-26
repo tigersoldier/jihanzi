@@ -35,6 +35,19 @@ describe('word book sorting and filtering', () => {
     )
 
     expect(sorted).toEqual(['花', '水', '山', '雨'])
+    expect(
+      sortWordBookCharacters(
+        characters,
+        {
+          花: state({ repetitions: 0 }),
+          山: state({ repetitions: 3 }),
+          水: state({ repetitions: 1 }),
+        },
+        { 花: 9, 山: 4, 水: 4 },
+        'reviewCount',
+        'asc',
+      ),
+    ).toEqual(['水', '山', '花', '雨'])
     expect(characters).toEqual(['水', '花', '雨', '山'])
   })
 
@@ -45,6 +58,12 @@ describe('word book sorting and filtering', () => {
       '花',
       '雨',
     ])
+  })
+
+  it('supports descending next-review order while keeping unlearned characters last', () => {
+    expect(
+      sortWordBookCharacters(['花', '雨', '水', '山'], progress, {}, 'nextReview', 'desc'),
+    ).toEqual(['花', '水', '山', '雨'])
   })
 
   it('preserves the existing word-book order in manual mode', () => {

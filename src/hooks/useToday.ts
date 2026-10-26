@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import type { TaskItem, Grade, ReviewEntry, DayType } from '../core/types'
-import { useApp } from '../state/AppContext'
-import { useSync } from '../state/SyncContext'
+import { useApp } from '../state/AppContextDefinition'
+import { useSync } from '../state/SyncContextDefinition'
 import { generateTodayTasks, getEffectiveDayType } from '../core/scheduler'
 import { todayKey as getTodayKey, addDays, getDayTypeLabel, formatDateLabel } from '../utils/date'
 import { getReviewsForChildOnDay, getLastStudyDayForChild } from '../data/db'
@@ -65,7 +65,7 @@ export function useDayType(): DayTypeInfo {
         setEffectiveDayType(null)
         setDayTypeLoading(false)
       })
-  }, [selectedChildId, todayKey, state.children])
+  }, [selectedChildId, todayKey, state.children, dataVersion])
 
   const dayType: DayType = effectiveDayType ?? 'learn'
 
@@ -257,7 +257,7 @@ export function useToday(): UseTodayReturn {
 
     // Mark as done so we don't keep trying on every render
     didRestore.current = true
-  }, [state.children, selectedChildId, todayKey])
+  }, [state.children, selectedChildId, todayKey, setSelectedChildId])
 
   // Check whether today's session was already completed (survives page
   // refresh).  Runs once after IndexedDB state is loaded, and whenever
@@ -597,7 +597,12 @@ export function useToday(): UseTodayReturn {
     handleContinueRound,
     handleSkipRound,
     handleDone,
-    isReady: selectedChildId !== '' && effectiveTasks.length > 0 && !doneToday && !dayTypeLoading && !syncBlocked,
+    isReady:
+      selectedChildId !== '' &&
+      effectiveTasks.length > 0 &&
+      !doneToday &&
+      !dayTypeLoading &&
+      !syncBlocked,
     syncBlocked,
     doneToday,
     todayNewChars,

@@ -7,8 +7,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import React, { type ReactNode } from 'react'
-import { AppProvider, useApp } from './AppContext'
-import { AuthProvider, useAuth } from './AuthContext'
+import { AppProvider } from './AppContext'
+import { useApp } from './AppContextDefinition'
+import { AuthProvider } from './AuthContext'
+import { useAuth } from './AuthContextDefinition'
 import { getChildStats } from '../core/scheduler'
 
 // We test that AppContext triggers sync after mutations.

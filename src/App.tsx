@@ -1,5 +1,6 @@
 import { useRef } from 'react'
-import { AuthProvider, useAuth } from './state/AuthContext'
+import { AuthProvider } from './state/AuthContext'
+import { useAuth } from './state/AuthContextDefinition'
 import { AppProvider } from './state/AppContext'
 import { SyncProvider } from './state/SyncContext'
 import Layout from './components/layout/Layout'

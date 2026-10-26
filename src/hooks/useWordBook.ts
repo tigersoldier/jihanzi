@@ -1,5 +1,5 @@
 import { useMemo, useCallback } from 'react'
-import { useApp } from '../state/AppContext'
+import { useApp } from '../state/AppContextDefinition'
 import { useRoute } from './useRoute'
 import type { WordBookRoute } from '../router'
 import { isChineseChar, ValidationError } from '../utils/chars'
@@ -107,7 +107,7 @@ export function useWordBook(): UseWordBookReturn {
       const id = await createWordBook(name, chars)
       setSelectedWBId(id)
     },
-    [createWordBook],
+    [createWordBook, setSelectedWBId],
   )
 
   const deleteWB = useCallback(
@@ -117,7 +117,7 @@ export function useWordBook(): UseWordBookReturn {
         setSelectedWBId(state.wordBooks[0]?.id || null)
       }
     },
-    [deleteWordBook, selectedWBId, state.wordBooks],
+    [deleteWordBook, selectedWBId, state.wordBooks, setSelectedWBId],
   )
 
   const updateWBName = useCallback(

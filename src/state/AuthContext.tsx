@@ -1,12 +1,4 @@
-import {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  useCallback,
-  useRef,
-  type ReactNode,
-} from 'react'
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import {
   initGoogleLibraries,
   initGapiClient,
@@ -24,23 +16,7 @@ import {
   clearUserStorage,
   TOKEN_READY_EVENT,
 } from '../data/gapi'
-
-interface UserProfile {
-  name: string
-  email: string
-  picture: string
-}
-
-interface AuthState {
-  isLoggedIn: boolean
-  isLoading: boolean
-  user: UserProfile | null
-  error: string | null
-  login: () => Promise<void>
-  logout: () => void
-}
-
-const AuthContext = createContext<AuthState | null>(null)
+import { AuthContext, type UserProfile } from './AuthContextDefinition'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
@@ -188,12 +164,4 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       {children}
     </AuthContext.Provider>
   )
-}
-
-export function useAuth(): AuthState {
-  const context = useContext(AuthContext)
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider')
-  }
-  return context
 }

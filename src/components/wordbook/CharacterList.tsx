@@ -17,7 +17,14 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { getPinyin } from '../../utils/chars'
+import { formatDateLabel } from '../../utils/date'
 import { PROFICIENCY_DOT, type Proficiency } from '../../core/proficiency'
+import type { ReviewCountStatus } from '../../hooks/useWordBookReviewCounts'
+
+interface CharacterReviewInfo {
+  reviewCount: number
+  nextReview: string
+}
 
 interface CharacterListProps {
   characters: string[]
@@ -25,6 +32,9 @@ interface CharacterListProps {
   onRemove: (char: string, index: number) => void
   /** Map of character → proficiency level for color coding */
   proficiencyMap?: Record<string, Proficiency>
+  /** Review totals and next-review date for learned characters */
+  reviewInfoMap: Record<string, CharacterReviewInfo>
+  reviewCountStatus: ReviewCountStatus
   /** Whether users can manually reorder the displayed characters */
   reorderable?: boolean
   /** Called when a character is clicked */
@@ -36,6 +46,8 @@ export default function CharacterList({
   onReorder,
   onRemove,
   proficiencyMap,
+  reviewInfoMap,
+  reviewCountStatus,
   reorderable = true,
   onCharClick,
 }: CharacterListProps) {
@@ -82,6 +94,8 @@ export default function CharacterList({
               index={index}
               onRemove={() => onRemove(char, index)}
               proficiency={proficiencyMap?.[char]}
+              reviewInfo={reviewInfoMap[char]}
+              reviewCountStatus={reviewCountStatus}
               reorderable={reorderable}
               onClick={onCharClick ? () => onCharClick(char) : undefined}
             />
@@ -98,6 +112,8 @@ function SortableCharItem({
   index,
   onRemove,
   proficiency,
+  reviewInfo,
+  reviewCountStatus,
   reorderable,
   onClick,
 }: {
@@ -106,6 +122,8 @@ function SortableCharItem({
   index: number
   onRemove: () => void
   proficiency?: Proficiency
+  reviewInfo?: CharacterReviewInfo
+  reviewCountStatus: ReviewCountStatus
   reorderable: boolean
   onClick?: () => void
 }) {
@@ -155,8 +173,26 @@ function SortableCharItem({
       {/* Number */}
       <span className="text-xs text-gray-400 w-6 text-right tabular-nums">{index + 1}.</span>
 
-      {/* Character */}
-      <span className="text-2xl text-gray-800 flex-1">{char}</span>
+      {/* Character and learned review information */}
+      <div className="min-w-0 flex-1">
+        <span className="text-2xl text-gray-800">{char}</span>
+        {reviewInfo && (
+          <div
+            role="group"
+            aria-label={`${char}学习信息`}
+            className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-gray-400"
+          >
+            <span>
+              {reviewCountStatus === 'ready'
+                ? `复习 ${reviewInfo.reviewCount} 次`
+                : reviewCountStatus === 'loading'
+                  ? '复习次数读取中'
+                  : '复习次数不可用'}
+            </span>
+            <span>下次复习 {formatDateLabel(reviewInfo.nextReview)}</span>
+          </div>
+        )}
+      </div>
 
       {/* Pinyin */}
       <span className="text-xs text-gray-400 hidden sm:block">{pinyin}</span>

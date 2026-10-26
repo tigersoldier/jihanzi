@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { useApp } from '../state/AppContext'
+import { useApp } from '../state/AppContextDefinition'
 import { getChildStats } from '../core/scheduler'
 
 interface UseChildReturn {

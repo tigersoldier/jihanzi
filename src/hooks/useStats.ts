@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import type { Grade, SM2State, ReviewEntry } from '../core/types'
-import { useApp } from '../state/AppContext'
+import { useApp } from '../state/AppContextDefinition'
 import { getReviewsForChildCharPaginated, getReviewsForChildInRange } from '../data/db'
 
 export {

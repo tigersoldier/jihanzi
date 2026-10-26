@@ -8,7 +8,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import React, { type ReactNode } from 'react'
-import { SyncProvider, useSync } from './SyncContext'
+import { SyncProvider } from './SyncContext'
+import { useSync } from './SyncContextDefinition'
 
 const {
   mockIsLoggedIn,
@@ -24,11 +25,11 @@ const {
   mockOnSyncStatusChange: vi.fn(() => () => {}),
 }))
 
-vi.mock('./AuthContext', () => ({
+vi.mock('./AuthContextDefinition', () => ({
   useAuth: () => ({ isLoggedIn: mockIsLoggedIn() }),
 }))
 
-vi.mock('./AppContext', () => ({
+vi.mock('./AppContextDefinition', () => ({
   useApp: () => ({ reloadState: mockReloadState }),
 }))
 
@@ -69,9 +70,7 @@ describe('SyncContext initialSyncPending', () => {
   it('登录后首次拉取挂起期间为 true，拉取完成后解除', async () => {
     // 可控的拉取 promise：手动 resolve 以观察挂起中间态
     let resolvePull!: (value: unknown) => void
-    mockInitialPull.mockImplementation(
-      () => new Promise(resolve => void (resolvePull = resolve)),
-    )
+    mockInitialPull.mockImplementation(() => new Promise(resolve => void (resolvePull = resolve)))
 
     const { result, rerender } = renderHook(() => useSync(), { wrapper: Wrapper })
 
@@ -93,9 +92,7 @@ describe('SyncContext initialSyncPending', () => {
 
   it('拉取失败（reject）时同样解除挂起——离线/失败允许开始学习', async () => {
     let rejectPull!: (err: unknown) => void
-    mockInitialPull.mockImplementation(
-      () => new Promise((_, reject) => void (rejectPull = reject)),
-    )
+    mockInitialPull.mockImplementation(() => new Promise((_, reject) => void (rejectPull = reject)))
 
     const { result, rerender } = renderHook(() => useSync(), { wrapper: Wrapper })
 

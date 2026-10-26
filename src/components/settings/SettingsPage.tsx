@@ -1,6 +1,6 @@
-import { useAuth } from '../../state/AuthContext'
-import { useApp } from '../../state/AppContext'
-import { useSync } from '../../state/SyncContext'
+import { useAuth } from '../../state/AuthContextDefinition'
+import { useApp } from '../../state/AppContextDefinition'
+import { useSync } from '../../state/SyncContextDefinition'
 import { parseImportFiles } from '../../utils/import'
 
 interface SettingsPageProps {

@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react'
 import React, { type ReactNode } from 'react'
 import type { AppState } from '../../core/types'
-import { AppContext, type AppContextState } from '../../state/AppContext'
+import { AppContext, type AppContextState } from '../../state/AppContextDefinition'
 import RoundComplete from './RoundComplete'
 import Celebration from './Celebration'
 
@@ -38,7 +38,7 @@ const { mockSyncStatus, mockInitialSyncPending } = vi.hoisted(() => ({
   mockInitialSyncPending: vi.fn(() => false),
 }))
 
-vi.mock('../../state/SyncContext', () => ({
+vi.mock('../../state/SyncContextDefinition', () => ({
   useSync: () => ({
     status: mockSyncStatus(),
     initialSyncPending: mockInitialSyncPending(),

@@ -1,4 +1,4 @@
-import { useSync } from '../../state/SyncContext'
+import { useSync } from '../../state/SyncContextDefinition'
 
 const statusConfig: Record<string, { icon: string; color: string; label: string }> = {
   idle: { icon: '☁️', color: 'text-gray-400', label: '' },

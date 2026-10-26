@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import React, { useState, useCallback, type ReactNode } from 'react'
 import type { AppState } from '../core/types'
-import { AppContext, type AppContextState } from '../state/AppContext'
+import { AppContext, type AppContextState } from '../state/AppContextDefinition'
 
 // Mock localStorage (Node 22+ has a built-in stub that overrides jsdom's)
 let localStorageStore = new Map<string, string>()
@@ -56,7 +56,7 @@ const { mockSyncStatus, mockInitialSyncPending } = vi.hoisted(() => ({
   mockInitialSyncPending: vi.fn(() => false),
 }))
 
-vi.mock('../state/SyncContext', () => ({
+vi.mock('../state/SyncContextDefinition', () => ({
   useSync: () => ({
     status: mockSyncStatus(),
     initialSyncPending: mockInitialSyncPending(),

@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import React, { useState, type ReactNode } from 'react'
 import type { AppState, SM2State } from '../core/types'
-import { AppContext, type AppContextState } from '../state/AppContext'
+import { AppContext, type AppContextState } from '../state/AppContextDefinition'
 import * as db from '../data/db'
 
 vi.mock('../data/db', async () => {

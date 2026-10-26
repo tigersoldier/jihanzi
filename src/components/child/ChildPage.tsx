@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useChild } from '../../hooks/useChild'
-import { useApp } from '../../state/AppContext'
+import { useApp } from '../../state/AppContextDefinition'
 import ChildSwitcher from './ChildSwitcher'
 import EmptyState from '../common/EmptyState'
 

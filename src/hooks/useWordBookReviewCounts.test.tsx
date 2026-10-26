@@ -8,7 +8,7 @@ const { mockUseApp, mockGetReviewCountsForChild } = vi.hoisted(() => ({
   mockGetReviewCountsForChild: vi.fn(),
 }))
 
-vi.mock('../state/AppContext', () => ({ useApp: mockUseApp }))
+vi.mock('../state/AppContextDefinition', () => ({ useApp: mockUseApp }))
 vi.mock('../data/db', () => ({
   getReviewCountsForChild: (...args: unknown[]) => mockGetReviewCountsForChild(...args),
 }))

@@ -1,4 +1,4 @@
-import { useAuth } from '../../state/AuthContext'
+import { useAuth } from '../../state/AuthContextDefinition'
 
 export default function LoginPage() {
   const { login, isLoading, error } = useAuth()

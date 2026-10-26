@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getReviewCountsForChild } from '../data/db'
-import { useApp } from '../state/AppContext'
+import { useApp } from '../state/AppContextDefinition'
 
 export type ReviewCountStatus = 'loading' | 'ready' | 'unavailable'
 

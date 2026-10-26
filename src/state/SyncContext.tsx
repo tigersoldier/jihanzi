@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
 import type { SyncStatus } from '../data/sync'
 import {
   onSyncStatusChange,
@@ -10,19 +10,10 @@ import {
   ensureIntervalFilesOnDrive,
   repairPollutedData,
 } from '../data/sync'
-import { useAuth } from './AuthContext'
-import { useApp } from './AppContext'
+import { useAuth } from './AuthContextDefinition'
+import { useApp } from './AppContextDefinition'
+import { SyncContext } from './SyncContextDefinition'
 import { getLastKnownRemoteTime } from '../data/db'
-
-interface SyncContextState {
-  status: SyncStatus
-  lastSyncTime: number | null
-  /** 登录后首次拉取是否仍在进行（含拉取启动前的异步间隙） */
-  initialSyncPending: boolean
-  syncNow: () => Promise<void>
-}
-
-const SyncContext = createContext<SyncContextState | null>(null)
 
 export function SyncProvider({ children }: { children: ReactNode }) {
   const { isLoggedIn } = useAuth()
@@ -84,7 +75,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('online', checkOnlineStatus)
       window.removeEventListener('offline', checkOnlineStatus)
     }
-  }, [isLoggedIn])
+  }, [isLoggedIn, reloadState])
 
   const syncNow = async () => {
     const didMerge = await syncOnce()
@@ -99,12 +90,4 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       {children}
     </SyncContext.Provider>
   )
-}
-
-export function useSync(): SyncContextState {
-  const context = useContext(SyncContext)
-  if (!context) {
-    throw new Error('useSync must be used within a SyncProvider')
-  }
-  return context
 }

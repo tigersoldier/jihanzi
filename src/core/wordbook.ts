@@ -2,6 +2,7 @@ import type { SM2State } from './types'
 import { getProficiency, type Proficiency } from './proficiency'
 
 export type WordBookSortMode = 'manual' | 'reviewCount' | 'nextReview'
+export type WordBookSortDirection = 'asc' | 'desc'
 export type WordBookProficiencyFilter = 'all' | Exclude<Proficiency, 'unlearned'>
 
 /** Filter a word-book list by the selected familiarity level. */
@@ -23,6 +24,7 @@ export function sortWordBookCharacters(
   progress: Record<string, SM2State>,
   reviewCounts: Record<string, number>,
   sortMode: WordBookSortMode,
+  sortDirection: WordBookSortDirection = sortMode === 'reviewCount' ? 'desc' : 'asc',
 ): string[] {
   if (sortMode === 'manual') return [...characters]
 
@@ -37,10 +39,11 @@ export function sortWordBookCharacters(
       return getOriginalOrder(a) - getOriginalOrder(b)
     }
 
-    const comparison =
+    const ascendingComparison =
       sortMode === 'reviewCount'
-        ? (reviewCounts[b] ?? 0) - (reviewCounts[a] ?? 0)
+        ? (reviewCounts[a] ?? 0) - (reviewCounts[b] ?? 0)
         : aState.nextReview.localeCompare(bState.nextReview)
+    const comparison = sortDirection === 'asc' ? ascendingComparison : -ascendingComparison
     return comparison || getOriginalOrder(a) - getOriginalOrder(b)
   })
 }

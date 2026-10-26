@@ -7,7 +7,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import React, { type ReactNode } from 'react'
-import { AuthProvider, useAuth } from './AuthContext'
+import { AuthProvider } from './AuthContext'
+import { useAuth } from './AuthContextDefinition'
 
 // Mock gapi module
 const {

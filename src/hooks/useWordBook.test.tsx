@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import React, { useState, useRef, useCallback, type ReactNode } from 'react'
 import type { AppState } from '../core/types'
-import { AppContext, type AppContextState } from '../state/AppContext'
+import { AppContext, type AppContextState } from '../state/AppContextDefinition'
 import { validateAddChar } from '../utils/chars'
 
 import { useWordBook } from './useWordBook'

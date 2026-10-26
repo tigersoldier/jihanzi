@@ -14,7 +14,7 @@ import {
   getDailyReviewStatsInRange,
   type AnalyticsBackfillStatus,
 } from '../data/db'
-import { useApp } from '../state/AppContext'
+import { useApp } from '../state/AppContextDefinition'
 import { todayKey } from '../utils/date'
 
 const EMPTY_PROGRESS: Record<string, SM2State> = {}

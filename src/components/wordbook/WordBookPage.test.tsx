@@ -13,7 +13,7 @@ const { mockUseApp, mockUseWordBook, mockUseCharacterStats, mockUseReviewCounts 
   }),
 )
 
-vi.mock('../../state/AppContext', () => ({ useApp: mockUseApp }))
+vi.mock('../../state/AppContextDefinition', () => ({ useApp: mockUseApp }))
 vi.mock('../../hooks/useWordBook', () => ({ useWordBook: mockUseWordBook }))
 vi.mock('../../hooks/useStats', () => ({ useCharacterStats: mockUseCharacterStats }))
 vi.mock('../../hooks/useWordBookReviewCounts', () => ({
@@ -131,14 +131,30 @@ describe('WordBookPage', () => {
         .map(button => button.getAttribute('aria-label')?.replace('删除 ', ''))
     expect((sortSelect as HTMLSelectElement).value).toBe('manual')
     expect(listedCharacters()).toEqual(['山', '花', '雨', '水'])
+    const flowerInfo = screen.getByRole('group', { name: '花学习信息' })
+    expect(flowerInfo.textContent).toContain('复习 9 次')
+    expect(flowerInfo.textContent).toContain('下次复习 2026年6月8日 星期一')
+    expect(screen.queryByRole('group', { name: '雨学习信息' })).toBeNull()
 
     fireEvent.change(sortSelect, { target: { value: 'nextReview' } })
+    const directionSelect = screen.getByLabelText('排序方向') as HTMLSelectElement
+    expect(directionSelect.value).toBe('asc')
     expect(listedCharacters()).toEqual(['山', '水', '花', '雨'])
     expect(screen.queryByLabelText('拖动排序')).toBeNull()
 
+    fireEvent.change(directionSelect, { target: { value: 'desc' } })
+    expect(listedCharacters()).toEqual(['花', '水', '山', '雨'])
+
     fireEvent.change(sortSelect, { target: { value: 'reviewCount' } })
+    expect((screen.getByLabelText('排序方向') as HTMLSelectElement).value).toBe('desc')
     expect(listedCharacters()).toEqual(['花', '山', '水', '雨'])
     expect(screen.queryByLabelText('拖动排序')).toBeNull()
+
+    fireEvent.change(screen.getByLabelText('排序方向'), { target: { value: 'asc' } })
+    expect(listedCharacters()).toEqual(['山', '水', '花', '雨'])
+    fireEvent.change(sortSelect, { target: { value: 'nextReview' } })
+    expect((screen.getByLabelText('排序方向') as HTMLSelectElement).value).toBe('desc')
+    expect(listedCharacters()).toEqual(['花', '水', '山', '雨'])
 
     fireEvent.change(screen.getByLabelText('按熟悉程度筛选'), {
       target: { value: 'weak' },
