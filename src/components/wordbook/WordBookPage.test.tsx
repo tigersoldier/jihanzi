@@ -167,6 +167,7 @@ describe('WordBookPage', () => {
     expect(flowerInfo.textContent).toContain('9次·')
     expect(flowerInfo.textContent).toContain(formatReviewDueLabel('2026-06-08'))
     expect(flowerInfo.className).toContain('whitespace-nowrap')
+    expect(flowerInfo.parentElement?.className).toContain('items-center')
     expect(screen.queryByRole('group', { name: '雨学习信息' })).toBeNull()
 
     fireEvent.change(sortSelect, { target: { value: 'nextReview' } })

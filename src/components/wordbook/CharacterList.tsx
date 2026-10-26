@@ -179,7 +179,7 @@ function SortableCharItem({
       <span className="text-xs text-gray-400 w-6 text-right tabular-nums">{index + 1}.</span>
 
       {/* Character, pronunciation, and learned review information */}
-      <div className="flex min-w-0 flex-1 items-baseline gap-2">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         <span className="shrink-0 text-2xl leading-none text-gray-800">{char}</span>
         <span className="hidden shrink-0 text-xs text-gray-400 sm:inline">{pinyin}</span>
         {reviewInfo && (
