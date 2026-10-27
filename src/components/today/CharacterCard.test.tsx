@@ -39,7 +39,7 @@ describe('CharacterCard 自动隐藏', () => {
     vi.useRealTimers()
   })
 
-  it('隐藏时仍等待字体就绪，长按揭晓与冷却按时工作', () => {
+  it('自动隐藏只遮住汉字，拼音和词例仍显示，长按揭晓与冷却按时工作', () => {
     const onFontReadyChange = vi.fn()
     render(
       <CharacterCard character="草" isNew={false} autoHide onFontReadyChange={onFontReadyChange} />,
@@ -56,8 +56,10 @@ describe('CharacterCard 自动隐藏', () => {
     const hiddenContent = screen.getByText('草').closest('[aria-hidden="true"]')
     expect(hiddenContent).not.toBeNull()
     expect(hiddenContent?.classList.contains('invisible')).toBe(true)
-    expect(screen.getByText(getPinyin('草')).closest('[aria-hidden="true"]')).not.toBeNull()
-    expect(screen.getByText(maskedWords).closest('[aria-hidden="true"]')).not.toBeNull()
+    expect(screen.getByText(getPinyin('草')).closest('[aria-hidden="true"]')).toBeNull()
+    expect(screen.getByText(maskedWords).closest('[aria-hidden="true"]')).toBeNull()
+    expect(screen.getByText(getPinyin('草')).closest('button')).toBeNull()
+    expect(screen.getByText(maskedWords).closest('button')).toBeNull()
     act(() => vi.advanceTimersByTime(500))
     expect(onFontReadyChange).toHaveBeenCalledWith('草', true)
     const revealButton = screen.getByRole('button', { name: /长按显示生字/ })

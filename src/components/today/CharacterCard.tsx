@@ -79,6 +79,7 @@ export default function CharacterCard({
   }, [autoHide, cooldownUntil, isRevealed, now])
 
   const secondsUntilReveal = Math.ceil(Math.max(0, cooldownUntil - now) / 1000)
+  const isCharacterHidden = autoHide && !isRevealed
 
   const handleReveal = () => {
     const revealedAt = Date.now()
@@ -142,61 +143,63 @@ export default function CharacterCard({
           </span>
         )}
 
-        <div className="relative w-full min-h-[12.5rem] sm:min-h-[14.5rem]">
-          <div
-            aria-hidden={autoHide && !isRevealed ? true : undefined}
-            className={`w-full min-h-[12.5rem] sm:min-h-[14.5rem] flex flex-col items-center justify-center ${autoHide && !isRevealed ? 'invisible' : ''}`}
-          >
+        <div className="relative w-full min-h-[12.5rem] sm:min-h-[14.5rem] flex flex-col items-center justify-center">
+          <div className="relative flex w-full justify-center">
             {/* Character display */}
             <div className="w-32 h-32 sm:w-40 sm:h-40 flex items-center justify-center mb-4">
-              <LearningCharacter
-                character={character}
-                className="text-7xl sm:text-8xl text-gray-900 select-none"
-                onFontReadyChange={onFontReadyChange}
-              />
+              <div
+                aria-hidden={isCharacterHidden || undefined}
+                className={isCharacterHidden ? 'invisible' : ''}
+              >
+                <LearningCharacter
+                  character={character}
+                  className="text-7xl sm:text-8xl text-gray-900 select-none"
+                  onFontReadyChange={onFontReadyChange}
+                />
+              </div>
             </div>
 
-            {/* Pinyin */}
-            <p className="text-lg text-gray-500 mb-2 font-medium tracking-wide">{pinyin}</p>
-
-            {/* Example words with the current character masked */}
-            {maskedWords.length > 0 && (
-              <p className="text-sm text-gray-400">{maskedWords.join(' · ')}</p>
+            {isCharacterHidden && (
+              <button
+                type="button"
+                onClick={event => {
+                  if (event.detail === 0) handleReveal()
+                }}
+                onPointerDown={startLongPress}
+                onPointerMove={handleLongPressMove}
+                onPointerUp={cancelLongPress}
+                onPointerLeave={cancelLongPress}
+                onPointerCancel={cancelLongPress}
+                onContextMenu={event => event.preventDefault()}
+                disabled={secondsUntilReveal > 0}
+                aria-label={
+                  secondsUntilReveal > 0
+                    ? `长按显示生字，${secondsUntilReveal} 秒后可用`
+                    : '长按显示生字'
+                }
+                className="absolute inset-0 w-full flex flex-col items-center justify-center rounded-xl text-gray-500 hover:bg-gray-50 disabled:cursor-not-allowed disabled:hover:bg-transparent focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 select-none"
+              >
+                {secondsUntilReveal > 0 ? (
+                  <>
+                    <span className="text-base font-medium">生字已隐藏</span>
+                    <span className="text-sm mt-2">{secondsUntilReveal} 秒后可再次显示</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-base font-medium">长按揭晓生字</span>
+                    <span className="text-sm mt-2">按住约 0.5 秒，显示 1 秒</span>
+                  </>
+                )}
+              </button>
             )}
           </div>
 
-          {autoHide && !isRevealed && (
-            <button
-              type="button"
-              onClick={event => {
-                if (event.detail === 0) handleReveal()
-              }}
-              onPointerDown={startLongPress}
-              onPointerMove={handleLongPressMove}
-              onPointerUp={cancelLongPress}
-              onPointerLeave={cancelLongPress}
-              onPointerCancel={cancelLongPress}
-              onContextMenu={event => event.preventDefault()}
-              disabled={secondsUntilReveal > 0}
-              aria-label={
-                secondsUntilReveal > 0
-                  ? `长按显示生字，${secondsUntilReveal} 秒后可用`
-                  : '长按显示生字'
-              }
-              className="absolute inset-0 w-full min-h-[12.5rem] sm:min-h-[14.5rem] flex flex-col items-center justify-center rounded-xl text-gray-500 hover:bg-gray-50 disabled:cursor-not-allowed disabled:hover:bg-transparent focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 select-none"
-            >
-              {secondsUntilReveal > 0 ? (
-                <>
-                  <span className="text-base font-medium">生字已隐藏</span>
-                  <span className="text-sm mt-2">{secondsUntilReveal} 秒后可再次显示</span>
-                </>
-              ) : (
-                <>
-                  <span className="text-base font-medium">长按揭晓生字</span>
-                  <span className="text-sm mt-2">按住约 0.5 秒，显示 1 秒</span>
-                </>
-              )}
-            </button>
+          {/* 自动隐藏时仍显示拼音。 */}
+          <p className="text-lg text-gray-500 mb-2 font-medium tracking-wide">{pinyin}</p>
+
+          {/* 词例中的当前字替换为波浪号 */}
+          {maskedWords.length > 0 && (
+            <p className="text-sm text-gray-400">{maskedWords.join(' · ')}</p>
           )}
         </div>
 
