@@ -39,7 +39,9 @@ if (
 ) {
   throw new Error('不适龄词例过滤规则格式不符合预期')
 }
-const isUnsuitableWord = word => unsuitableTerms.some(term => word.includes(term))
+const safeWordExampleExceptions = new Set(['高潮迭起', '放荡不羁', '杀手锏'])
+const isUnsuitableWord = word =>
+  !safeWordExampleExceptions.has(word) && unsuitableTerms.some(term => word.includes(term))
 const subtlexCharacters = new Set(Object.keys(subtlexExamples))
 const rows = source.split(/\r?\n/).filter(line => line.trim() && !line.trimStart().startsWith('#'))
 const examplesByCharacter = Object.create(null)

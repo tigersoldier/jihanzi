@@ -39,7 +39,9 @@ if (
 ) {
   throw new Error('不适龄词例过滤规则格式不符合预期')
 }
-const isUnsuitableWord = word => unsuitableTerms.some(term => word.includes(term))
+const safeWordExampleExceptions = new Set(['高潮迭起', '放荡不羁', '杀手锏'])
+const isUnsuitableWord = word =>
+  !safeWordExampleExceptions.has(word) && unsuitableTerms.some(term => word.includes(term))
 const lines = text.split(/\r?\n/)
 const headers = lines[2]?.split('\t')
 if (!headers) throw new Error('词频文件缺少表头')

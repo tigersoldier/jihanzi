@@ -6,7 +6,10 @@ import MTEH_WORD_EXAMPLES from './mtehWordExamples.json'
 import UNSUITABLE_WORD_EXAMPLE_TERMS from '../../scripts/word-example-safety-terms.json'
 import type { WordBook } from '../core/types'
 
+const SAFE_WORD_EXAMPLE_EXCEPTIONS = new Set(['高潮迭起', '放荡不羁', '杀手锏'])
+
 const isUnsuitableWordExample = (word: string): boolean =>
+  !SAFE_WORD_EXAMPLE_EXCEPTIONS.has(word) &&
   UNSUITABLE_WORD_EXAMPLE_TERMS.some(term => word.includes(term))
 
 describe('isChineseChar', () => {
@@ -178,8 +181,68 @@ describe('getCharInfo / getPinyin / getWords', () => {
     expect([...characters].flatMap(getWords).every(word => !isUnsuitableWordExample(word))).toBe(
       true,
     )
+    expect(isUnsuitableWordExample('高潮')).toBe(true)
+    expect(isUnsuitableWordExample('高潮迭起')).toBe(false)
+    expect(isUnsuitableWordExample('放荡')).toBe(true)
+    expect(isUnsuitableWordExample('放荡不羁')).toBe(false)
+    expect(isUnsuitableWordExample('杀手')).toBe(true)
+    expect(isUnsuitableWordExample('杀手锏')).toBe(false)
     expect(getWords('他')).not.toContain('他妈的')
+    expect(getWords('妇')).not.toContain('荡妇')
+    expect(getWords('妇')).toContain('妇女')
+    expect(getWords('性')).not.toContain('性感')
+    expect(getWords('性')).toContain('同性恋')
+    expect(getWords('尤')).not.toContain('尤物')
+    expect(getWords('艳')).not.toContain('艳福')
+    expect(getWords('潮')).not.toContain('高潮')
+    expect(getWords('迭')).toContain('高潮迭起')
+    expect(getWords('荡')).not.toContain('放荡')
+    expect(getWords('羁')).toContain('放荡不羁')
+    expect(getWords('血')).toContain('血迹')
+    expect(getWords('暴')).toContain('暴力')
+    expect(getWords('架')).toContain('打架')
+    expect(getWords('笨')).toContain('笨蛋')
+    expect(getWords('傻')).toContain('傻瓜')
+    expect(getWords('爆')).toContain('爆炸')
+    expect(getWords('窥')).toContain('偷窥')
+    expect(getWords('妩')).toContain('妩媚')
+    expect(getWords('娆')).toContain('妖娆妩媚')
+    expect(getWords('刎')).toContain('刎颈之交')
     expect(getWords('奸').every(word => !isUnsuitableWordExample(word))).toBe(true)
+    expect(getWords('锏')).toContain('杀手锏')
+
+    const newlyFilteredWords = [
+      '傻子',
+      '蠢货',
+      '杀害',
+      '杀死',
+      '杀一儆百',
+      '暗杀',
+      '凶手',
+      '击毙',
+      '炸弹',
+      '纵火',
+      '厮杀',
+      '袭击',
+      '绑架',
+      '绑匪',
+      '劫持',
+      '枪击',
+      '狙击',
+      '殴打',
+      '鞭打',
+      '鞭挞',
+      '鞭挞船员',
+      '拷问',
+      '虐待',
+      '死尸',
+      '血雨腥风',
+      '遍体鳞伤',
+    ]
+    for (const word of newlyFilteredWords) {
+      expect(isUnsuitableWordExample(word)).toBe(true)
+      for (const character of word) expect(getWords(character)).not.toContain(word)
+    }
   })
 
   it('MteH 提示索引为 SUBTLEX 未覆盖的汉字补充例词', () => {
