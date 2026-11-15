@@ -34,9 +34,14 @@ vi.mock('../utils/date', async () => {
 
 // Mock DB functions for sync-driven checkAndMarkDone tests.
 // Default: no reviews, no last study day → works like before for existing tests.
-const { mockGetReviewsForChildOnDay, mockGetLastStudyDayForChild } = vi.hoisted(() => ({
+const {
+  mockGetReviewsForChildOnDay,
+  mockGetLastStudyDayForChild,
+  mockGetPresentCharsForChildOnDay,
+} = vi.hoisted(() => ({
   mockGetReviewsForChildOnDay: vi.fn().mockResolvedValue([]),
   mockGetLastStudyDayForChild: vi.fn().mockResolvedValue(undefined),
+  mockGetPresentCharsForChildOnDay: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('../data/db', async () => {
@@ -45,6 +50,7 @@ vi.mock('../data/db', async () => {
     ...actual,
     getReviewsForChildOnDay: mockGetReviewsForChildOnDay,
     getLastStudyDayForChild: mockGetLastStudyDayForChild,
+    getPresentCharsForChildOnDay: mockGetPresentCharsForChildOnDay,
   }
 })
 
@@ -196,6 +202,7 @@ describe('useToday', () => {
     mockInitialSyncPending.mockReturnValue(false)
     mockGetReviewsForChildOnDay.mockResolvedValue([])
     mockGetLastStudyDayForChild.mockResolvedValue(undefined)
+    mockGetPresentCharsForChildOnDay.mockResolvedValue([])
   })
 
   it('刷新页面后恢复复习进度', async () => {
@@ -1090,6 +1097,167 @@ describe('useToday', () => {
     SyncWrapper.displayName = 'SyncWrapper'
     return SyncWrapper
   }
+
+  function reviewLog(character: string) {
+    return {
+      timestamp: 1000000,
+      type: 'review' as const,
+      childId: 'child_1',
+      character,
+      grade: 'a' as const,
+      round: 1,
+      dayKey: '2026-01-01',
+    }
+  }
+
+  function sm2State(overrides: Partial<SM2State> = {}): SM2State {
+    return {
+      ease: 2.5,
+      interval: 1,
+      repetitions: 1,
+      nextReview: '2026-01-02',
+      lastGrade: 'a',
+      firstReviewDay: '2026-01-01',
+      ...overrides,
+    }
+  }
+
+  it('换设备后只完成了部分任务 → 不标记完成，仍可继续学', async () => {
+    // Given: 今天展示过 甲、乙（present_chars），但只评过旧字 碰
+    mockGetReviewsForChildOnDay.mockResolvedValue([reviewLog('碰')])
+    mockGetPresentCharsForChildOnDay.mockResolvedValue(['甲', '乙'])
+    mockGetLastStudyDayForChild.mockResolvedValue('2025-12-31')
+
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 1,
+          progress: { 碰: sm2State({ firstReviewDay: '2025-12-30' }) },
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: ['碰', '甲', '乙'] }],
+    })
+    const { result } = renderHook(() => useToday(), { wrapper: createSyncWrapper(state) })
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    })
+
+    expect(result.current.doneToday).toBe(false)
+    expect(result.current.isReady).toBe(true)
+    expect(result.current.todayNewChars).toEqual(['甲', '乙'])
+  })
+
+  it('换设备后今天展示的新字都已评过 → 标记完成', async () => {
+    mockGetReviewsForChildOnDay.mockResolvedValue([
+      reviewLog('碰'),
+      reviewLog('甲'),
+      reviewLog('乙'),
+    ])
+    mockGetPresentCharsForChildOnDay.mockResolvedValue(['甲', '乙'])
+    mockGetLastStudyDayForChild.mockResolvedValue('2025-12-31')
+
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 3,
+          progress: {
+            碰: sm2State({ firstReviewDay: '2025-12-30' }),
+            甲: sm2State(),
+            乙: sm2State(),
+          },
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: ['碰', '甲', '乙'] }],
+    })
+    const { result } = renderHook(() => useToday(), { wrapper: createSyncWrapper(state) })
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    })
+
+    expect(result.current.doneToday).toBe(true)
+  })
+
+  it('今天仍有到期旧字 → 不标记完成', async () => {
+    mockGetReviewsForChildOnDay.mockResolvedValue([reviewLog('甲')])
+    mockGetPresentCharsForChildOnDay.mockResolvedValue(['甲'])
+    mockGetLastStudyDayForChild.mockResolvedValue('2025-12-31')
+
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 1,
+          progress: {
+            甲: sm2State(),
+            山: sm2State({ firstReviewDay: '2025-12-30', nextReview: '2026-01-01' }),
+          },
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: ['甲', '乙', '丙'] }],
+    })
+    const { result } = renderHook(() => useToday(), { wrapper: createSyncWrapper(state) })
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    })
+
+    expect(result.current.doneToday).toBe(false)
+  })
+
+  it('刷新时先恢复会话：不标记今日完成，也不清掉保存的会话', async () => {
+    // Given: 今天已有部分日志（碰 已评），且 localStorage 里有进行中的会话
+    mockGetReviewsForChildOnDay.mockResolvedValue([reviewLog('碰')])
+    mockGetPresentCharsForChildOnDay.mockResolvedValue(['甲', '乙'])
+    const savedSession = {
+      childId: 'child_1',
+      dayKey: '2026-01-01',
+      phase: 'reviewing',
+      taskIndex: 0,
+      round: 1,
+      sessionTasks: [
+        { character: '碰', pinyin: '', words: [], isNew: false, isReview: true },
+        { character: '甲', pinyin: '', words: [], isNew: true, isReview: false },
+        { character: '乙', pinyin: '', words: [], isNew: true, isReview: false },
+      ],
+      sessionReviews: [reviewLog('碰')],
+      sessionStats: { a: 1, b: 0, c: 0, d: 0 },
+      queuedReviewTasks: [],
+    }
+    localStorageStore.set('jihanzi_session_child_1_2026-01-01', JSON.stringify(savedSession))
+
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 1,
+          progress: { 碰: sm2State({ firstReviewDay: '2025-12-30' }) },
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: ['碰', '甲', '乙'] }],
+    })
+    const { result } = renderHook(() => useToday(), { wrapper: createSyncWrapper(state) })
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 120))
+    })
+
+    expect(result.current.phase).toBe('reviewing')
+    expect(result.current.doneToday).toBe(false)
+    expect(localStorageStore.get('jihanzi_done_child_1_2026-01-01')).toBeUndefined()
+    expect(localStorageStore.get('jihanzi_session_child_1_2026-01-01')).toBeDefined()
+  })
 
   it('sync 后 IndexedDB 有今日复习日志 → doneToday 自动标记为 true', async () => {
     mockGetReviewsForChildOnDay.mockResolvedValue([

@@ -97,6 +97,7 @@ import db, {
   getReviewsForChildCharPaginated,
   getReviewCountsForChild,
   getLastStudyDayForChild,
+  getPresentCharsForChildOnDay,
   backfillReviewCounts,
   pruneOldestLogs,
   dedupeLocalLogs,
@@ -550,6 +551,53 @@ describe('getReviewsForChild', () => {
     })
 
     await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 501 })
+  })
+})
+
+describe('getPresentCharsForChildOnDay', () => {
+  beforeEach(async () => {
+    await db.logs.clear()
+  })
+
+  it('汇总当天 present_chars 的全部字符，忽略其它日期和其它孩子', async () => {
+    await db.logs.bulkAdd([
+      {
+        timestamp: 1,
+        type: 'present_chars',
+        childId: 'child_a',
+        characters: ['甲', '乙'],
+        dayKey: '2026-11-15',
+      } as AnyLogEntry,
+      {
+        timestamp: 2,
+        type: 'present_chars',
+        childId: 'child_a',
+        characters: ['乙', '丙'],
+        dayKey: '2026-11-15',
+      } as AnyLogEntry,
+      {
+        timestamp: 3,
+        type: 'present_chars',
+        childId: 'child_a',
+        characters: ['丁'],
+        dayKey: '2026-11-16',
+      } as AnyLogEntry,
+      {
+        timestamp: 4,
+        type: 'present_chars',
+        childId: 'child_b',
+        characters: ['戊'],
+        dayKey: '2026-11-15',
+      } as AnyLogEntry,
+      makeReviewEntry({ childId: 'child_a', character: '碰', dayKey: '2026-11-15', timestamp: 5 }),
+    ])
+
+    const characters = await getPresentCharsForChildOnDay('child_a', '2026-11-15')
+    expect(characters.sort()).toEqual(['丙', '乙', '甲'])
+  })
+
+  it('没有展示日志时返回空数组', async () => {
+    await expect(getPresentCharsForChildOnDay('child_a', '2026-11-15')).resolves.toEqual([])
   })
 })
 

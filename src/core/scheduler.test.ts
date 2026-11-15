@@ -9,7 +9,13 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { generateTodayTasks, getChildStats, getEffectiveDayType, resolveDayType } from './scheduler'
+import {
+  generateTodayTasks,
+  getChildStats,
+  getEffectiveDayType,
+  isDayComplete,
+  resolveDayType,
+} from './scheduler'
 import type { AppState, Child, SM2State } from './types'
 
 function makeState(overrides?: Partial<AppState>): AppState {
@@ -323,5 +329,93 @@ describe('resolveDayType', () => {
     expect(
       resolveDayType({ previousStudyDay: '2026-01-01', progress, hasUnlearnedChars: false }),
     ).toBe('review')
+  })
+})
+
+describe('isDayComplete', () => {
+  function state(entries: Record<string, Partial<SM2State>> = {}): Record<string, SM2State> {
+    const result: Record<string, SM2State> = {}
+    for (const [char, partial] of Object.entries(entries)) {
+      result[char] = {
+        ease: 2.5,
+        interval: 1,
+        repetitions: 1,
+        nextReview: '2026-01-02',
+        lastGrade: 'a',
+        firstReviewDay: '2026-01-01',
+        ...partial,
+      }
+    }
+    return result
+  }
+
+  const base = { todayKey: '2026-01-01', dailyReviewLimit: 30 }
+
+  it('今天展示的新字都已评过、没有到期字 → 完成', () => {
+    expect(
+      isDayComplete({
+        ...base,
+        progress: state({
+          一: { firstReviewDay: '2026-01-01' },
+          二: { firstReviewDay: '2026-01-01' },
+        }),
+        reviewedToday: ['一', '二'],
+        presentedToday: ['一', '二'],
+      }),
+    ).toBe(true)
+  })
+
+  it('今天展示的新字还有没评的 → 未完成', () => {
+    expect(
+      isDayComplete({
+        ...base,
+        progress: state({ 一: { firstReviewDay: '2026-01-01' } }),
+        reviewedToday: ['一'],
+        presentedToday: ['一', '二'],
+      }),
+    ).toBe(false)
+  })
+
+  it('仍有到期旧字且没到每日上限 → 未完成', () => {
+    expect(
+      isDayComplete({
+        ...base,
+        progress: state({ 山: { firstReviewDay: '2025-12-31', nextReview: '2026-01-01' } }),
+        reviewedToday: [],
+        presentedToday: [],
+      }),
+    ).toBe(false)
+  })
+
+  it('到期旧字仍有、但今天的复习已达每日上限 → 完成（其余按调度结转次日）', () => {
+    expect(
+      isDayComplete({
+        ...base,
+        dailyReviewLimit: 1,
+        progress: state({
+          水: { firstReviewDay: '2025-12-31' },
+          山: { firstReviewDay: '2025-12-31', nextReview: '2026-01-01' },
+        }),
+        reviewedToday: ['水'],
+        presentedToday: [],
+      }),
+    ).toBe(true)
+  })
+
+  it('旧版本没有 present_chars：有今天的首轮评级即视为完成', () => {
+    expect(
+      isDayComplete({
+        ...base,
+        progress: state({ 一: { firstReviewDay: '2026-01-01' } }),
+        reviewedToday: ['一'],
+        presentedToday: [],
+      }),
+    ).toBe(true)
+  })
+
+  it('没有首轮评级 → 未完成', () => {
+    expect(isDayComplete({ ...base, progress: {}, reviewedToday: [], presentedToday: [] })).toBe(
+      false,
+    )
   })
 })

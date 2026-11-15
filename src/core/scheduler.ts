@@ -56,6 +56,41 @@ export function resolveDayType({
 }
 
 /**
+ * 当天是否真的完成（用于「今日已完成」与月历是否显示今天）。
+ *
+ * - 旧字：今天已没有到期字，或今天的复习已达每日上限（其余按调度结算到次日）
+ * - 新字：今天展示过（present_chars）的新字都已评过
+ * - 兼容旧版本日志：没有 present_chars 时，退化为「今天有首轮评级即完成」
+ */
+export function isDayComplete({
+  progress,
+  todayKey,
+  reviewedToday,
+  presentedToday,
+  dailyReviewLimit,
+}: {
+  progress: Record<string, SM2State>
+  todayKey: string
+  /** 今天首轮评级过的字 */
+  reviewedToday: string[]
+  /** 今天展示过的新字（present_chars） */
+  presentedToday: string[]
+  dailyReviewLimit: number
+}): boolean {
+  const dueNow = Object.values(progress).filter(state => state.nextReview <= todayKey).length
+  const ratedOld = reviewedToday.filter(
+    character => progress[character]?.firstReviewDay !== todayKey,
+  ).length
+  if (dueNow > 0 && ratedOld < dailyReviewLimit) return false
+
+  if (presentedToday.length > 0) {
+    return presentedToday.every(character => progress[character]?.firstReviewDay === todayKey)
+  }
+  // 旧版本客户端不写 present_chars：有今天的首轮评级即视为完成
+  return reviewedToday.length > 0
+}
+
+/**
  * Generate today's task queue for a specific child.
  *
  * Review characters come first (sorted by due date, then by ease),

@@ -2,9 +2,13 @@ import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import type { TaskItem, Grade, ReviewEntry, DayType } from '../core/types'
 import { useApp } from '../state/AppContextDefinition'
 import { useSync } from '../state/SyncContextDefinition'
-import { generateTodayTasks, resolveDayType } from '../core/scheduler'
+import { generateTodayTasks, isDayComplete, resolveDayType } from '../core/scheduler'
 import { todayKey as getTodayKey, addDays, getDayTypeLabel, formatDateLabel } from '../utils/date'
-import { getReviewsForChildOnDay, getLastStudyDayForChild } from '../data/db'
+import {
+  getLastStudyDayForChild,
+  getPresentCharsForChildOnDay,
+  getReviewsForChildOnDay,
+} from '../data/db'
 import { isDayDone, markDayDone, useDayDone } from './useDayDone'
 
 export type SessionPhase = 'idle' | 'presenting' | 'reviewing' | 'roundComplete' | 'celebration'
@@ -237,6 +241,10 @@ export function useToday(): UseTodayReturn {
   // Track whether we've already attempted session restoration from
   // localStorage (runs once after IndexedDB state is loaded).
   const didRestore = useRef(false)
+  // 恢复尝试是否结束、以及本次是否恢复出了会话——同步完成检查必须等它结束，
+  // 且不能把恢复出来的会话当成「今天已完成」清掉。
+  const [restoreDone, setRestoreDone] = useState(false)
+  const restoredSessionRef = useRef(false)
 
   // Restore saved session after IndexedDB state is loaded (page refresh).
   // Runs when state.children becomes non-empty (i.e. after AppContext
@@ -256,6 +264,8 @@ export function useToday(): UseTodayReturn {
       const saved = loadSession(childId, todayKey)
       if (saved && saved.dayKey === todayKey && saved.phase !== 'idle') {
         didRestore.current = true
+        restoredSessionRef.current = true
+        setRestoreDone(true)
         setPhase(saved.phase)
         setTaskIndex(saved.taskIndex)
         setRound(saved.round)
@@ -270,6 +280,7 @@ export function useToday(): UseTodayReturn {
 
     // Mark as done so we don't keep trying on every render
     didRestore.current = true
+    setRestoreDone(true)
   }, [state.children, selectedChildId, todayKey, setSelectedChildId])
 
   // Persist session state to localStorage whenever it changes.
@@ -304,25 +315,36 @@ export function useToday(): UseTodayReturn {
   // ---- Sync-driven doneToday check ----
 
   /**
-   * 同步拉取到远程学习日志后，检查当日是否已有学习记录。
-   * 有当日 round-1 日志 → 标记 doneToday。
-   * 仅在 idle 态执行，不打断进行中的学习会话。
+   * 检查当天是否已经真的完成（换设备/清过站点数据时没有本地会话）。
+   * 完成判定见 isDayComplete：到期字清零或达上限，且今天展示的新字都已评过。
+   * 未完成时什么都不做——保留「开始学习」，剩余任务可以继续完成。
    */
   async function checkAndMarkDone(childId: string, dayKey: string) {
     try {
-      const reviews = await getReviewsForChildOnDay(childId, dayKey)
-      if (reviews.length > 0) {
-        clearSession(childId, dayKey)
-        markDayDone(childId, dayKey)
-      }
+      const [reviews, presented] = await Promise.all([
+        getReviewsForChildOnDay(childId, dayKey),
+        getPresentCharsForChildOnDay(childId, dayKey),
+      ])
+      if (reviews.length === 0) return
+      const child = state.children.find(c => c.id === childId)
+      const complete = isDayComplete({
+        progress: child?.progress ?? {},
+        todayKey: dayKey,
+        reviewedToday: reviews.map(review => review.character),
+        presentedToday: presented,
+        dailyReviewLimit: state.settings.dailyReviewLimit,
+      })
+      if (complete) markDayDone(childId, dayKey)
     } catch {
       // IndexedDB 查询可能失败（如登出期间）——静默忽略
     }
   }
 
-  // 每次同步合并数据后（dataVersion 递增）检查当日是否已有学习记录
+  // 每次同步合并数据后（dataVersion 递增）检查当天是否已完成。
+  // 必须等会话恢复尝试结束：否则会在恢复同一份会话的同时把它清掉。
   useEffect(() => {
-    if (phase !== 'idle') return
+    if (!restoreDone || phase !== 'idle') return
+    if (restoredSessionRef.current) return
     if (state.children.length === 0) return
 
     const childId = selectedChildId || state.children[0]?.id
@@ -332,7 +354,7 @@ export function useToday(): UseTodayReturn {
     if (isDayDone(childId, todayKey)) return
 
     checkAndMarkDone(childId, todayKey)
-  }, [phase, state, selectedChildId, todayKey, dataVersion])
+  }, [restoreDone, phase, state, selectedChildId, todayKey, dataVersion])
 
   // Get available children
   const children = useMemo(() => {

@@ -8,7 +8,7 @@
  */
 
 import Dexie, { type Table } from 'dexie'
-import type { AnyLogEntry, AppState, ReviewEntry, Snapshot } from '../core/types'
+import type { AnyLogEntry, AppState, PresentCharsEntry, ReviewEntry, Snapshot } from '../core/types'
 import { DEFAULT_SETTINGS } from '../core/types'
 import { applyEntry } from '../core/log'
 import { getProficiency } from '../core/proficiency'
@@ -1455,6 +1455,24 @@ export async function getReviewsForChildOnDay(
     .filter(e => e.type === 'review' && (e as ReviewEntry).round === 1)
     .toArray()
     .then(filterReviews)
+}
+
+/** Get the characters presented (present_chars) for a child on a specific day. */
+export async function getPresentCharsForChildOnDay(
+  childId: string,
+  dayKey: string,
+): Promise<string[]> {
+  const entries = await db.logs
+    .where({ childId, dayKey })
+    .filter(e => e.type === 'present_chars')
+    .toArray()
+  const characters = new Set<string>()
+  for (const entry of entries) {
+    for (const character of (entry as PresentCharsEntry).characters ?? []) {
+      characters.add(character)
+    }
+  }
+  return [...characters]
 }
 
 /**
