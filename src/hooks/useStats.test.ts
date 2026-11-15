@@ -23,7 +23,7 @@ vi.mock('../data/db', async () => {
   }
 })
 
-import { useHistory, useCharacterStats } from './useStats'
+import { useHistory, useCharacterStats, visibleHistoryDays } from './useStats'
 
 const SM2_A: SM2State = {
   ease: 2.5,
@@ -358,5 +358,88 @@ describe('useCharacterStats', () => {
     await vi.waitFor(() => {
       expect(result.current.latestGrade).toBe('d')
     })
+  })
+})
+
+describe('visibleHistoryDays', () => {
+  const days = [{ dayKey: '2026-06-02' }, { dayKey: '2026-06-01' }] as unknown as Parameters<
+    typeof visibleHistoryDays
+  >[0]
+
+  it('当月今天未完成 → 隐藏今天，其它日子保留', () => {
+    const result = visibleHistoryDays(days, {
+      todayKey: '2026-06-02',
+      doneToday: false,
+      isCurrentMonth: true,
+    })
+    expect(result.map(d => d.dayKey)).toEqual(['2026-06-01'])
+  })
+
+  it('当月今天已完成 → 今天出现在列表里', () => {
+    const result = visibleHistoryDays(days, {
+      todayKey: '2026-06-02',
+      doneToday: true,
+      isCurrentMonth: true,
+    })
+    expect(result.map(d => d.dayKey)).toEqual(['2026-06-02', '2026-06-01'])
+  })
+
+  it('查看历史月份时不隐藏任何日子', () => {
+    const result = visibleHistoryDays(days, {
+      todayKey: '2026-06-02',
+      doneToday: false,
+      isCurrentMonth: false,
+    })
+    expect(result).toHaveLength(2)
+  })
+})
+
+describe('useHistory 同日重复首轮评级', () => {
+  function reviewEntry(character: string, dayKey: string, timestamp: number, grade: string) {
+    return { timestamp, type: 'review', childId: 'child_1', character, grade, round: 1, dayKey }
+  }
+
+  it('同一字同日只取最早一条评级，stats 与总字数一致', async () => {
+    vi.mocked(db.getReviewsForChildInRange).mockResolvedValue([
+      reviewEntry('碰', '2026-06-01', 10, 'a'),
+      reviewEntry('碰', '2026-06-01', 20, 'd'), // 多设备/重复提交留下的重复条目
+      reviewEntry('节', '2026-06-01', 11, 'b'),
+    ] as never)
+
+    const { result } = renderHook(() => useHistory('child_1', '2026-06'), {
+      wrapper: ({ children }: { children: ReactNode }) => {
+        const ctx: AppContextState = {
+          state: makeState(),
+          loading: false,
+          dataVersion: 0,
+          selectedChildId: 'child_1',
+          setSelectedChildId: vi.fn(),
+          reloadState: vi.fn(),
+          createChild: vi.fn() as any,
+          updateChild: vi.fn() as any,
+          deleteChild: vi.fn() as any,
+          createWordBook: vi.fn() as any,
+          updateWordBook: vi.fn() as any,
+          deleteWordBook: vi.fn() as any,
+          addCharacter: vi.fn() as any,
+          removeCharacter: vi.fn() as any,
+          reorderCharacters: vi.fn() as any,
+          submitReview: vi.fn() as any,
+          updateSettings: vi.fn() as any,
+          getLogEntries: vi.fn() as any,
+          bulkImport: vi.fn() as any,
+        }
+        return React.createElement(AppContext.Provider, { value: ctx }, children)
+      },
+    })
+
+    await vi.waitFor(() => {
+      expect(result.current.days).toHaveLength(1)
+    })
+    const day = result.current.days[0]
+    expect(day.totalCount).toBe(2)
+    expect(day.stats.a + day.stats.b + day.stats.c + day.stats.d).toBe(2)
+    expect(day.reviewChars.find(c => c.character === '碰')?.grade).toBe('a')
+    expect(day.reviewChars.find(c => c.character === '节')?.grade).toBe('b')
   })
 })

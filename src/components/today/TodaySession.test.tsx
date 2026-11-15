@@ -136,14 +136,41 @@ describe('TodaySession', () => {
   })
 
   it('shows after-session preview with tomorrow tasks when day is done', async () => {
+    // 生字本已全部学完（nextCharIndex 到末尾），且明天无到期复习字
+    // → 明日预览无任务，显示空状态提示
     const state = makeState({
       children: [
         {
           id: 'child_1',
           name: '小明',
           wordBookId: 'wb_1',
-          nextCharIndex: 0,
-          progress: {},
+          nextCharIndex: 3,
+          progress: {
+            一: {
+              ease: 2.5,
+              interval: 10,
+              repetitions: 3,
+              nextReview: '2026-02-01',
+              lastGrade: 'a',
+              firstReviewDay: '2025-12-20',
+            },
+            二: {
+              ease: 2.5,
+              interval: 10,
+              repetitions: 3,
+              nextReview: '2026-02-01',
+              lastGrade: 'a',
+              firstReviewDay: '2025-12-20',
+            },
+            三: {
+              ease: 2.5,
+              interval: 10,
+              repetitions: 3,
+              nextReview: '2026-02-01',
+              lastGrade: 'a',
+              firstReviewDay: '2025-12-20',
+            },
+          },
         },
       ],
       wordBooks: [
@@ -164,7 +191,7 @@ describe('TodaySession', () => {
     await waitFor(() => {
       expect(screen.getByText('今日已完成')).toBeDefined()
     })
-    // 明天是纯复习日且无到期任务 → 显示空状态提示（不显示日类型标签）
+    // 明天无新字、无到期复习 → 显示空状态提示（不显示日类型标签）
     expect(screen.getByText('明天没有需要复习或学习的字')).toBeDefined()
   })
 
@@ -365,6 +392,38 @@ describe('TodaySession 朗读提醒联动', () => {
     )
     fireEvent.click(screen.getByText('开始复习')) // 进入复习
   }
+
+  it('会话中进度条下列出本轮已复习字，按评级上色并更新计数', async () => {
+    render(<TodaySession />, { wrapper: wrapperWith(learnState(), 'child_1') })
+
+    await waitFor(() => expect(screen.getByText('开始学习')).toBeDefined())
+    // 进入复习前没有「本轮已复习」区块
+    expect(screen.queryByText('本轮已复习')).toBeNull()
+
+    fireEvent.click(screen.getByText('开始学习'))
+    await presentAllAndStartReview()
+
+    await screen.findByText('一')
+    expect(screen.queryByText('本轮已复习')).toBeNull()
+    fireEvent.click(screen.getByText('完全掌握'))
+    await screen.findByText('二')
+
+    // 评完「一」→ 出现列表：字符 + 评级符号 + 计数
+    await waitFor(() => expect(screen.getByText('本轮已复习')).toBeDefined())
+    expect(screen.getByText('1 / 3')).toBeDefined()
+    const chip = screen.getByText('一').closest('span')
+    expect(chip?.className).toContain('bg-green-100')
+    expect(chip?.textContent).toContain('✓')
+
+    fireEvent.click(screen.getByText('完全掌握'))
+    await screen.findByText('三')
+    await waitFor(() => expect(screen.getByText('2 / 3')).toBeDefined())
+    fireEvent.click(screen.getByText('完全掌握'))
+
+    // 本轮结束：会话卡片被「轮次完成」替代
+    await waitFor(() => expect(screen.getByText('第 1 轮完成')).toBeDefined())
+    expect(screen.queryByText('本轮已复习')).toBeNull()
+  })
 
   it('全部掌握：轮次完成提醒读本轮 3 个字，庆祝提醒读全部字', async () => {
     render(<TodaySession />, { wrapper: wrapperWith(learnState(), 'child_1') })

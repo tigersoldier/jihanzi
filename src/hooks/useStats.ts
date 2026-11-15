@@ -193,6 +193,18 @@ function currentYearMonth(): string {
   return new Date().toISOString().slice(0, 7)
 }
 
+/**
+ * 月历要展示的日子：当月未完成前不显示今天——历史列表只放已成定论的日子，
+ * 会话进行中的今天交给会话页的「本轮已复习」列表。
+ */
+export function visibleHistoryDays(
+  days: DaySummary[],
+  params: { todayKey: string; doneToday: boolean; isCurrentMonth: boolean },
+): DaySummary[] {
+  if (!params.isCurrentMonth || params.doneToday) return days
+  return days.filter(day => day.dayKey !== params.todayKey)
+}
+
 export function useHistory(childId: string, yearMonth: string): MonthHistory {
   const { state, dataVersion } = useApp()
   const [days, setDays] = useState<DaySummary[]>([])
@@ -249,17 +261,22 @@ export function useHistory(childId: string, yearMonth: string): MonthHistory {
         const reviewChars: DaySummary['reviewChars'] = []
         const stats = { a: 0, b: 0, c: 0, d: 0 }
 
-        // Collect round 1 grades per character for this day
-        const charRound1 = new Map<string, Grade>()
+        // 同一字同一天的首轮评级只取最早一条（与学习统计的投影口径一致），
+        // 多设备/重复提交留下的重复条目不会把同一字算两次。
+        const charRound1 = new Map<string, { grade: Grade; timestamp: number }>()
         for (const entry of dayEntries) {
-          if (entry.round === 1) {
-            charRound1.set(entry.character, entry.grade)
-            stats[entry.grade as keyof typeof stats]++
+          if (entry.round !== 1) continue
+          const current = charRound1.get(entry.character)
+          if (!current || entry.timestamp < current.timestamp) {
+            charRound1.set(entry.character, { grade: entry.grade, timestamp: entry.timestamp })
           }
+        }
+        for (const { grade } of charRound1.values()) {
+          stats[grade as keyof typeof stats]++
         }
 
         // Classify new vs review using firstReviewDay from snapshot
-        for (const [character, grade] of charRound1) {
+        for (const [character, { grade }] of charRound1) {
           const sm2 = child?.progress[character]
           if (sm2?.firstReviewDay === dayKey) {
             newChars.push({ character, grade })

@@ -2,9 +2,10 @@ import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import type { TaskItem, Grade, ReviewEntry, DayType } from '../core/types'
 import { useApp } from '../state/AppContextDefinition'
 import { useSync } from '../state/SyncContextDefinition'
-import { generateTodayTasks, getEffectiveDayType } from '../core/scheduler'
+import { generateTodayTasks, resolveDayType } from '../core/scheduler'
 import { todayKey as getTodayKey, addDays, getDayTypeLabel, formatDateLabel } from '../utils/date'
 import { getReviewsForChildOnDay, getLastStudyDayForChild } from '../data/db'
+import { isDayDone, markDayDone, useDayDone } from './useDayDone'
 
 export type SessionPhase = 'idle' | 'presenting' | 'reviewing' | 'roundComplete' | 'celebration'
 
@@ -20,7 +21,9 @@ export interface DayTypeInfo {
   dayType: DayType
   dayTypeLabel: string
   dateLabel: string
-  /** 从日志推导的日类型，null=加载中 */
+  /** 生字本里是否还有未学字（学完了就只有复习，没有学新日） */
+  hasUnlearnedChars: boolean
+  /** 解析后的今日日类型（含「学完了 → 纯复习日」），null=加载中 */
   effectiveDayType: DayType | null
   /** IndexedDB 查询是否仍在进行 */
   dayTypeLoading: boolean
@@ -35,9 +38,17 @@ export function useDayType(): DayTypeInfo {
   const { state, selectedChildId, dataVersion } = useApp()
   const todayKey = getTodayKey()
 
-  const [effectiveDayType, setEffectiveDayType] = useState<DayType | null>(null)
+  // 严格早于今天的最近学习日（交替节奏的输入）
+  const [previousStudyDay, setPreviousStudyDay] = useState<string | undefined>(undefined)
+  const [dayTypeResolved, setDayTypeResolved] = useState(false)
   const [dayTypeLoading, setDayTypeLoading] = useState(true)
   const dayTypeResolvedRef = useRef<string | null>(null)
+
+  const child = state.children.find(c => c.id === selectedChildId)
+  const wordBook = child ? state.wordBooks.find(w => w.id === child.wordBookId) : undefined
+  const hasUnlearnedChars = Boolean(
+    child && wordBook && child.nextCharIndex < wordBook.characters.length,
+  )
 
   useEffect(() => {
     // 没有选中孩子或状态尚未加载 → 不算 loading（没有查询可做）
@@ -52,20 +63,32 @@ export function useDayType(): DayTypeInfo {
     }
 
     setDayTypeLoading(true)
-    getLastStudyDayForChild(selectedChildId)
+    // 只取「今天之前」的最近学习日：今天学完新字后，今天自身的日志会变成
+    // 最近学习日，用它推导今日日类型会得到明天的类型（学新日 → 纯复习日）。
+    getLastStudyDayForChild(selectedChildId, todayKey)
       .then(lastStudyDay => {
         const child = state.children.find(c => c.id === selectedChildId)
         if (!child) return
-        const dt = getEffectiveDayType(lastStudyDay, child.progress)
-        setEffectiveDayType(dt)
+        setPreviousStudyDay(lastStudyDay)
+        setDayTypeResolved(true)
         dayTypeResolvedRef.current = cacheKey
         setDayTypeLoading(false)
       })
       .catch(() => {
-        setEffectiveDayType(null)
+        setDayTypeResolved(false)
         setDayTypeLoading(false)
       })
   }, [selectedChildId, todayKey, state.children, dataVersion])
+
+  // 解析放在渲染期：生字本是否还有未学字会影响标签，
+  // 家长在会话结束后新增生字时无需重查 IndexedDB 也能立即更新。
+  const effectiveDayType: DayType | null = dayTypeResolved
+    ? resolveDayType({
+        previousStudyDay,
+        progress: child?.progress ?? {},
+        hasUnlearnedChars,
+      })
+    : null
 
   const dayType: DayType = effectiveDayType ?? 'learn'
 
@@ -73,6 +96,7 @@ export function useDayType(): DayTypeInfo {
     dayType,
     dayTypeLabel: getDayTypeLabel(dayType),
     dateLabel: formatDateLabel(todayKey),
+    hasUnlearnedChars,
     effectiveDayType,
     dayTypeLoading,
     todayKey,
@@ -97,28 +121,6 @@ interface SavedSession {
 
 function sessionKey(childId: string, dayKey: string): string {
   return `${SESSION_KEY_PREFIX}${childId}_${dayKey}`
-}
-
-const DONE_KEY_PREFIX = 'jihanzi_done_'
-
-function doneKey(childId: string, dayKey: string): string {
-  return `${DONE_KEY_PREFIX}${childId}_${dayKey}`
-}
-
-function isDayDone(childId: string, dayKey: string): boolean {
-  try {
-    return localStorage.getItem(doneKey(childId, dayKey)) === '1'
-  } catch {
-    return false
-  }
-}
-
-function markDayDone(childId: string, dayKey: string): void {
-  try {
-    localStorage.setItem(doneKey(childId, dayKey), '1')
-  } catch {
-    // ignore
-  }
 }
 
 function loadSession(childId: string, dayKey: string): SavedSession | null {
@@ -160,6 +162,8 @@ interface UseTodayReturn {
   needReview: number
   /** 本轮（刚完成的一轮）写过的字，去重保序（RoundComplete 朗读提醒用） */
   roundChars: string[]
+  /** 本轮已评字及其评级（按评级先后，去重）——会话中进度条下的列表用 */
+  roundReviewed: { character: string; grade: Grade }[]
   /** 本次会话各轮写过的字，按轮分组升序（Celebration 朗读提醒用） */
   sessionCharGroups: RoundCharGroup[]
   ratingAnimation: string | null
@@ -194,8 +198,15 @@ export function useToday(): UseTodayReturn {
     loading,
   } = useApp()
   const { status, initialSyncPending } = useSync()
-  const { dayType, dayTypeLabel, dateLabel, effectiveDayType, dayTypeLoading, todayKey } =
-    useDayType()
+  const {
+    dayType,
+    dayTypeLabel,
+    dateLabel,
+    effectiveDayType,
+    dayTypeLoading,
+    hasUnlearnedChars,
+    todayKey,
+  } = useDayType()
   const tomorrowKey = addDays(todayKey, 1)
 
   // 同步拉取期间（含登录后首次拉取、同步驱动的状态重载）禁止开始学习：
@@ -215,7 +226,9 @@ export function useToday(): UseTodayReturn {
   const [sessionTasks, setSessionTasks] = useState<TaskItem[] | null>(null)
   // 展示阶段：queuedReviewTasks = 到期复习字排队列表，sessionTasks 同时充当展示队列（新字）
   const [queuedReviewTasks, setQueuedReviewTasks] = useState<TaskItem[]>([])
-  const [doneToday, setDoneToday] = useState(false)
+  const activeChildId = selectedChildId || state.children[0]?.id || ''
+  // 「今天已完成」的标记与月历共用（见 useDayDone），写入时通知所有读取方
+  const doneToday = useDayDone(activeChildId, todayKey)
   const advancingRef = useRef(false)
   const continuingRef = useRef(false)
   // Ref mirror of tasks so startSession can read the latest task list
@@ -259,16 +272,6 @@ export function useToday(): UseTodayReturn {
     didRestore.current = true
   }, [state.children, selectedChildId, todayKey, setSelectedChildId])
 
-  // Check whether today's session was already completed (survives page
-  // refresh).  Runs once after IndexedDB state is loaded, and whenever
-  // the selected child changes.
-  useEffect(() => {
-    if (state.children.length === 0) return
-    const childId = selectedChildId || state.children[0]?.id
-    if (!childId) return
-    setDoneToday(isDayDone(childId, todayKey))
-  }, [state.children, selectedChildId, todayKey])
-
   // Persist session state to localStorage whenever it changes.
   useEffect(() => {
     const childId = selectedChildId || state.children[0]?.id
@@ -311,7 +314,6 @@ export function useToday(): UseTodayReturn {
       if (reviews.length > 0) {
         clearSession(childId, dayKey)
         markDayDone(childId, dayKey)
-        setDoneToday(true)
       }
     } catch {
       // IndexedDB 查询可能失败（如登出期间）——静默忽略
@@ -369,13 +371,24 @@ export function useToday(): UseTodayReturn {
     return effectiveTasks.filter(t => t.isReview).map(t => t.character)
   }, [effectiveTasks])
 
+  // 明日日类型：同一条规则——「上次学习日」就是今天（今天的日志），
+  // 再按生字本是否还有未学字修正（学完了就只有复习）。
+  const tomorrowType = useMemo<DayType>(() => {
+    if (!doneToday || !selectedChildId) return 'review'
+    const child = state.children.find(c => c.id === selectedChildId)
+    if (!child) return 'review'
+    return resolveDayType({
+      previousStudyDay: todayKey,
+      progress: child.progress,
+      hasUnlearnedChars,
+    })
+  }, [doneToday, selectedChildId, state.children, todayKey, hasUnlearnedChars])
+
   // 明日任务预览（仅在 doneToday 后需要，做 gating 避免会话期间无谓计算）
   const tomorrowTasks = useMemo(() => {
     if (!doneToday || !selectedChildId) return []
-    // 明日日类型：今日的反面
-    const nextDayType: DayType = dayType === 'learn' ? 'review' : 'learn'
-    return generateTodayTasks(state, selectedChildId, tomorrowKey, nextDayType)
-  }, [doneToday, state, selectedChildId, tomorrowKey, dayType])
+    return generateTodayTasks(state, selectedChildId, tomorrowKey, tomorrowType)
+  }, [doneToday, state, selectedChildId, tomorrowKey, tomorrowType])
 
   const tomorrowNewChars = useMemo(() => {
     return tomorrowTasks.filter(t => t.isNew).map(t => t.character)
@@ -385,14 +398,11 @@ export function useToday(): UseTodayReturn {
     return tomorrowTasks.filter(t => t.isReview).map(t => t.character)
   }, [tomorrowTasks])
 
-  // 明日预览日类型：基于当日是否有学新推导
+  // 明日预览日类型：与明日任务列表同源，保证标签与字表一致
   const tomorrowDayType = useMemo(() => {
     if (!doneToday || !selectedChildId) return ''
-    const child = state.children.find(c => c.id === selectedChildId)
-    if (!child) return ''
-    const todayHadNewChars = Object.values(child.progress).some(s => s.firstReviewDay === todayKey)
-    return todayHadNewChars ? '纯复习日' : '学新日'
-  }, [doneToday, selectedChildId, state.children, todayKey])
+    return getDayTypeLabel(tomorrowType)
+  }, [doneToday, selectedChildId, tomorrowType])
 
   // 当前轮次需要巩固的字数（RoundComplete 展示用）。
   // 不能用 sessionStats（跨轮累计），必须按轮次过滤，只统计本轮评分为 c/d 的字。
@@ -408,6 +418,18 @@ export function useToday(): UseTodayReturn {
     () => [...new Set(sessionReviews.filter(r => r.round === round).map(r => r.character))],
     [sessionReviews, round],
   )
+
+  // 本轮已评字（按评级先后，去重）——会话中列出本轮复习过的字及状态
+  const roundReviewed = useMemo(() => {
+    const seen = new Set<string>()
+    const list: { character: string; grade: Grade }[] = []
+    for (const r of sessionReviews) {
+      if (r.round !== round || seen.has(r.character)) continue
+      seen.add(r.character)
+      list.push({ character: r.character, grade: r.grade })
+    }
+    return list
+  }, [sessionReviews, round])
 
   // 本次会话各轮写过的字（按轮分组升序）——Celebration 朗读提醒用。
   // 遗忘字会跨轮重复出现，故按轮展示；同一轮内去重保序。
@@ -565,7 +587,6 @@ export function useToday(): UseTodayReturn {
   const handleDone = useCallback(() => {
     clearSession(selectedChildId, todayKey)
     markDayDone(selectedChildId, todayKey)
-    setDoneToday(true)
     setPhase('idle')
     setTaskIndex(0)
     setRound(1)
@@ -586,6 +607,7 @@ export function useToday(): UseTodayReturn {
     sessionStats,
     needReview,
     roundChars,
+    roundReviewed,
     sessionCharGroups,
     ratingAnimation,
     selectedChildId,

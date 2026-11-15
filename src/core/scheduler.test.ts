@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { generateTodayTasks, getChildStats, getEffectiveDayType } from './scheduler'
+import { generateTodayTasks, getChildStats, getEffectiveDayType, resolveDayType } from './scheduler'
 import type { AppState, Child, SM2State } from './types'
 
 function makeState(overrides?: Partial<AppState>): AppState {
@@ -228,5 +228,100 @@ describe('getEffectiveDayType', () => {
     })
     // lastStudyDay=01-03 有新字 → 今天应该是复习日
     expect(getEffectiveDayType('2026-01-03', progress)).toBe('review')
+  })
+})
+
+describe('resolveDayType', () => {
+  function makeProgress(entries: Record<string, Partial<SM2State>> = {}): Record<string, SM2State> {
+    const result: Record<string, SM2State> = {}
+    for (const [char, partial] of Object.entries(entries)) {
+      result[char] = {
+        ease: 2.5,
+        interval: 1,
+        repetitions: 1,
+        nextReview: '2026-01-02',
+        lastGrade: 'a',
+        firstReviewDay: '2026-01-01',
+        ...partial,
+      }
+    }
+    return result
+  }
+
+  it('昨天学了新字 → 今天纯复习日（即使还有新字可学）', () => {
+    const progress = makeProgress({ 一: { firstReviewDay: '2025-12-31' } })
+    expect(
+      resolveDayType({
+        previousStudyDay: '2025-12-31',
+        progress,
+        hasUnlearnedChars: true,
+      }),
+    ).toBe('review')
+  })
+
+  it('昨天纯复习 + 有新字可学 → 今天学新日', () => {
+    const progress = makeProgress({ 一: { firstReviewDay: '2025-12-30' } })
+    expect(
+      resolveDayType({
+        previousStudyDay: '2025-12-31',
+        progress,
+        hasUnlearnedChars: true,
+      }),
+    ).toBe('learn')
+  })
+
+  it('昨天纯复习 + 没有新字可学 → 今天纯复习日', () => {
+    const progress = makeProgress({ 一: { firstReviewDay: '2025-12-30' } })
+    expect(
+      resolveDayType({
+        previousStudyDay: '2025-12-31',
+        progress,
+        hasUnlearnedChars: false,
+      }),
+    ).toBe('review')
+  })
+
+  it('昨天学了新字 + 生字本已学完 → 今天纯复习日', () => {
+    const progress = makeProgress({ 一: { firstReviewDay: '2025-12-31' } })
+    expect(
+      resolveDayType({
+        previousStudyDay: '2025-12-31',
+        progress,
+        hasUnlearnedChars: false,
+      }),
+    ).toBe('review')
+  })
+
+  it('从未学习但还有新字可学 → 今天学新日', () => {
+    expect(
+      resolveDayType({ previousStudyDay: undefined, progress: {}, hasUnlearnedChars: true }),
+    ).toBe('learn')
+  })
+
+  it('从未学习且没有新字可学 → 今天纯复习日', () => {
+    expect(
+      resolveDayType({ previousStudyDay: undefined, progress: {}, hasUnlearnedChars: false }),
+    ).toBe('review')
+  })
+
+  it('明日（上次学习日 = 今天）：今天学了新字 → 纯复习日', () => {
+    const progress = makeProgress({ 一: { firstReviewDay: '2026-01-01' } })
+    expect(
+      resolveDayType({ previousStudyDay: '2026-01-01', progress, hasUnlearnedChars: true }),
+    ).toBe('review')
+  })
+
+  it('明日（上次学习日 = 今天）：今天纯复习且有新字 → 学新日', () => {
+    const progress = makeProgress({ 一: { firstReviewDay: '2025-12-30' } })
+    expect(
+      resolveDayType({ previousStudyDay: '2026-01-01', progress, hasUnlearnedChars: true }),
+    ).toBe('learn')
+  })
+
+  it('明日：生字本已学完 → 纯复习日', () => {
+    const progress = makeProgress({ 一: { firstReviewDay: '2025-12-30' } })
+    expect(
+      resolveDayType({ previousStudyDay: '2026-01-01', progress, hasUnlearnedChars: false }),
+    ).toBe('review')
   })
 })

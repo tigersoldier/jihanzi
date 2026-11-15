@@ -96,6 +96,7 @@ import db, {
   getReviewsForChildChar,
   getReviewsForChildCharPaginated,
   getReviewCountsForChild,
+  getLastStudyDayForChild,
   backfillReviewCounts,
   pruneOldestLogs,
   dedupeLocalLogs,
@@ -549,6 +550,37 @@ describe('getReviewsForChild', () => {
     })
 
     await expect(getReviewCountsForChild('child_a')).resolves.toEqual({ 花: 501 })
+  })
+})
+
+describe('getLastStudyDayForChild', () => {
+  beforeEach(async () => {
+    await db.logs.clear()
+  })
+
+  async function seedLogs(): Promise<void> {
+    await db.logs.bulkAdd([
+      makeReviewEntry({ childId: 'child_a', character: '花', dayKey: '2026-11-13', timestamp: 1 }),
+      makeReviewEntry({ childId: 'child_a', character: '山', dayKey: '2026-11-14', timestamp: 2 }),
+      makeReviewEntry({ childId: 'child_a', character: '山', dayKey: '2026-11-15', timestamp: 3 }),
+      makeReviewEntry({ childId: 'child_b', character: '水', dayKey: '2026-11-16', timestamp: 4 }),
+    ])
+  }
+
+  it('返回含今天在内的最近学习日', async () => {
+    await seedLogs()
+    await expect(getLastStudyDayForChild('child_a')).resolves.toBe('2026-11-15')
+  })
+
+  it('指定日期上界时只统计严格早于该日的记录', async () => {
+    await seedLogs()
+    // 今天（11-15）已学完，但推导今天日类型时应看 11-15 之前的学习日
+    await expect(getLastStudyDayForChild('child_a', '2026-11-15')).resolves.toBe('2026-11-14')
+  })
+
+  it('上界之前没有记录时返回 undefined', async () => {
+    await seedLogs()
+    await expect(getLastStudyDayForChild('child_a', '2026-11-13')).resolves.toBeUndefined()
   })
 })
 

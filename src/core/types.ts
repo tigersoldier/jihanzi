@@ -224,12 +224,28 @@ export const GRADE_LABELS: Record<Grade, string> = {
   d: '遗忘',
 }
 
-/** Tailwind color classes for each grade */
+/** 评级符号（与评级按钮一致：完全掌握/部分正确/需提示/遗忘） */
+export const GRADE_SYMBOLS: Record<Grade, string> = {
+  a: '✓',
+  b: '~',
+  c: '?',
+  d: '✗',
+}
+
+/** Tailwind color classes for each grade（绿→黄→橙→红的严重度色阶） */
 export const GRADE_COLORS: Record<Grade, string> = {
   a: 'bg-green-100 text-green-700',
-  b: 'bg-blue-100 text-blue-700',
-  c: 'bg-yellow-100 text-yellow-700',
+  b: 'bg-yellow-100 text-yellow-700',
+  c: 'bg-orange-100 text-orange-700',
   d: 'bg-red-100 text-red-700',
+}
+
+/** 图表堆叠柱配色，与 GRADE_COLORS 同色相 */
+export const GRADE_CHART_COLORS: Record<Grade, string> = {
+  a: '#22c55e',
+  b: '#eab308',
+  c: '#f97316',
+  d: '#ef4444',
 }
 
 /** SM-2 constants (from the algorithm authors, not adjustable) */

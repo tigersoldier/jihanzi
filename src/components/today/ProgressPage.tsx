@@ -1,9 +1,11 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useApp } from '../../state/AppContextDefinition'
 import { useToday, useDayType } from '../../hooks/useToday'
+import { useDayDone } from '../../hooks/useDayDone'
+import { useTodayDateKey } from '../../hooks/useTodayDateKey'
 import { useRoute } from '../../hooks/useRoute'
 import type { ProgressRoute } from '../../router'
-import { useHistory, type DaySummary } from '../../hooks/useStats'
+import { useHistory, visibleHistoryDays, type DaySummary } from '../../hooks/useStats'
 import { useLearningAnalytics } from '../../hooks/useLearningAnalytics'
 import type {
   CategoryCounts,
@@ -11,8 +13,15 @@ import type {
   GradeCounts,
 } from '../../core/learningAnalytics'
 import { formatDateLabel, getDayTypeLabel } from '../../utils/date'
-import { GRADE_LABELS, GRADE_COLORS, type Grade } from '../../core/types'
+import {
+  GRADE_LABELS,
+  GRADE_COLORS,
+  GRADE_SYMBOLS,
+  GRADE_CHART_COLORS,
+  type Grade,
+} from '../../core/types'
 import ProgressBar from './ProgressBar'
+import RoundReviewedChips from './RoundReviewedChips'
 import CharacterCard from './CharacterCard'
 import RatingButtons from './RatingButtons'
 import PresentingButtons from './PresentingButtons'
@@ -53,12 +62,9 @@ type ChartPoint = {
   outsideMonth?: CategoryCounts
 }
 
-const CHART_GRADES: Array<{ grade: keyof GradeCounts; color: string; label: string }> = [
-  { grade: 'a', color: '#22c55e', label: 'a' },
-  { grade: 'b', color: '#3b82f6', label: 'b' },
-  { grade: 'c', color: '#eab308', label: 'c' },
-  { grade: 'd', color: '#ef4444', label: 'd' },
-]
+const CHART_GRADES: Array<{ grade: keyof GradeCounts; color: string; label: string }> = (
+  ['a', 'b', 'c', 'd'] as const
+).map(grade => ({ grade, color: GRADE_CHART_COLORS[grade], label: grade }))
 
 function getChartCounts(counts: CategoryCounts, filter: ReviewCategoryFilter): GradeCounts {
   const result = { a: 0, b: 0, c: 0, d: 0 }
@@ -428,6 +434,7 @@ export function TodaySession() {
     sessionStats,
     needReview,
     roundChars,
+    roundReviewed,
     sessionCharGroups,
     ratingAnimation,
     children,
@@ -577,6 +584,7 @@ export function TodaySession() {
             </div>
           )}
           <ProgressBar current={taskIndex} total={totalTasks} />
+          <RoundReviewedChips rated={roundReviewed} total={totalTasks} />
           <CharacterCard
             key={`${round}-${taskIndex}-${currentTask.character}`}
             character={currentTask.character}
@@ -641,7 +649,19 @@ export default function ProgressPage() {
   const activeChildId = selectedChildId || state.children[0]?.id || ''
 
   // ---- Monthly history ----
+  // 今天未完成前不进入历史列表（历史只放已成定论的日子）；完成与否与种子共用同一标记
+  const todayDateKey = useTodayDateKey()
+  const doneToday = useDayDone(activeChildId, todayDateKey)
   const history = useHistory(activeChildId, viewMonth)
+  const historyDays = useMemo(
+    () =>
+      visibleHistoryDays(history.days, {
+        todayKey: todayDateKey,
+        doneToday,
+        isCurrentMonth,
+      }),
+    [history.days, todayDateKey, doneToday, isCurrentMonth],
+  )
   const analytics = useLearningAnalytics(activeChildId, viewMonth)
   const selectedDaySummary = useMemo(() => {
     if (!selectedDay) return null
@@ -660,8 +680,8 @@ export default function ProgressPage() {
     )
   }
 
-  // Day detail sub-view
-  if (selectedDay && selectedDaySummary) {
+  // Day detail sub-view（今天未完成时不在历史里，直接回到月历）
+  if (selectedDay && selectedDaySummary && !(selectedDay === todayDateKey && !doneToday)) {
     return (
       <DayDetailView
         daySummary={selectedDaySummary}
@@ -773,13 +793,16 @@ export default function ProgressPage() {
         </div>
 
         {/* Day list */}
-        {history.days.length === 0 ? (
-          <div className="text-center py-8 text-gray-400 text-sm">
-            {isCurrentMonth ? '本月暂无学习记录' : '该月暂无学习记录'}
-          </div>
+        {historyDays.length === 0 ? (
+          // 只有「今天未完成」被隐藏时不显示提示；整月确实没有记录才提示
+          history.days.length === 0 ? (
+            <div className="text-center py-8 text-gray-400 text-sm">
+              {isCurrentMonth ? '本月暂无学习记录' : '该月暂无学习记录'}
+            </div>
+          ) : null
         ) : (
           <div className="space-y-2">
-            {history.days.map(day => (
+            {historyDays.map(day => (
               <button
                 key={day.dayKey}
                 onClick={() => navigate({ name: 'progress', month: viewMonth, day: day.dayKey })}
@@ -829,9 +852,7 @@ function DaySummaryRow({ day }: { day: DaySummary }) {
           {day.reviewChars
             .slice(0, 5)
             .map(c => {
-              const g = c.grade
-              const sym = g === 'a' ? '✓' : g === 'b' ? '✓' : g === 'c' ? '△' : '✗'
-              return `${c.character}(${sym})`
+              return `${c.character}(${GRADE_SYMBOLS[c.grade]})`
             })
             .join(' ')}
           {day.reviewChars.length > 5 ? ` … 共${day.reviewChars.length}字` : ''}

@@ -1460,16 +1460,24 @@ export async function getReviewsForChildOnDay(
 /**
  * 找到指定孩子最近一次有复习记录的 dayKey。
  * 用于判断上次学习日的类型（学新 vs 纯复习）。
- * 若无记录返回 undefined。
+ *
+ * @param beforeDayKey 若提供，只统计严格早于该日期的记录。计算「今天」的日类型
+ *   时必须排除今天自身的日志：今天学完新字后，今天就成了「最近学习日」，
+ *   若把今天算进去，今天的日类型会被推成明天（纯复习日）。
+ *   若无记录返回 undefined。
  */
-export async function getLastStudyDayForChild(childId: string): Promise<string | undefined> {
-  const entries = await db.logs
-    .where('childId')
-    .equals(childId)
-    .filter(e => e.type === 'review')
-    .sortBy('dayKey')
-  if (entries.length === 0) return undefined
-  return entries[entries.length - 1].dayKey
+export async function getLastStudyDayForChild(
+  childId: string,
+  beforeDayKey?: string,
+): Promise<string | undefined> {
+  const entries = await db.logs.where('childId').equals(childId).toArray()
+  let lastDay: string | undefined
+  for (const entry of entries) {
+    if (entry.type !== 'review') continue
+    if (beforeDayKey !== undefined && entry.dayKey >= beforeDayKey) continue
+    if (lastDay === undefined || entry.dayKey > lastDay) lastDay = entry.dayKey
+  }
+  return lastDay
 }
 
 // ============================================================

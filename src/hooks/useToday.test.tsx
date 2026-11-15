@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import React, { useState, useCallback, type ReactNode } from 'react'
-import type { AppState } from '../core/types'
+import type { AppState, SM2State } from '../core/types'
 import { AppContext, type AppContextState } from '../state/AppContextDefinition'
 
 // Mock localStorage (Node 22+ has a built-in stub that overrides jsdom's)
@@ -194,6 +194,8 @@ describe('useToday', () => {
     localStorageStore = new Map()
     mockSyncStatus.mockReturnValue('online')
     mockInitialSyncPending.mockReturnValue(false)
+    mockGetReviewsForChildOnDay.mockResolvedValue([])
+    mockGetLastStudyDayForChild.mockResolvedValue(undefined)
   })
 
   it('刷新页面后恢复复习进度', async () => {
@@ -744,7 +746,298 @@ describe('useToday', () => {
     })
 
     // doneToday=true 后触发明日计算
-    // 明天 2026-01-02 是纯复习日，「一」和「二」的 nextReview 都是 2026-01-02 → 到期
+    // 今天引入了新字 → 明天 2026-01-02 是纯复习日，「一」和「二」的 nextReview 都是
+    // 2026-01-02 → 到期
+    expect(result.current.tomorrowDayType).toBe('纯复习日')
+    expect(result.current.tomorrowNewChars).toEqual([])
+    expect(result.current.tomorrowReviewChars).toEqual(['一', '二'])
+  })
+
+  // ---------------------------------------------------------------
+  // 日类型：当天已有日志后重新解析（刷新页面 / 同步重载）
+  // ---------------------------------------------------------------
+
+  /**
+   * 当天已写入复习日志时的「上次学习日」：
+   * - 含今天（旧契约）→ 2026-01-01
+   * - 严格早于今天 → 2025-12-31
+   */
+  function mockStudyDaysIncludingToday(): void {
+    mockGetLastStudyDayForChild.mockImplementation(
+      async (_childId: string, beforeDayKey?: string) =>
+        beforeDayKey ? '2025-12-31' : '2026-01-01',
+    )
+  }
+
+  function learnedToday(
+    char: string,
+    firstReviewDay: string,
+    nextReview = '2026-01-02',
+    interval = 1,
+  ): Record<string, SM2State> {
+    return {
+      [char]: {
+        ease: 2.6,
+        interval,
+        repetitions: 1,
+        nextReview,
+        lastGrade: 'a',
+        firstReviewDay,
+      },
+    }
+  }
+
+  it('学新日完成后刷新：今日仍为学新日，明日纯复习日不列新字', async () => {
+    // Given: 今天学新日已学完「一」「二」，当日日志已落库；刷新后重新解析日类型
+    mockStudyDaysIncludingToday()
+    localStorageStore.set('jihanzi_done_child_1_2026-01-01', '1')
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 2,
+          progress: {
+            ...learnedToday('一', '2026-01-01'),
+            ...learnedToday('二', '2026-01-01'),
+          },
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: ['一', '二', '三', '四', '五'] }],
+      settings: { dailyReviewLimit: 30, dailyNewChars: 2, maxRounds: 3 },
+    })
+
+    const { result } = renderHook(() => useToday(), { wrapper: createStatefulWrapper(state) })
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+
+    // 今天引入了新字 → 今天仍是学新日（不能因今天已有日志而变成纯复习日）
+    expect(result.current.doneToday).toBe(true)
+    expect(result.current.dayType).toBe('学新日')
+    // 明天是纯复习日 → 预览与标签一致，不列新学字
+    expect(result.current.tomorrowDayType).toBe('纯复习日')
+    expect(result.current.tomorrowNewChars).toEqual([])
+    expect(result.current.tomorrowReviewChars).toEqual(['一', '二'])
+  })
+
+  it('纯复习日完成后刷新：今日仍为纯复习日，明日学新日列新字', async () => {
+    // Given: 今天纯复习日已复习完「一」「二」（新字是昨天学的），刷新后重新解析日类型
+    mockStudyDaysIncludingToday()
+    localStorageStore.set('jihanzi_done_child_1_2026-01-01', '1')
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 2,
+          progress: {
+            ...learnedToday('一', '2025-12-31', '2026-01-03', 2),
+            ...learnedToday('二', '2025-12-31', '2026-01-03', 2),
+          },
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: ['一', '二', '三', '四'] }],
+      settings: { dailyReviewLimit: 30, dailyNewChars: 2, maxRounds: 3 },
+    })
+
+    const { result } = renderHook(() => useToday(), { wrapper: createStatefulWrapper(state) })
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+
+    // 今天没有引入新字 → 今天仍是纯复习日，明天是学新日
+    expect(result.current.doneToday).toBe(true)
+    expect(result.current.dayType).toBe('纯复习日')
+    expect(result.current.tomorrowDayType).toBe('学新日')
+    expect(result.current.tomorrowNewChars).toEqual(['三', '四'])
+    expect(result.current.tomorrowReviewChars).toEqual([])
+  })
+
+  it('学新日没有引入新字（当天会话后才新增生字）：明日仍为学新日', async () => {
+    // Given: 今天按交替节奏是学新日，但会话开始时生字本已无未学字（没有新字可学），
+    // 家长在会话结束后才新增了 5 个生字 → 今天没有引入任何新字，但有字可学了
+    mockStudyDaysIncludingToday()
+    localStorageStore.set('jihanzi_done_child_1_2026-01-01', '1')
+    const learnedChars = Array.from({ length: 35 }, (_, i) => String.fromCharCode(0x4e00 + i))
+    const newChars = Array.from({ length: 5 }, (_, i) => String.fromCharCode(0x4f00 + i))
+    const progress: Record<string, SM2State> = {}
+    for (const char of learnedChars) {
+      // 新字是更早学的，今天只做了复习 → 今天没有引入新字
+      Object.assign(progress, learnedToday(char, '2025-12-30'))
+    }
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: learnedChars.length,
+          progress,
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: [...learnedChars, ...newChars] }],
+      settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+    })
+
+    const { result } = renderHook(() => useToday(), { wrapper: createStatefulWrapper(state) })
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+
+    // 今天没有引入新字，但还有未学字 → 明天是学新日，应继续排新字
+    expect(result.current.dayType).toBe('学新日')
+    expect(result.current.tomorrowDayType).toBe('学新日')
+    expect(result.current.tomorrowNewChars).toEqual(newChars)
+  })
+
+  it('当天学到一半、新字还没评级 → 仍是学新日，会话不受影响', async () => {
+    // Given: 学新日，1 个到期旧字「碰」+ 2 个新字「甲」「乙」
+    mockStudyDaysIncludingToday() // 上次学习日 2025-12-31 没引入新字 → 学新日
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 1,
+          progress: {
+            碰: {
+              ease: 2.5,
+              interval: 3,
+              repetitions: 2,
+              nextReview: '2026-01-01',
+              lastGrade: 'a',
+              firstReviewDay: '2025-12-30',
+            },
+          },
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: ['碰', '甲', '乙'] }],
+      settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+    })
+
+    const { result } = renderHook(() => useToday(), { wrapper: createStatefulWrapper(state) })
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+    expect(result.current.dayType).toBe('学新日')
+
+    // 展示完 2 个新字 → 先复习旧字「碰」，此时新字还没评级
+    act(() => {
+      result.current.startSession()
+    })
+    act(() => {
+      result.current.handlePresentNav('next')
+    })
+    act(() => {
+      result.current.handlePresentNav('next')
+    })
+    expect(result.current.phase).toBe('reviewing')
+    await act(async () => {
+      result.current.handleRate('a')
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+
+    // 新字尚未评级（nextCharIndex 未推进）→ 仍是学新日，队列里还有新字
+    expect(result.current.currentTask?.character).toBe('甲')
+    expect(result.current.dayType).toBe('学新日')
+    expect(result.current.todayNewChars).toEqual(['甲', '乙'])
+    expect(result.current.doneToday).toBe(false)
+  })
+
+  it('今天还没开始学习、生字本已学完 → 纯复习日，任务只有复习', async () => {
+    // Given: 生字本已学完，今天还没开始（无 doneToday、今天无日志），「碰」今天到期
+    mockStudyDaysIncludingToday()
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 2,
+          // 上次学习日（2025-12-31）没引入新字 → 交替节奏本想给学新日
+          progress: { ...learnedToday('碰', '2025-12-30', '2026-01-01') },
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: ['碰', '节'] }],
+      settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+    })
+
+    const { result } = renderHook(() => useToday(), { wrapper: createStatefulWrapper(state) })
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+
+    expect(result.current.doneToday).toBe(false)
+    // 没有新字可学 → 早上打开就是纯复习日
+    expect(result.current.dayType).toBe('纯复习日')
+    expect(result.current.isReady).toBe(true)
+    expect(result.current.todayNewChars).toEqual([])
+    expect(result.current.todayReviewChars).toEqual(['碰'])
+  })
+
+  it('生字本学完后的复习日：今日与明日都显示纯复习日（没有学新日）', async () => {
+    // Given: 生字本已全部学完（nextCharIndex 到末尾），今天只复习了「碰」；
+    // 上次学习日（2025-12-31）没有引入新字 → 交替节奏本该把今天算成学新日
+    mockStudyDaysIncludingToday()
+    localStorageStore.set('jihanzi_done_child_1_2026-01-01', '1')
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 2,
+          progress: learnedToday('碰', '2025-12-30'),
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: ['碰', '节'] }],
+      settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+    })
+
+    const { result } = renderHook(() => useToday(), { wrapper: createStatefulWrapper(state) })
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+
+    // 没有新字可学 → 不能显示学新日（月历/日详情按事实也是纯复习日）
+    expect(result.current.dayType).toBe('纯复习日')
+    expect(result.current.tomorrowDayType).toBe('纯复习日')
+    expect(result.current.tomorrowNewChars).toEqual([])
+    expect(result.current.tomorrowReviewChars).toEqual(['碰'])
+  })
+
+  it('今天学完生字本最后一个字：学完后今日与明日都是纯复习日', async () => {
+    mockStudyDaysIncludingToday()
+    localStorageStore.set('jihanzi_done_child_1_2026-01-01', '1')
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: 2,
+          progress: {
+            ...learnedToday('一', '2026-01-01'),
+            ...learnedToday('二', '2026-01-01'),
+          },
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: ['一', '二'] }],
+      settings: { dailyReviewLimit: 30, dailyNewChars: 5, maxRounds: 3 },
+    })
+
+    const { result } = renderHook(() => useToday(), { wrapper: createStatefulWrapper(state) })
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+
+    // 学完了就没有新字可学 → 学完后头部与明日都是纯复习日
+    // （历史月历仍按当天事实显示学新日，两者口径不同）
+    expect(result.current.dayType).toBe('纯复习日')
     expect(result.current.tomorrowDayType).toBe('纯复习日')
     expect(result.current.tomorrowNewChars).toEqual([])
     expect(result.current.tomorrowReviewChars).toEqual(['一', '二'])
@@ -865,6 +1158,53 @@ describe('useToday', () => {
     // 明天 2026-01-02 是纯复习日，「一」的 nextReview 是 2026-01-02 → 到期
     // 所以明天的复习队列应该有「一」
     expect(result.current.tomorrowReviewChars).toEqual(['一'])
+  })
+
+  it('会话中暴露本轮已复习字与评级，巩固轮清空重来', async () => {
+    const initialState = freshStateWithChars(['一', '二', '三'])
+    const wrapper = createStatefulWrapper(initialState)
+    const { result } = renderHook(() => useToday(), { wrapper })
+
+    act(() => {
+      result.current.startSession()
+    })
+    for (let i = 0; i < 3; i++) {
+      act(() => {
+        result.current.handlePresentNav('next')
+      })
+    }
+    expect(result.current.roundReviewed).toEqual([])
+
+    await act(async () => {
+      result.current.handleRate('c')
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+    await act(async () => {
+      result.current.handleRate('a')
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+    // 本轮已评：一(c)、二(a)；三 还没评
+    expect(result.current.roundReviewed).toEqual([
+      { character: '一', grade: 'c' },
+      { character: '二', grade: 'a' },
+    ])
+
+    // 进入巩固轮：只重评「一」，列表清空重来
+    await act(async () => {
+      result.current.handleRate('d')
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+    act(() => {
+      result.current.handleContinueRound()
+    })
+    expect(result.current.round).toBe(2)
+    expect(result.current.roundReviewed).toEqual([])
+
+    await act(async () => {
+      result.current.handleRate('a')
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+    expect(result.current.roundReviewed).toEqual([{ character: '一', grade: 'a' }])
   })
 
   it('第二轮完成后 needReview 只统计本轮错误，不累计前几轮', async () => {

@@ -17,6 +17,9 @@ import { isDueForReview } from './sm2'
  * - 从未学习过（lastStudyDay 为 undefined）→ 学新日
  * - 上次学习日有 firstReviewDay 匹配 → 有学新 → 今天是复习日
  * - 上次学习日无 firstReviewDay 匹配 → 纯复习 → 今天是学新日
+ *
+ * @param lastStudyDay 必须严格早于被评估的日期；评估「今天」时不能把今天的
+ *   日志算进来（否则今天学完新字后会被推导成明天的类型）。
  */
 export function getEffectiveDayType(
   lastStudyDay: string | undefined,
@@ -25,6 +28,31 @@ export function getEffectiveDayType(
   if (!lastStudyDay) return 'learn'
   const lastDayHadNewChars = Object.values(progress).some(s => s.firstReviewDay === lastStudyDay)
   return lastDayHadNewChars ? 'review' : 'learn'
+}
+
+/**
+ * 解析某一天的日类型：先按交替节奏，再按「有没有新字可学」修正。
+ *
+ * - 交替节奏：上次学习日引入了新字 → 纯复习日；没引入（或从未学习）→ 学新日
+ *   （`previousStudyDay` 必须严格早于被评估的日期）
+ * - 修正：生字本没有未学字时一律纯复习日——学完了就只有复习，不出现「学新日
+ *   但没有新字可学」
+ *
+ * 今天：`previousStudyDay` = 今天之前的最近学习日。
+ * 明天：`previousStudyDay` = 今天（今天的日志就是明天的「上次学习日」）。
+ */
+export function resolveDayType({
+  previousStudyDay,
+  progress,
+  hasUnlearnedChars,
+}: {
+  /** 严格早于被评估日期的学习日 */
+  previousStudyDay: string | undefined
+  progress: Record<string, SM2State>
+  hasUnlearnedChars: boolean
+}): DayType {
+  if (!hasUnlearnedChars) return 'review'
+  return getEffectiveDayType(previousStudyDay, progress)
 }
 
 /**
