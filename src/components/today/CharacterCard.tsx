@@ -14,7 +14,6 @@ interface CharacterCardProps {
 }
 
 const INITIAL_REVEAL_DURATION_MS = 1000
-const REVEAL_COOLDOWN_MS = 3000
 const LONG_PRESS_DURATION_MS = 500
 const LONG_PRESS_MOVE_THRESHOLD_PX = 10
 
@@ -42,9 +41,6 @@ export default function CharacterCard({
   onFontReadyChange,
 }: CharacterCardProps) {
   const [isRevealed, setIsRevealed] = useState(true)
-  const [cooldownUntil, setCooldownUntil] = useState(0)
-  const [now, setNow] = useState(() => Date.now())
-  const cooldownUntilRef = useRef(0)
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null)
@@ -59,11 +55,6 @@ export default function CharacterCard({
       clearTimeout(hideTimerRef.current)
       hideTimerRef.current = null
     }
-    const hiddenAt = Date.now()
-    const nextRevealAt = hiddenAt + REVEAL_COOLDOWN_MS
-    cooldownUntilRef.current = nextRevealAt
-    setCooldownUntil(nextRevealAt)
-    setNow(hiddenAt)
     setIsRevealed(false)
   }, [])
 
@@ -77,25 +68,15 @@ export default function CharacterCard({
     }
   }, [autoHide, hideCharacter])
 
-  useEffect(() => {
-    if (!autoHide || isRevealed || cooldownUntil <= now) return
-    const remainingMs = cooldownUntil - now
-    const timer = setTimeout(() => setNow(Date.now()), Math.min(1000, remainingMs))
-    return () => clearTimeout(timer)
-  }, [autoHide, cooldownUntil, isRevealed, now])
-
-  const secondsUntilReveal = Math.ceil(Math.max(0, cooldownUntil - now) / 1000)
   const isCharacterHidden = autoHide && !isRevealed
 
   const handleReveal = () => {
-    const revealedAt = Date.now()
-    if (!autoHide || isRevealed || revealedAt < cooldownUntilRef.current) return false
+    if (!autoHide || isRevealed) return false
 
     if (hideTimerRef.current !== null) {
       clearTimeout(hideTimerRef.current)
       hideTimerRef.current = null
     }
-    setNow(revealedAt)
     setIsRevealed(true)
     return true
   }
@@ -122,7 +103,6 @@ export default function CharacterCard({
   }
 
   const startLongPress = (event: PointerEvent<HTMLButtonElement>) => {
-    if (secondsUntilReveal > 0) return
     cancelLongPress()
     longPressOriginRef.current = { x: event.clientX, y: event.clientY }
     longPressTimerRef.current = setTimeout(() => {
@@ -199,32 +179,17 @@ export default function CharacterCard({
                 onPointerLeave={isCharacterHidden ? cancelLongPress : undefined}
                 onPointerCancel={isCharacterHidden ? cancelLongPress : undefined}
                 onContextMenu={event => event.preventDefault()}
-                disabled={isCharacterHidden && secondsUntilReveal > 0}
-                aria-label={
-                  isCharacterHidden
-                    ? secondsUntilReveal > 0
-                      ? `长按显示生字，${secondsUntilReveal} 秒后可用`
-                      : '长按显示生字'
-                    : '点击隐藏生字'
-                }
+                aria-label={isCharacterHidden ? '长按显示生字' : '点击隐藏生字'}
                 className={`absolute inset-0 w-full flex flex-col items-center justify-center rounded-xl select-none touch-manipulation focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 ${
-                  isCharacterHidden
-                    ? 'text-gray-500 hover:bg-gray-50 disabled:cursor-not-allowed disabled:hover:bg-transparent'
-                    : 'cursor-pointer'
+                  isCharacterHidden ? 'text-gray-500 hover:bg-gray-50' : 'cursor-pointer'
                 }`}
               >
-                {isCharacterHidden &&
-                  (secondsUntilReveal > 0 ? (
-                    <>
-                      <span className="text-base font-medium">生字已隐藏</span>
-                      <span className="text-sm mt-2">{secondsUntilReveal} 秒后可再次显示</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-base font-medium">长按揭晓生字</span>
-                      <span className="text-sm mt-2">按住约 0.5 秒显示，再点一下隐藏</span>
-                    </>
-                  ))}
+                {isCharacterHidden && (
+                  <>
+                    <span className="text-base font-medium">长按揭晓生字</span>
+                    <span className="text-sm mt-2">按住约 0.5 秒显示，再点一下隐藏</span>
+                  </>
+                )}
               </button>
             )}
           </div>
