@@ -12,21 +12,24 @@ import type { AppState, Child, TaskItem, DayType, ReviewEntry, SM2State } from '
 import { isDueForReview } from './sm2'
 
 /**
- * 根据上次学习日是否有新字来判断今天的日类型。
+ * 根据「上一个学习日」是否引入了新字，推导交替节奏下的日类型。
  *
- * - 从未学习过（lastStudyDay 为 undefined）→ 学新日
- * - 上次学习日有 firstReviewDay 匹配 → 有学新 → 今天是复习日
- * - 上次学习日无 firstReviewDay 匹配 → 纯复习 → 今天是学新日
+ * - 从未学习过（previousStudyDay 为 undefined）→ 学新日
+ * - 上一个学习日有 firstReviewDay 匹配 → 有学新 → 下一个学习日是复习日
+ * - 上一个学习日无 firstReviewDay 匹配 → 纯复习 → 下一个学习日是学新日
  *
- * @param lastStudyDay 必须严格早于被评估的日期；评估「今天」时不能把今天的
- *   日志算进来（否则今天学完新字后会被推导成明天的类型）。
+ * @param previousStudyDay 必须**严格早于**被评估的日期。评估「今天」时不能把
+ *   今天的日志算进来，否则今天学完新字后会被推导成明天的类型（学新日 → 纯复习日）。
+ *   调用方应优先使用 resolveDayType()，它会对这条契约做校验。
  */
 export function getEffectiveDayType(
-  lastStudyDay: string | undefined,
+  previousStudyDay: string | undefined,
   progress: Record<string, SM2State>,
 ): DayType {
-  if (!lastStudyDay) return 'learn'
-  const lastDayHadNewChars = Object.values(progress).some(s => s.firstReviewDay === lastStudyDay)
+  if (!previousStudyDay) return 'learn'
+  const lastDayHadNewChars = Object.values(progress).some(
+    s => s.firstReviewDay === previousStudyDay,
+  )
   return lastDayHadNewChars ? 'review' : 'learn'
 }
 
@@ -45,12 +48,21 @@ export function resolveDayType({
   previousStudyDay,
   progress,
   hasUnlearnedChars,
+  evaluatedDay,
 }: {
   /** 严格早于被评估日期的学习日 */
   previousStudyDay: string | undefined
   progress: Record<string, SM2State>
   hasUnlearnedChars: boolean
+  /** 被评估的日期（今天/明天），仅用于校验契约 */
+  evaluatedDay: string
 }): DayType {
+  // 契约守卫：把"今天"当成"上一个学习日"曾导致日类型被推成明天的类型。
+  if (previousStudyDay !== undefined && previousStudyDay >= evaluatedDay) {
+    throw new Error(
+      `resolveDayType: previousStudyDay (${previousStudyDay}) 必须严格早于 evaluatedDay (${evaluatedDay})`,
+    )
+  }
   if (!hasUnlearnedChars) return 'review'
   return getEffectiveDayType(previousStudyDay, progress)
 }
@@ -126,23 +138,19 @@ export function generateTodayTasks(
     sm2State: child.progress[char],
   }))
 
-  // 3. Add new characters on learn days (fill remaining quota)
+  // 3. Add new characters on learn days
+  //    新字配额与复习上限互相独立：每个学新日固定学 dailyNewChars 个新字，
+  //    到期复习最多 dailyReviewLimit 个，两者不会互相挤占。
   let newTasks: TaskItem[] = []
   if (effectiveDayType === 'learn') {
-    const remainingQuota = Math.min(
-      dailyNewChars,
-      dailyReviewLimit + dailyNewChars - reviewTasks.length,
-    )
-    if (remainingQuota > 0) {
-      newTasks = getNewCharacters(child, wordBook.characters, remainingQuota).map(char => ({
-        character: char,
-        pinyin: '',
-        words: [],
-        isNew: true,
-        isReview: false,
-        sm2State: undefined,
-      }))
-    }
+    newTasks = getNewCharacters(child, wordBook.characters, dailyNewChars).map(char => ({
+      character: char,
+      pinyin: '',
+      words: [],
+      isNew: true,
+      isReview: false,
+      sm2State: undefined,
+    }))
   }
 
   return [...reviewTasks, ...newTasks]

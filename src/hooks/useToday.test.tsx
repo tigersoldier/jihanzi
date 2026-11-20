@@ -691,7 +691,7 @@ describe('useToday', () => {
 
     // '一' 和 '二' 到期，'三' 还没到期
     expect(result.current.todayReviewChars).toEqual(['一', '二'])
-    // 学新日，剩余配额填入新字（nextCharIndex=3，生字本还剩 '四' '五'，dailyNewChars=5）
+    // 学新日固定填 dailyNewChars 个新字（nextCharIndex=3，生字本还剩 '四' '五'）
     expect(result.current.todayNewChars).toEqual(['四', '五'])
   })
 

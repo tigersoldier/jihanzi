@@ -91,6 +91,7 @@ export function useDayType(): DayTypeInfo {
         previousStudyDay,
         progress: child?.progress ?? {},
         hasUnlearnedChars,
+        evaluatedDay: todayKey,
       })
     : null
 
@@ -403,8 +404,9 @@ export function useToday(): UseTodayReturn {
       previousStudyDay: todayKey,
       progress: child.progress,
       hasUnlearnedChars,
+      evaluatedDay: tomorrowKey,
     })
-  }, [doneToday, selectedChildId, state.children, todayKey, hasUnlearnedChars])
+  }, [doneToday, selectedChildId, state.children, todayKey, tomorrowKey, hasUnlearnedChars])
 
   // 明日任务预览（仅在 doneToday 后需要，做 gating 避免会话期间无谓计算）
   const tomorrowTasks = useMemo(() => {

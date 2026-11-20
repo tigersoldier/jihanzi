@@ -107,6 +107,43 @@ describe('generateTodayTasks', () => {
     expect(tasksAfter[1].character).toBe('三') // ← 跳过了二！
   })
 
+  it('学新日：到期复习超过上限时仍固定学 dailyNewChars 个新字（两个配额独立）', () => {
+    const learned = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛']
+    const unlearned = ['壬', '癸']
+    const progress: Record<string, SM2State> = {}
+    for (const char of learned) {
+      progress[char] = {
+        ease: 2.5,
+        interval: 1,
+        repetitions: 1,
+        nextReview: '2026-01-01', // 全部今天到期
+        lastGrade: 'a',
+        firstReviewDay: '2025-12-30',
+      }
+    }
+
+    const state = makeState({
+      children: [
+        {
+          id: 'child_1',
+          name: '小明',
+          wordBookId: 'wb_1',
+          nextCharIndex: learned.length,
+          progress,
+        },
+      ],
+      wordBooks: [{ id: 'wb_1', name: '测试生字本', characters: [...learned, ...unlearned] }],
+      settings: { dailyReviewLimit: 5, dailyNewChars: 2, maxRounds: 3 },
+    })
+
+    const tasks = generateTodayTasks(state, 'child_1', '2026-01-01', 'learn')
+
+    // 复习被上限截断到 5 个，但新字配额不被挤占，仍然给满 2 个
+    expect(tasks.filter(task => task.isReview)).toHaveLength(5)
+    expect(tasks.filter(task => task.isNew).map(task => task.character)).toEqual(unlearned)
+    expect(tasks).toHaveLength(7)
+  })
+
   it('传入 dayType 参数时应优先生效', () => {
     const state = makeState({
       children: [
@@ -261,6 +298,7 @@ describe('resolveDayType', () => {
         previousStudyDay: '2025-12-31',
         progress,
         hasUnlearnedChars: true,
+        evaluatedDay: '2026-01-01',
       }),
     ).toBe('review')
   })
@@ -272,6 +310,7 @@ describe('resolveDayType', () => {
         previousStudyDay: '2025-12-31',
         progress,
         hasUnlearnedChars: true,
+        evaluatedDay: '2026-01-01',
       }),
     ).toBe('learn')
   })
@@ -283,6 +322,7 @@ describe('resolveDayType', () => {
         previousStudyDay: '2025-12-31',
         progress,
         hasUnlearnedChars: false,
+        evaluatedDay: '2026-01-01',
       }),
     ).toBe('review')
   })
@@ -294,19 +334,41 @@ describe('resolveDayType', () => {
         previousStudyDay: '2025-12-31',
         progress,
         hasUnlearnedChars: false,
+        evaluatedDay: '2026-01-01',
       }),
     ).toBe('review')
   })
 
+  it('契约守卫：把当天当成上一个学习日会直接报错', () => {
+    expect(() =>
+      resolveDayType({
+        previousStudyDay: '2026-01-01',
+        progress: {},
+        hasUnlearnedChars: true,
+        evaluatedDay: '2026-01-01',
+      }),
+    ).toThrow(/必须严格早于/)
+  })
+
   it('从未学习但还有新字可学 → 今天学新日', () => {
     expect(
-      resolveDayType({ previousStudyDay: undefined, progress: {}, hasUnlearnedChars: true }),
+      resolveDayType({
+        previousStudyDay: undefined,
+        progress: {},
+        hasUnlearnedChars: true,
+        evaluatedDay: '2026-01-01',
+      }),
     ).toBe('learn')
   })
 
   it('从未学习且没有新字可学 → 今天纯复习日', () => {
     expect(
-      resolveDayType({ previousStudyDay: undefined, progress: {}, hasUnlearnedChars: false }),
+      resolveDayType({
+        previousStudyDay: undefined,
+        progress: {},
+        hasUnlearnedChars: false,
+        evaluatedDay: '2026-01-01',
+      }),
     ).toBe('review')
   })
 
