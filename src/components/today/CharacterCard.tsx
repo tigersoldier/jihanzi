@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { getPinyin, getWords } from '../../utils/chars'
 import type { SM2State } from '../../core/types'
 import LearningCharacter from '../common/LearningCharacter'
@@ -13,7 +13,7 @@ interface CharacterCardProps {
   onFontReadyChange?: (character: string, isReady: boolean) => void
 }
 
-const REVEAL_DURATION_MS = 1000
+const INITIAL_REVEAL_DURATION_MS = 1000
 const REVEAL_COOLDOWN_MS = 3000
 const LONG_PRESS_DURATION_MS = 500
 const LONG_PRESS_MOVE_THRESHOLD_PX = 10
@@ -48,11 +48,17 @@ export default function CharacterCard({
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null)
+  // 长按揭晓后浏览器仍会在抬起时补发 click，用它避免刚显示就被同一次手势隐藏。
+  const suppressClickRef = useRef(false)
   const pinyin = getPinyin(character)
   const words = getWords(character)
   const maskedWords = words.map(word => word.split(character).join('～'))
 
   const hideCharacter = useCallback(() => {
+    if (hideTimerRef.current !== null) {
+      clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = null
+    }
     const hiddenAt = Date.now()
     const nextRevealAt = hiddenAt + REVEAL_COOLDOWN_MS
     cooldownUntilRef.current = nextRevealAt
@@ -63,7 +69,7 @@ export default function CharacterCard({
 
   useEffect(() => {
     if (!autoHide) return
-    hideTimerRef.current = setTimeout(hideCharacter, REVEAL_DURATION_MS)
+    hideTimerRef.current = setTimeout(hideCharacter, INITIAL_REVEAL_DURATION_MS)
     return () => {
       if (hideTimerRef.current !== null) clearTimeout(hideTimerRef.current)
       if (longPressTimerRef.current !== null) clearTimeout(longPressTimerRef.current)
@@ -83,12 +89,28 @@ export default function CharacterCard({
 
   const handleReveal = () => {
     const revealedAt = Date.now()
-    if (!autoHide || isRevealed || revealedAt < cooldownUntilRef.current) return
+    if (!autoHide || isRevealed || revealedAt < cooldownUntilRef.current) return false
 
+    if (hideTimerRef.current !== null) {
+      clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = null
+    }
     setNow(revealedAt)
     setIsRevealed(true)
-    if (hideTimerRef.current !== null) clearTimeout(hideTimerRef.current)
-    hideTimerRef.current = setTimeout(hideCharacter, REVEAL_DURATION_MS)
+    return true
+  }
+
+  const handleOverlayClick = (event: MouseEvent<HTMLButtonElement>) => {
+    if (isCharacterHidden) {
+      // 键盘触发的 click 没有按住过程，直接揭晓。
+      if (event.detail === 0) handleReveal()
+      return
+    }
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false
+      return
+    }
+    hideCharacter()
   }
 
   const cancelLongPress = () => {
@@ -106,8 +128,13 @@ export default function CharacterCard({
     longPressTimerRef.current = setTimeout(() => {
       longPressTimerRef.current = null
       longPressOriginRef.current = null
-      handleReveal()
+      if (handleReveal()) suppressClickRef.current = true
     }, LONG_PRESS_DURATION_MS)
+  }
+
+  const handleOverlayPointerDown = (event: PointerEvent<HTMLButtonElement>) => {
+    suppressClickRef.current = false
+    if (isCharacterHidden) startLongPress(event)
   }
 
   const handleLongPressMove = (event: PointerEvent<HTMLButtonElement>) => {
@@ -120,6 +147,7 @@ export default function CharacterCard({
 
   return (
     <div className="relative">
+      {/* 长按揭晓时禁选卡片内文字，避免选中汉字、拼音和词例。 */}
       <div
         className={`
           bg-white rounded-2xl shadow-sm border border-gray-100 p-6 sm:p-8
@@ -127,7 +155,9 @@ export default function CharacterCard({
           transition-all duration-300
           ${slideDirection === 'in' ? 'animate-slide-in' : ''}
           ${slideDirection === 'out' ? 'animate-slide-out' : ''}
+          ${autoHide ? 'select-none touch-callout-none' : ''}
         `}
+        onContextMenu={autoHide ? event => event.preventDefault() : undefined}
       >
         {/* New badge */}
         {isNew && (
@@ -159,37 +189,42 @@ export default function CharacterCard({
               </div>
             </div>
 
-            {isCharacterHidden && (
+            {autoHide && (
               <button
                 type="button"
-                onClick={event => {
-                  if (event.detail === 0) handleReveal()
-                }}
-                onPointerDown={startLongPress}
-                onPointerMove={handleLongPressMove}
-                onPointerUp={cancelLongPress}
-                onPointerLeave={cancelLongPress}
-                onPointerCancel={cancelLongPress}
+                onClick={handleOverlayClick}
+                onPointerDown={handleOverlayPointerDown}
+                onPointerMove={isCharacterHidden ? handleLongPressMove : undefined}
+                onPointerUp={isCharacterHidden ? cancelLongPress : undefined}
+                onPointerLeave={isCharacterHidden ? cancelLongPress : undefined}
+                onPointerCancel={isCharacterHidden ? cancelLongPress : undefined}
                 onContextMenu={event => event.preventDefault()}
-                disabled={secondsUntilReveal > 0}
+                disabled={isCharacterHidden && secondsUntilReveal > 0}
                 aria-label={
-                  secondsUntilReveal > 0
-                    ? `长按显示生字，${secondsUntilReveal} 秒后可用`
-                    : '长按显示生字'
+                  isCharacterHidden
+                    ? secondsUntilReveal > 0
+                      ? `长按显示生字，${secondsUntilReveal} 秒后可用`
+                      : '长按显示生字'
+                    : '点击隐藏生字'
                 }
-                className="absolute inset-0 w-full flex flex-col items-center justify-center rounded-xl text-gray-500 hover:bg-gray-50 disabled:cursor-not-allowed disabled:hover:bg-transparent focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 select-none"
+                className={`absolute inset-0 w-full flex flex-col items-center justify-center rounded-xl select-none touch-manipulation focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 ${
+                  isCharacterHidden
+                    ? 'text-gray-500 hover:bg-gray-50 disabled:cursor-not-allowed disabled:hover:bg-transparent'
+                    : 'cursor-pointer'
+                }`}
               >
-                {secondsUntilReveal > 0 ? (
-                  <>
-                    <span className="text-base font-medium">生字已隐藏</span>
-                    <span className="text-sm mt-2">{secondsUntilReveal} 秒后可再次显示</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="text-base font-medium">长按揭晓生字</span>
-                    <span className="text-sm mt-2">按住约 0.5 秒，显示 1 秒</span>
-                  </>
-                )}
+                {isCharacterHidden &&
+                  (secondsUntilReveal > 0 ? (
+                    <>
+                      <span className="text-base font-medium">生字已隐藏</span>
+                      <span className="text-sm mt-2">{secondsUntilReveal} 秒后可再次显示</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-base font-medium">长按揭晓生字</span>
+                      <span className="text-sm mt-2">按住约 0.5 秒显示，再点一下隐藏</span>
+                    </>
+                  ))}
               </button>
             )}
           </div>

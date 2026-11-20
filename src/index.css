@@ -34,6 +34,11 @@
   .font-learning-kai {
     font-family: 'LXGW WenKai GB Lite';
   }
+
+  /* 长按揭晓时阻止 iOS 弹出文字选择/呼叫菜单。 */
+  .touch-callout-none {
+    -webkit-touch-callout: none;
+  }
 }
 
 /* Slide animation for character cards */

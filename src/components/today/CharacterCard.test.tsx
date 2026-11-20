@@ -28,6 +28,11 @@ vi.mock('../common/LearningCharacter', async () => {
   }
 })
 
+// 初始展示 1 秒后隐藏，再经过 3 秒冷却。分段推进以便 React 刷新倒计时状态。
+function advancePastInitialCooldown() {
+  for (let i = 0; i < 4; i += 1) act(() => vi.advanceTimersByTime(1000))
+}
+
 describe('CharacterCard 自动隐藏', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -39,7 +44,7 @@ describe('CharacterCard 自动隐藏', () => {
     vi.useRealTimers()
   })
 
-  it('自动隐藏只遮住汉字，拼音和词例仍显示，长按揭晓与冷却按时工作', () => {
+  it('自动隐藏只遮住汉字；长按揭晓后保持显示，再点按隐藏并进入冷却', () => {
     const onFontReadyChange = vi.fn()
     render(
       <CharacterCard character="草" isNew={false} autoHide onFontReadyChange={onFontReadyChange} />,
@@ -77,37 +82,65 @@ describe('CharacterCard 自动隐藏', () => {
 
     const enabledRevealButton = screen.getByRole('button', { name: '长按显示生字' })
     fireEvent.pointerDown(enabledRevealButton, { clientX: 10, clientY: 10 })
-    act(() => vi.advanceTimersByTime(100))
-    fireEvent.pointerMove(enabledRevealButton, { clientX: 21, clientY: 10 })
-    act(() => vi.advanceTimersByTime(500))
-    expect(screen.getByText('草').closest('[aria-hidden="true"]')).not.toBeNull()
-    fireEvent.pointerUp(enabledRevealButton)
-
-    fireEvent.pointerDown(enabledRevealButton, { clientX: 10, clientY: 10 })
-    act(() => vi.advanceTimersByTime(499))
-    expect(screen.getByText('草').closest('[aria-hidden="true"]')).not.toBeNull()
-    fireEvent.pointerUp(enabledRevealButton)
-    fireEvent.click(enabledRevealButton, { detail: 1 })
-    expect(screen.getByText('草').closest('[aria-hidden="true"]')).not.toBeNull()
-
-    fireEvent.pointerDown(enabledRevealButton, { clientX: 10, clientY: 10 })
     act(() => vi.advanceTimersByTime(500))
     expect(screen.getByText('草').closest('[aria-hidden="true"]')).toBeNull()
+    expect(screen.getByRole('button', { name: '点击隐藏生字' })).toBeDefined()
     fireEvent.pointerUp(enabledRevealButton)
-    act(() => vi.advanceTimersByTime(1000))
 
+    // 长按揭晓后浏览器会补发 click，这一次不应把刚显示的字隐藏。
+    fireEvent.click(screen.getByRole('button', { name: '点击隐藏生字' }), { detail: 1 })
+    expect(screen.getByText('草').closest('[aria-hidden="true"]')).toBeNull()
+    act(() => vi.advanceTimersByTime(10000))
+    expect(screen.getByText('草').closest('[aria-hidden="true"]')).toBeNull()
+
+    // 再点一下才隐藏，并重新进入冷却。
+    fireEvent.click(screen.getByRole('button', { name: '点击隐藏生字' }), { detail: 1 })
     expect(screen.getByText('草').closest('[aria-hidden="true"]')).not.toBeNull()
     expect(screen.getByRole('button', { name: /长按显示生字/ }).hasAttribute('disabled')).toBe(true)
+    expect(screen.getByText('3 秒后可再次显示')).toBeDefined()
+
     act(() => vi.advanceTimersByTime(1000))
-    expect(screen.getByRole('button', { name: /长按显示生字/ }).hasAttribute('disabled')).toBe(true)
+    expect(screen.getByText('2 秒后可再次显示')).toBeDefined()
     act(() => vi.advanceTimersByTime(1000))
-    expect(screen.getByRole('button', { name: /长按显示生字/ }).hasAttribute('disabled')).toBe(true)
-    act(() => vi.advanceTimersByTime(999))
-    expect(screen.getByRole('button', { name: /长按显示生字/ }).hasAttribute('disabled')).toBe(true)
-    act(() => vi.advanceTimersByTime(1))
+    expect(screen.getByText('1 秒后可再次显示')).toBeDefined()
+    act(() => vi.advanceTimersByTime(1000))
     expect(screen.getByRole('button', { name: '长按显示生字' }).hasAttribute('disabled')).toBe(
       false,
     )
+  })
+
+  it('长按移动超过阈值会取消揭晓', () => {
+    render(<CharacterCard character="草" isNew={false} autoHide />)
+    advancePastInitialCooldown()
+
+    const revealButton = screen.getByRole('button', { name: '长按显示生字' })
+    fireEvent.pointerDown(revealButton, { clientX: 10, clientY: 10 })
+    act(() => vi.advanceTimersByTime(100))
+    fireEvent.pointerMove(revealButton, { clientX: 21, clientY: 10 })
+    act(() => vi.advanceTimersByTime(500))
+
+    expect(screen.getByText('草').closest('[aria-hidden="true"]')).not.toBeNull()
+    fireEvent.pointerUp(revealButton)
+  })
+
+  it('键盘触发的点击可以揭晓，再按一次隐藏', () => {
+    render(<CharacterCard character="草" isNew={false} autoHide />)
+    advancePastInitialCooldown()
+
+    fireEvent.click(screen.getByRole('button', { name: '长按显示生字' }), { detail: 0 })
+    expect(screen.getByText('草').closest('[aria-hidden="true"]')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '点击隐藏生字' }), { detail: 0 })
+    expect(screen.getByText('草').closest('[aria-hidden="true"]')).not.toBeNull()
+  })
+
+  it('复习卡片禁选汉字及周边文字，并屏蔽长按菜单', () => {
+    render(<CharacterCard character="草" isNew={false} autoHide />)
+
+    const card = screen.getByText(getPinyin('草')).closest('.touch-callout-none')
+    expect(card).not.toBeNull()
+    expect(card?.classList.contains('select-none')).toBe(true)
+    expect(fireEvent.contextMenu(screen.getByText(getPinyin('草')))).toBe(false)
   })
 
   it('复习卡片展示词组时将当前字替换为全角波浪号', () => {
